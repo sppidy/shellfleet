@@ -1,0 +1,24 @@
+FROM rust:latest as builder
+WORKDIR /usr/src/app
+
+# Install cross-compilation toolchain and OpenSSL for x86_64
+RUN dpkg --add-architecture amd64 && \
+    apt-get update && \
+    apt-get install -y g++-x86-64-linux-gnu libc6-dev-amd64-cross pkg-config libssl-dev:amd64
+
+RUN rustup target add x86_64-unknown-linux-gnu
+
+# Configure cargo for cross compilation
+ENV CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=x86_64-linux-gnu-gcc
+ENV CC_x86_64_unknown_linux_gnu=x86_64-linux-gnu-gcc
+ENV CXX_x86_64_unknown_linux_gnu=x86_64-linux-gnu-g++
+ENV PKG_CONFIG_ALLOW_CROSS=1
+ENV PKG_CONFIG_PATH=/usr/lib/x86_64-linux-gnu/pkgconfig
+ENV OPENSSL_LIB_DIR=/usr/lib/x86_64-linux-gnu
+ENV OPENSSL_INCLUDE_DIR=/usr/include
+
+COPY . .
+RUN cargo build --release -p agent --target x86_64-unknown-linux-gnu
+
+FROM scratch
+COPY --from=builder /usr/src/app/target/x86_64-unknown-linux-gnu/release/agent /agent-x86_64-linux

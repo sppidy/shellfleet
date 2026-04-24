@@ -1,0 +1,53 @@
+version: '3.8'
+
+services:
+  server:
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+    ports:
+      - "8080:8080"
+    environment:
+      # GitHub OAuth Configuration
+      - GITHUB_CLIENT_ID=${GITHUB_CLIENT_ID}
+      - GITHUB_CLIENT_SECRET=${GITHUB_CLIENT_SECRET}
+      - OAUTH_REDIRECT_URL=https://dashboard.example.com/auth/callback
+      - UI_URL=https://dashboard.example.com/
+      - JWT_SECRET=${JWT_SECRET:-supersecretkey_change_in_production}
+    networks:
+      - sys_manager_net
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_WS_URL=wss://dashboard.example.com/ui/ws
+    networks:
+      - sys_manager_net
+    depends_on:
+      - server
+
+  # The Agent is usually deployed natively on target machines,
+  # but we include it in docker-compose for local end-to-end testing.
+  agent:
+    build:
+      context: .
+      dockerfile: Dockerfile.agent
+    environment:
+      - SERVER_WS_URL=wss://dashboard.example.com/agent/ws
+    volumes:
+      # Mount the host's DBus socket to allow the containerized agent to control the host's systemd
+      - /var/run/dbus/system_bus_socket:/var/run/dbus/system_bus_socket
+      # Optionally mount host's /etc to allow the config editor to see it
+      # - /etc:/etc
+    networks:
+      - sys_manager_net
+    depends_on:
+      - server
+
+networks:
+  sys_manager_net:
+    driver: bridge

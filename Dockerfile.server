@@ -1,0 +1,13 @@
+FROM rust:latest as builder
+WORKDIR /usr/src/app
+COPY . .
+# Build the server binary
+RUN cargo build --release -p server
+
+FROM debian:bookworm-slim
+WORKDIR /app
+# Install OpenSSL/CA certs in case the server makes outbound HTTPS requests (e.g. for OAuth)
+RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /usr/src/app/target/release/server /app/server
+EXPOSE 8080
+CMD ["./server"]

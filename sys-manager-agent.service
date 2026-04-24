@@ -1,0 +1,23 @@
+[Unit]
+Description=Sys-Manager Agent
+After=network.target
+
+[Service]
+Type=simple
+# Ensure the agent runs as root to interact with systemd and config files
+User=root
+Group=root
+
+# The executable path (assuming you copied it here)
+ExecStart=/usr/local/bin/agent-x86_64-linux
+
+# Ensure the agent has somewhere to write its token safely
+StateDirectory=sys-manager
+# Environment config file if you need to override the default server URL
+EnvironmentFile=-/etc/sys-manager/env
+
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target
