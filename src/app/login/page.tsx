@@ -1,4 +1,4 @@
-import { ServerIcon, GithubIcon } from 'lucide-react';
+import { ServerIcon, KeyIcon } from 'lucide-react';
 
 export default function LoginPage() {
   // In production, this should point to your actual backend URL.
@@ -30,7 +30,7 @@ export default function LoginPage() {
             href={loginUrl}
             className="w-full flex justify-center items-center py-2.5 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-slate-900 hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-slate-900 transition-colors"
           >
-            <GithubIcon className="w-5 h-5 mr-2" />
+            <KeyIcon className="w-5 h-5 mr-2" />
             Sign in with GitHub
           </a>
         </div>
