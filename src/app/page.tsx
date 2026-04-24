@@ -83,8 +83,20 @@ export default function Home() {
             </div>
           </div>
         ) : (
-          <div className="flex-1 flex items-center justify-center text-slate-400">
-            <p>Select an agent from the sidebar to manage it.</p>
+          <div className="flex-1 flex flex-col items-center justify-center text-slate-400">
+            {!isConnected ? (
+              <div className="text-center">
+                <p className="mb-4">You are disconnected. You may need to authenticate.</p>
+                <a 
+                  href="/login" 
+                  className="inline-flex items-center px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-md shadow-sm transition-colors"
+                >
+                  Go to Login
+                </a>
+              </div>
+            ) : (
+              <p>Select an agent from the sidebar to manage it.</p>
+            )}
           </div>
         )}
       </div>
