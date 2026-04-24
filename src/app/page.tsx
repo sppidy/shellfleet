@@ -1,65 +1,93 @@
-import Image from "next/image";
+'use client';
+
+import { useWebSocket } from '@/components/providers/WebSocketProvider';
+import { useState } from 'react';
+import AgentList from '@/components/AgentList';
+import ServiceList from '@/components/ServiceList';
+import Terminal from '@/components/Terminal';
+import ConfigEditor from '@/components/ConfigEditor';
+import { LayoutDashboardIcon, FileCode2Icon } from 'lucide-react';
 
 export default function Home() {
+  const { isConnected } = useWebSocket();
+  const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'config'>('dashboard');
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
+    <div className="flex h-screen overflow-hidden">
+      {/* Sidebar for Agents */}
+      <div className="w-64 bg-slate-900 text-slate-100 flex flex-col shadow-lg z-10">
+        <div className="p-4 border-b border-slate-800">
+          <h1 className="text-xl font-bold">Sys Manager</h1>
+          <div className="flex items-center mt-2 text-sm text-slate-400">
+            <span className={`w-2 h-2 rounded-full mr-2 ${isConnected ? 'bg-green-500' : 'bg-red-500'}`}></span>
+            {isConnected ? 'Connected' : 'Disconnected'}
+          </div>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+        <div className="flex-1 overflow-y-auto">
+          <AgentList selectedAgent={selectedAgent} onSelectAgent={setSelectedAgent} />
         </div>
-      </main>
+      </div>
+
+      {/* Main Content Area */}
+      <div className="flex-1 flex flex-col bg-white overflow-hidden">
+        {selectedAgent ? (
+          <div className="flex-1 flex flex-col h-full overflow-hidden">
+            {/* Header and Tabs */}
+            <div className="p-0 border-b bg-slate-50 flex flex-col">
+              <div className="px-6 py-4">
+                <h2 className="text-2xl font-semibold text-slate-800">{selectedAgent.replace('-id', '')}</h2>
+              </div>
+              <div className="flex px-4 space-x-2 border-t border-slate-200">
+                <button
+                  onClick={() => setActiveTab('dashboard')}
+                  className={`px-4 py-2 text-sm font-medium flex items-center border-b-2 transition-colors ${
+                    activeTab === 'dashboard' 
+                      ? 'border-blue-600 text-blue-600' 
+                      : 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300'
+                  }`}
+                >
+                  <LayoutDashboardIcon className="w-4 h-4 mr-2" />
+                  Dashboard & Terminal
+                </button>
+                <button
+                  onClick={() => setActiveTab('config')}
+                  className={`px-4 py-2 text-sm font-medium flex items-center border-b-2 transition-colors ${
+                    activeTab === 'config' 
+                      ? 'border-blue-600 text-blue-600' 
+                      : 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300'
+                  }`}
+                >
+                  <FileCode2Icon className="w-4 h-4 mr-2" />
+                  Config Editor
+                </button>
+              </div>
+            </div>
+            
+            {/* Tab Content */}
+            <div className="flex-1 overflow-hidden flex flex-col">
+              {activeTab === 'dashboard' ? (
+                <div className="flex-1 flex overflow-hidden">
+                  <div className="w-1/2 p-4 overflow-y-auto border-r border-slate-200">
+                    <ServiceList agentId={selectedAgent} />
+                  </div>
+                  <div className="w-1/2 bg-slate-950">
+                    <Terminal agentId={selectedAgent} />
+                  </div>
+                </div>
+              ) : (
+                <div className="flex-1 overflow-hidden">
+                  <ConfigEditor agentId={selectedAgent} />
+                </div>
+              )}
+            </div>
+          </div>
+        ) : (
+          <div className="flex-1 flex items-center justify-center text-slate-400">
+            <p>Select an agent from the sidebar to manage it.</p>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
