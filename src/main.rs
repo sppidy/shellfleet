@@ -63,13 +63,17 @@ async fn main() {
 
     let api_routes = Router::new()
         .nest("/device", device_auth::routes())
+        .with_state(state.clone());
+
+    let ws_routes = Router::new()
         .route("/agent/ws", get(agent_ws_handler))
         .route("/ui/ws", get(ui_ws_handler))
         .with_state(state);
 
     let app = Router::new()
         .nest("/auth", auth::auth_routes())
-        .nest("/api", api_routes);
+        .nest("/api", api_routes)
+        .merge(ws_routes);
 
     let addr = SocketAddr::from(([0, 0, 0, 0], 8080));
     println!("Server listening on {}", addr);
