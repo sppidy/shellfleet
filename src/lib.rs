@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 /// the wire format changes in a way the server needs to reject older agents
 /// for. Value `0` means "legacy agent that predates this field" — those
 /// still connect, just without the version-aware fast paths.
-pub const PROTOCOL_VERSION: u32 = 8;
+pub const PROTOCOL_VERSION: u32 = 9;
 
 fn default_protocol_version() -> u32 {
     0
@@ -325,6 +325,34 @@ pub enum Message {
     HealthProbeReport {
         results: Vec<HealthProbeResult>,
     },
+
+    /// Server requesting the agent run a backup. The agent tars the
+    /// listed paths into a single .tar.gz at `dest`. Introduced in
+    /// protocol_version 9.
+    BackupRunRequest {
+        /// Server-side `backup_jobs.id` echoed back in the response so
+        /// the server can attribute results to a specific job.
+        id: String,
+        name: String,
+        paths: Vec<String>,
+        /// Destination URI. v1 only supports a local filesystem path
+        /// (no scheme, or `file:///...`). `s3://bucket/prefix` etc.
+        /// will be added later.
+        dest: String,
+    },
+    BackupRunResponse {
+        id: String,
+        name: String,
+        success: bool,
+        /// Path to the produced archive on the agent host (when
+        /// dest was a local path). Empty for non-local destinations
+        /// or on failure.
+        archive_path: String,
+        /// Bytes written to the archive. 0 on failure.
+        bytes: u64,
+        log: String,
+        error: Option<String>,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
@@ -332,6 +360,9 @@ pub enum Message {
 pub enum HealthProbeKind {
     Http,
     Tcp,
+    /// Run a script from /etc/sys-manager/probes.d/<target>. Exit 0 = green.
+    /// Introduced in protocol_version 9.
+    Exec,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
