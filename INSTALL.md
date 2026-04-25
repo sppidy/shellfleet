@@ -9,14 +9,16 @@ The `Release` file is GPG-signed; the public key is published at
 ## Add the apt repo
 
 ```bash
-# 1. Import the repo's signing key into a dedicated keyring.
+# 1. Drop the repo's signing key as an ASCII-armored file. apt accepts
+#    both armored and dearmored keyrings via signed-by, so we don't
+#    need the gpg binary on the host (works on minimal Debian/Ubuntu).
 sudo install -d -m 0755 /etc/apt/keyrings
 curl -fsSL https://sys-mgr-repo.sppidy.in/sys-manager.gpg \
-  | sudo gpg --dearmor -o /etc/apt/keyrings/sys-manager.gpg
-sudo chmod 0644 /etc/apt/keyrings/sys-manager.gpg
+  | sudo tee /etc/apt/keyrings/sys-manager.asc > /dev/null
+sudo chmod 0644 /etc/apt/keyrings/sys-manager.asc
 
 # 2. Add the source line, scoped to that keyring.
-echo "deb [signed-by=/etc/apt/keyrings/sys-manager.gpg] https://sys-mgr-repo.sppidy.in stable main" \
+echo "deb [signed-by=/etc/apt/keyrings/sys-manager.asc] https://sys-mgr-repo.sppidy.in stable main" \
   | sudo tee /etc/apt/sources.list.d/sys-manager.list
 
 # 3. Install.
@@ -25,9 +27,8 @@ sudo apt install sys-manager-agent
 ```
 
 The signing key fingerprint is `9181 1FCB AB45 B996 B40E AD1E C6E2 9AC2
-52C7 4AEE` — verify it after import with
-`gpg --show-keys /etc/apt/keyrings/sys-manager.gpg` if you want to be
-extra careful.
+52C7 4AEE`. If you want to verify after download, install `gnupg` and
+run `gpg --show-keys /etc/apt/keyrings/sys-manager.asc`.
 
 ## Configure
 

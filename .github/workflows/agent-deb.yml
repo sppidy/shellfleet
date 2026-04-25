@@ -157,8 +157,8 @@ jobs:
           <p>Signed apt repo, multi-arch (amd64 + arm64). Add it to your sources:</p>
           <pre>sudo install -d -m 0755 /etc/apt/keyrings
           curl -fsSL https://sys-mgr-repo.sppidy.in/sys-manager.gpg \
-            | sudo gpg --dearmor -o /etc/apt/keyrings/sys-manager.gpg
-          echo "deb [signed-by=/etc/apt/keyrings/sys-manager.gpg] https://sys-mgr-repo.sppidy.in stable main" \
+            | sudo tee /etc/apt/keyrings/sys-manager.asc &gt; /dev/null
+          echo "deb [signed-by=/etc/apt/keyrings/sys-manager.asc] https://sys-mgr-repo.sppidy.in stable main" \
             | sudo tee /etc/apt/sources.list.d/sys-manager.list
           sudo apt update
           sudo apt install sys-manager-agent</pre>
