@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 /// the wire format changes in a way the server needs to reject older agents
 /// for. Value `0` means "legacy agent that predates this field" — those
 /// still connect, just without the version-aware fast paths.
-pub const PROTOCOL_VERSION: u32 = 3;
+pub const PROTOCOL_VERSION: u32 = 4;
 
 fn default_protocol_version() -> u32 {
     0
@@ -160,6 +160,67 @@ pub enum Message {
         nodes: Vec<SwarmNode>,
         error: Option<String>,
     },
+
+    /// Run a management action against a swarm service (scale, force
+    /// update, remove). Only meaningful on a manager. Introduced in
+    /// protocol_version 4.
+    SwarmServiceActionRequest { name: String, action: SwarmAction },
+    SwarmServiceActionResponse {
+        name: String,
+        success: bool,
+        log: String,
+        error: Option<String>,
+    },
+
+    /// Apt update management — introduced in protocol_version 4.
+    /// Cheap snapshot of the upgrade picture without running apt-get update.
+    AptStatusRequest,
+    AptStatusResponse {
+        available: bool,
+        upgradable: Vec<AptUpgradable>,
+        last_update_secs: u64,
+        error: Option<String>,
+    },
+
+    /// Equivalent to `apt-get update`. Captures stdout/stderr in `log`
+    /// for the dashboard to display.
+    AptRefreshRequest,
+    AptRefreshResponse {
+        success: bool,
+        log: String,
+        error: Option<String>,
+    },
+
+    /// Apply upgrades. `package == None` upgrades all upgradable packages
+    /// (`apt-get -y upgrade`); a specific package runs
+    /// `apt-get -y install --only-upgrade <package>`.
+    AptUpgradeRequest { package: Option<String> },
+    AptUpgradeResponse {
+        package: Option<String>,
+        success: bool,
+        log: String,
+        error: Option<String>,
+    },
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(tag = "kind", content = "value")]
+pub enum SwarmAction {
+    /// Scale a replicated service to the given number of replicas.
+    Scale(u32),
+    /// `docker service update --force` — kicks a rolling update without
+    /// changing the spec, useful for picking up a new image tag.
+    ForceUpdate,
+    /// `docker service rm <name>`.
+    Remove,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct AptUpgradable {
+    pub name: String,
+    pub current_version: String,
+    pub new_version: String,
+    pub source: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
