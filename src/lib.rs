@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 /// the wire format changes in a way the server needs to reject older agents
 /// for. Value `0` means "legacy agent that predates this field" — those
 /// still connect, just without the version-aware fast paths.
-pub const PROTOCOL_VERSION: u32 = 12;
+pub const PROTOCOL_VERSION: u32 = 13;
 
 fn default_protocol_version() -> u32 {
     0
@@ -530,6 +530,84 @@ pub enum Message {
         log: String,
         error: Option<String>,
     },
+
+    // ----- System prune (v13) -----
+    /// `dry_run=true` returns what *would* be pruned via `docker system df -v`
+    /// + a synthesised summary; `dry_run=false` runs `docker system prune -af`.
+    /// No background loops — only fires when the UI asks.
+    DockerSystemPruneRequest {
+        #[serde(default)]
+        dry_run: bool,
+        /// `--volumes` flag passes through. Off by default because
+        /// pruning volumes is harder to reverse than images/containers.
+        #[serde(default)]
+        prune_volumes: bool,
+    },
+    DockerSystemPruneResponse {
+        dry_run: bool,
+        success: bool,
+        /// Bytes the operator would reclaim (preview) or did reclaim (apply).
+        reclaimed_bytes: u64,
+        /// Stopped container ids.
+        containers_removed: Vec<String>,
+        /// Image ids.
+        images_removed: Vec<String>,
+        /// Network ids.
+        networks_removed: Vec<String>,
+        /// Volume names (only if prune_volumes was true).
+        volumes_removed: Vec<String>,
+        log: String,
+        error: Option<String>,
+    },
+
+    // ----- Container stats snapshot (v13) -----
+    /// Single snapshot — agent runs `docker stats --no-stream --format json`,
+    /// returns once. UI handles cadence (visibility-aware polling).
+    DockerStatsRequest,
+    DockerStatsResponse {
+        available: bool,
+        snapshots: Vec<DockerContainerStats>,
+        error: Option<String>,
+    },
+
+    // ----- Container exec session (v13) -----
+    /// Open `docker exec -it <container_id> <shell>` over a PTY. Reuses the
+    /// existing TerminalData/TerminalResize message types for input/output;
+    /// the agent maintains a separate exec-session slot from the host
+    /// terminal, with one exec session per agent at a time.
+    DockerExecStartRequest {
+        container_id: String,
+        /// "sh", "bash", "ash", etc. Agent picks `sh` if empty.
+        #[serde(default)]
+        shell: String,
+    },
+    DockerExecStartResponse {
+        container_id: String,
+        success: bool,
+        error: Option<String>,
+    },
+    /// Stop any active exec session. The PTY is killed and the docker exec
+    /// child reaped. Idempotent — no error if no session was open.
+    DockerExecStopRequest,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct DockerContainerStats {
+    pub id: String,
+    pub name: String,
+    /// CPU % as docker reports it (0.0 - n*100 on multi-CPU hosts).
+    pub cpu_percent: f32,
+    /// Memory in bytes / limit in bytes.
+    pub mem_bytes: u64,
+    pub mem_limit_bytes: u64,
+    /// Network I/O cumulative since container start (rx, tx).
+    pub net_rx_bytes: u64,
+    pub net_tx_bytes: u64,
+    /// Block I/O cumulative since container start (read, write).
+    pub blk_read_bytes: u64,
+    pub blk_write_bytes: u64,
+    /// Number of process IDs / threads.
+    pub pids: u32,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
