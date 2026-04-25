@@ -1,6 +1,7 @@
 mod apt;
 mod deploy;
 mod docker;
+mod journal;
 mod logs;
 mod stats;
 mod systemd;
@@ -130,6 +131,7 @@ async fn main() {
 
     let mut term_session: Option<terminal::TerminalSession> = None;
     let log_streams = logs::LogStreams::default();
+    let journal_streams = journal::JournalStreams::default();
 
     // Watchdog: if the WebSocket goes silent for 75s the connection is
     // probably dead at the TCP layer (Cloudflare or the kernel may drop
@@ -267,6 +269,71 @@ async fn main() {
                                 let streams = log_streams.clone();
                                 tokio::spawn(async move {
                                     streams.stop(&container_id).await;
+                                });
+                            }
+                            Message::JournalLogsRequest { unit, lines, follow } => {
+                                let streams = journal_streams.clone();
+                                let tx_clone = tx.clone();
+                                tokio::spawn(async move {
+                                    streams.start(unit, lines, follow, tx_clone).await;
+                                });
+                            }
+                            Message::JournalLogsStop { unit } => {
+                                let streams = journal_streams.clone();
+                                tokio::spawn(async move {
+                                    streams.stop(&unit).await;
+                                });
+                            }
+                            Message::SwarmServiceInspectRequest { name } => {
+                                let tx_clone = tx.clone();
+                                tokio::spawn(async move {
+                                    let role = docker::swarm_role().await;
+                                    if role != shared::SwarmRole::Manager {
+                                        let _ = tx_clone.send(Message::SwarmServiceInspectResponse {
+                                            name,
+                                            success: false,
+                                            tasks: Vec::new(),
+                                            spec: None,
+                                            log: String::new(),
+                                            error: Some("not a swarm manager".to_string()),
+                                        });
+                                        return;
+                                    }
+                                    let tasks = docker::service_ps(&name).await.unwrap_or_default();
+                                    let (spec, error) = match docker::service_inspect(&name).await {
+                                        Ok(s) => (Some(s), None),
+                                        Err(e) => (None, Some(e)),
+                                    };
+                                    let _ = tx_clone.send(Message::SwarmServiceInspectResponse {
+                                        name,
+                                        success: error.is_none(),
+                                        tasks,
+                                        spec,
+                                        log: String::new(),
+                                        error,
+                                    });
+                                });
+                            }
+                            Message::SwarmStackDeployRequest { stack_name, compose_yaml, prune } => {
+                                let tx_clone = tx.clone();
+                                tokio::spawn(async move {
+                                    let role = docker::swarm_role().await;
+                                    if role != shared::SwarmRole::Manager {
+                                        let _ = tx_clone.send(Message::SwarmStackDeployResponse {
+                                            stack_name,
+                                            success: false,
+                                            log: String::new(),
+                                            error: Some("not a swarm manager".to_string()),
+                                        });
+                                        return;
+                                    }
+                                    let (success, log, error) = docker::stack_deploy(&stack_name, &compose_yaml, prune).await;
+                                    let _ = tx_clone.send(Message::SwarmStackDeployResponse {
+                                        stack_name,
+                                        success,
+                                        log,
+                                        error,
+                                    });
                                 });
                             }
                             Message::DockerCreateContainerRequest { spec } => {

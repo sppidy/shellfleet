@@ -1,5 +1,10 @@
 use serde::Deserialize;
-use shared::{DockerContainer, DockerContainerAction, SwarmAction, SwarmNode, SwarmRole, SwarmService};
+use shared::{
+    DockerContainer, DockerContainerAction, SwarmAction, SwarmNode, SwarmRole, SwarmService,
+    SwarmServiceSpecSummary, SwarmTask,
+};
+use std::process::Stdio;
+use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
 #[derive(Debug, Deserialize)]
@@ -227,6 +232,217 @@ pub async fn run_swarm_action(name: &str, action: &SwarmAction) -> (bool, String
         Ok(o) => o,
         Err(e) => return (false, String::new(), Some(format!("docker spawn: {e}"))),
     };
+    let success = output.status.success();
+    let mut log = String::from_utf8_lossy(&output.stdout).into_owned();
+    let err_text = String::from_utf8_lossy(&output.stderr);
+    if !err_text.is_empty() {
+        if !log.is_empty() {
+            log.push('\n');
+        }
+        log.push_str(&err_text);
+    }
+    let err = if success {
+        None
+    } else {
+        Some(format!("exit code {:?}", output.status.code()))
+    };
+    (success, log, err)
+}
+
+#[derive(Debug, Deserialize)]
+struct ServicePsRow {
+    #[serde(rename = "ID")]
+    id: String,
+    #[serde(rename = "Name")]
+    name: String,
+    #[serde(rename = "Node")]
+    node: String,
+    #[serde(rename = "DesiredState")]
+    desired_state: String,
+    #[serde(rename = "CurrentState")]
+    current_state: String,
+    #[serde(rename = "Error")]
+    #[serde(default)]
+    error: String,
+    #[serde(rename = "Image")]
+    image: String,
+}
+
+pub async fn service_ps(name: &str) -> Result<Vec<SwarmTask>, String> {
+    let output = Command::new("docker")
+        .args(["service", "ps", name, "--format", "{{json .}}", "--no-trunc"])
+        .output()
+        .await
+        .map_err(|e| format!("docker spawn: {e}"))?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut out = Vec::new();
+    for line in stdout.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let row: ServicePsRow = match serde_json::from_str(line) {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+        out.push(SwarmTask {
+            id: row.id,
+            name: row.name,
+            node: row.node,
+            desired_state: row.desired_state,
+            current_state: row.current_state,
+            error: row.error,
+            image: row.image,
+        });
+    }
+    Ok(out)
+}
+
+pub async fn service_inspect(name: &str) -> Result<SwarmServiceSpecSummary, String> {
+    let output = Command::new("docker")
+        .args(["service", "inspect", name])
+        .output()
+        .await
+        .map_err(|e| format!("docker spawn: {e}"))?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let value: serde_json::Value = serde_json::from_str(&stdout)
+        .map_err(|e| format!("parse inspect json: {e}"))?;
+    let inspect = value
+        .as_array()
+        .and_then(|a| a.first())
+        .ok_or_else(|| "empty inspect array".to_string())?;
+
+    let spec = &inspect["Spec"];
+    let task_template = &spec["TaskTemplate"];
+    let container_spec = &task_template["ContainerSpec"];
+
+    let image = container_spec["Image"].as_str().unwrap_or("").to_string();
+    // Image typically looks like `repo/name:tag@sha256:…`. Split off the
+    // digest if present so the UI can show a stable identifier.
+    let (image_pretty, image_digest) = match image.split_once("@sha256:") {
+        Some((tag, digest)) => (tag.to_string(), format!("sha256:{digest}")),
+        None => (image.clone(), String::new()),
+    };
+
+    let mode_obj = &spec["Mode"];
+    let (mode, replicas) = if let Some(repl) = mode_obj.get("Replicated") {
+        (
+            "replicated".to_string(),
+            repl["Replicas"].as_u64().map(|v| v as u32),
+        )
+    } else if mode_obj.get("Global").is_some() {
+        ("global".to_string(), None)
+    } else {
+        ("unknown".to_string(), None)
+    };
+
+    let env: Vec<String> = container_spec["Env"]
+        .as_array()
+        .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .unwrap_or_default();
+    let mounts: Vec<String> = container_spec["Mounts"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .map(|m| {
+                    let typ = m["Type"].as_str().unwrap_or("?");
+                    let source = m["Source"].as_str().unwrap_or("");
+                    let target = m["Target"].as_str().unwrap_or("");
+                    format!("type={typ},source={source},target={target}")
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let networks: Vec<String> = task_template["Networks"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|n| n["Target"].as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    let constraints: Vec<String> = task_template["Placement"]["Constraints"]
+        .as_array()
+        .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .unwrap_or_default();
+    let published_ports: Vec<String> = spec["EndpointSpec"]["Ports"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .map(|p| {
+                    let target = p["TargetPort"].as_u64().unwrap_or(0);
+                    let published = p["PublishedPort"].as_u64().unwrap_or(0);
+                    let proto = p["Protocol"].as_str().unwrap_or("tcp");
+                    format!("{published}:{target}/{proto}")
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let created_at = inspect["CreatedAt"].as_str().unwrap_or("").to_string();
+    let updated_at = inspect["UpdatedAt"].as_str().unwrap_or("").to_string();
+
+    Ok(SwarmServiceSpecSummary {
+        image: image_pretty,
+        image_digest,
+        mode,
+        replicas,
+        created_at,
+        updated_at,
+        env,
+        mounts,
+        networks,
+        constraints,
+        published_ports,
+    })
+}
+
+/// Pipe a compose YAML to `docker stack deploy --compose-file -`. Returns
+/// stdout+stderr so the operator can see what services were created /
+/// updated.
+pub async fn stack_deploy(
+    stack_name: &str,
+    compose_yaml: &str,
+    prune: bool,
+) -> (bool, String, Option<String>) {
+    let mut cmd = Command::new("docker");
+    cmd.args([
+        "stack",
+        "deploy",
+        "--compose-file",
+        "-",
+        "--with-registry-auth",
+    ]);
+    if prune {
+        cmd.arg("--prune");
+    }
+    cmd.arg(stack_name);
+    cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => return (false, String::new(), Some(format!("docker spawn: {e}"))),
+    };
+
+    if let Some(mut stdin) = child.stdin.take() {
+        if let Err(e) = stdin.write_all(compose_yaml.as_bytes()).await {
+            return (false, String::new(), Some(format!("write stdin: {e}")));
+        }
+        // Drop stdin so docker reads EOF.
+        drop(stdin);
+    }
+
+    let output = match child.wait_with_output().await {
+        Ok(o) => o,
+        Err(e) => return (false, String::new(), Some(format!("docker wait: {e}"))),
+    };
+
     let success = output.status.success();
     let mut log = String::from_utf8_lossy(&output.stdout).into_owned();
     let err_text = String::from_utf8_lossy(&output.stderr);
