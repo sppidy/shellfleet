@@ -232,16 +232,44 @@ async fn handle_agent_socket(socket: WebSocket, state: Arc<AppState>, token: Str
     let (tx, mut rx) = mpsc::unbounded_channel::<Message>();
 
     let send_task = tokio::spawn(async move {
-        while let Some(msg) = rx.recv().await {
-            if let Ok(text) = serde_json::to_string(&msg) {
-                if sender.send(WsMessage::Text(text.into())).await.is_err() {
-                    break;
+        // Heartbeat every 25s. Cloudflare/Nginx will drop an idle WebSocket
+        // after ~100s on a free CF plan, so without this the connection
+        // disappears 1-2 minutes after the last application message.
+        let mut hb = tokio::time::interval(std::time::Duration::from_secs(25));
+        hb.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        // Drop the immediate first tick so we don't ping before any message.
+        hb.tick().await;
+        loop {
+            tokio::select! {
+                msg = rx.recv() => match msg {
+                    Some(msg) => {
+                        if let Ok(text) = serde_json::to_string(&msg) {
+                            if sender.send(WsMessage::Text(text.into())).await.is_err() {
+                                break;
+                            }
+                        }
+                    }
+                    None => break,
+                },
+                _ = hb.tick() => {
+                    if sender.send(WsMessage::Ping(Default::default())).await.is_err() {
+                        break;
+                    }
                 }
             }
         }
     });
 
-    while let Some(Ok(WsMessage::Text(text))) = receiver.next().await {
+    while let Some(Ok(frame)) = receiver.next().await {
+        let text = match frame {
+            WsMessage::Text(t) => t,
+            WsMessage::Close(_) => break,
+            // Pong/Ping/Binary: keep the connection open and ignore the
+            // frame. Without this branch the previous code dropped out of
+            // the loop on the first Pong, killing the connection one
+            // heartbeat after start.
+            _ => continue,
+        };
         if let Ok(parsed_msg) = serde_json::from_str::<Message>(&text) {
             match parsed_msg {
                 Message::Register { hostname, protocol_version } => {
@@ -307,16 +335,36 @@ async fn handle_ui_socket(socket: WebSocket, state: Arc<AppState>) {
     }
 
     let send_task = tokio::spawn(async move {
-        while let Some(msg) = rx.recv().await {
-            if let Ok(text) = serde_json::to_string(&msg) {
-                if sender.send(WsMessage::Text(text.into())).await.is_err() {
-                    break;
+        let mut hb = tokio::time::interval(std::time::Duration::from_secs(25));
+        hb.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        hb.tick().await;
+        loop {
+            tokio::select! {
+                msg = rx.recv() => match msg {
+                    Some(msg) => {
+                        if let Ok(text) = serde_json::to_string(&msg) {
+                            if sender.send(WsMessage::Text(text.into())).await.is_err() {
+                                break;
+                            }
+                        }
+                    }
+                    None => break,
+                },
+                _ = hb.tick() => {
+                    if sender.send(WsMessage::Ping(Default::default())).await.is_err() {
+                        break;
+                    }
                 }
             }
         }
     });
 
-    while let Some(Ok(WsMessage::Text(text))) = receiver.next().await {
+    while let Some(Ok(frame)) = receiver.next().await {
+        let text = match frame {
+            WsMessage::Text(t) => t,
+            WsMessage::Close(_) => break,
+            _ => continue,
+        };
         if let Ok(parsed_msg) = serde_json::from_str::<UiMessage>(&text) {
             match parsed_msg {
                 UiMessage::ListAgentsRequest => {
