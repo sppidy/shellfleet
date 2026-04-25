@@ -65,6 +65,42 @@ export type SwarmListPayload = {
   error: string | null;
 };
 
+export type SwarmAction =
+  | { kind: 'Scale'; value: number }
+  | { kind: 'ForceUpdate' }
+  | { kind: 'Remove' };
+
+export type SwarmServiceActionResponse = {
+  name: string;
+  success: boolean;
+  log: string;
+  error: string | null;
+};
+
+export type AptUpgradable = {
+  name: string;
+  current_version: string;
+  new_version: string;
+  source: string;
+};
+
+export type AptStatusPayload = {
+  available: boolean;
+  upgradable: AptUpgradable[];
+  last_update_secs: number;
+  error: string | null;
+};
+
+export type AptOpResponse = {
+  success: boolean;
+  log: string;
+  error: string | null;
+};
+
+export type AptUpgradeResponsePayload = AptOpResponse & {
+  package: string | null;
+};
+
 export type AgentMessagePayload =
   | { type: 'Register'; payload: { hostname: string; protocol_version?: number } }
   | { type: 'RegisterAck'; payload: { agent_id: string } }
@@ -86,7 +122,15 @@ export type AgentMessagePayload =
   | { type: 'DockerListRequest' }
   | { type: 'DockerListResponse'; payload: DockerListPayload }
   | { type: 'SwarmListRequest' }
-  | { type: 'SwarmListResponse'; payload: SwarmListPayload };
+  | { type: 'SwarmListResponse'; payload: SwarmListPayload }
+  | { type: 'SwarmServiceActionRequest'; payload: { name: string; action: SwarmAction } }
+  | { type: 'SwarmServiceActionResponse'; payload: SwarmServiceActionResponse }
+  | { type: 'AptStatusRequest' }
+  | { type: 'AptStatusResponse'; payload: AptStatusPayload }
+  | { type: 'AptRefreshRequest' }
+  | { type: 'AptRefreshResponse'; payload: AptOpResponse }
+  | { type: 'AptUpgradeRequest'; payload: { package: string | null } }
+  | { type: 'AptUpgradeResponse'; payload: AptUpgradeResponsePayload };
 
 export type UiMessage =
   | { type: 'ListAgentsRequest' }

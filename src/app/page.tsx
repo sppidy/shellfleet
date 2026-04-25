@@ -10,6 +10,8 @@ import Terminal from '@/components/Terminal';
 import ConfigEditor from '@/components/ConfigEditor';
 import SystemStats from '@/components/SystemStats';
 import Containers from '@/components/Containers';
+import AptManager from '@/components/AptManager';
+import FleetOverview from '@/components/FleetOverview';
 import {
   LayoutDashboardIcon,
   FileCode2Icon,
@@ -20,9 +22,10 @@ import {
   KeyIcon,
   BoxIcon,
   GaugeIcon,
+  PackageIcon,
 } from 'lucide-react';
 
-type Tab = 'dashboard' | 'containers' | 'config';
+type Tab = 'dashboard' | 'containers' | 'updates' | 'config';
 
 export default function Home() {
   const router = useRouter();
@@ -77,8 +80,12 @@ export default function Home() {
           </div>
           <button
             type="button"
-            onClick={() => router.push('/overview')}
-            className="mt-3 w-full inline-flex items-center justify-center gap-1.5 text-xs font-medium py-2 px-3 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-100 border border-slate-700 transition-colors"
+            onClick={() => setSelectedAgent(null)}
+            className={`mt-3 w-full inline-flex items-center justify-center gap-1.5 text-xs font-medium py-2 px-3 rounded-md transition-colors ${
+              selectedAgent === null
+                ? 'bg-blue-600 hover:bg-blue-500 text-white'
+                : 'bg-slate-800 hover:bg-slate-700 text-slate-100 border border-slate-700'
+            }`}
           >
             <GaugeIcon className="w-3.5 h-3.5" />
             Fleet overview
@@ -86,7 +93,7 @@ export default function Home() {
           <button
             type="button"
             onClick={() => router.push('/device')}
-            className="mt-2 w-full inline-flex items-center justify-center gap-1.5 text-xs font-medium py-2 px-3 rounded-md bg-blue-600 hover:bg-blue-500 text-white transition-colors"
+            className="mt-2 w-full inline-flex items-center justify-center gap-1.5 text-xs font-medium py-2 px-3 rounded-md border border-slate-700 text-slate-300 hover:bg-slate-800 transition-colors"
           >
             <PlusIcon className="w-3.5 h-3.5" />
             Connect agent
@@ -157,6 +164,12 @@ export default function Home() {
                   label="Containers"
                 />
                 <TabButton
+                  active={activeTab === 'updates'}
+                  onClick={() => setActiveTab('updates')}
+                  icon={<PackageIcon className="w-4 h-4 mr-2" />}
+                  label="Updates"
+                />
+                <TabButton
                   active={activeTab === 'config'}
                   onClick={() => setActiveTab('config')}
                   icon={<FileCode2Icon className="w-4 h-4 mr-2" />}
@@ -184,6 +197,10 @@ export default function Home() {
                 <div className="flex-1 overflow-y-auto p-6">
                   <Containers agentId={selectedAgent} />
                 </div>
+              ) : activeTab === 'updates' ? (
+                <div className="flex-1 overflow-y-auto p-6 max-w-4xl mx-auto w-full">
+                  <AptManager agentId={selectedAgent} />
+                </div>
               ) : (
                 <div className="flex-1 overflow-hidden">
                   <ConfigEditor agentId={selectedAgent} />
@@ -192,12 +209,13 @@ export default function Home() {
             </div>
           </div>
         ) : (
-          <EmptyState
-            isConnected={isConnected}
-            agentCount={agents.length}
-            onAddAgent={() => router.push('/device')}
-            onOverview={() => router.push('/overview')}
-          />
+          <div className="flex-1 overflow-y-auto">
+            {!isConnected && agents.length === 0 ? (
+              <ReconnectingState />
+            ) : (
+              <FleetOverview onSelectAgent={setSelectedAgent} />
+            )}
+          </div>
         )}
       </main>
     </div>
@@ -230,62 +248,12 @@ function TabButton({
   );
 }
 
-function EmptyState({
-  isConnected,
-  agentCount,
-  onAddAgent,
-  onOverview,
-}: {
-  isConnected: boolean;
-  agentCount: number;
-  onAddAgent: () => void;
-  onOverview: () => void;
-}) {
-  if (!isConnected) {
-    return (
-      <div className="flex-1 flex items-center justify-center text-slate-500">
-        <div className="text-center max-w-sm">
-          <Loader2Icon className="w-6 h-6 animate-spin mx-auto mb-3 text-slate-400" />
-          <p className="text-sm">Reconnecting to the server…</p>
-        </div>
-      </div>
-    );
-  }
-  if (agentCount === 0) {
-    return (
-      <div className="flex-1 flex items-center justify-center text-slate-500">
-        <div className="text-center max-w-sm px-6">
-          <div className="inline-flex w-12 h-12 items-center justify-center rounded-lg bg-blue-500/10 text-blue-400 mb-4">
-            <ServerIcon className="w-6 h-6" />
-          </div>
-          <h3 className="text-base font-semibold text-slate-100 mb-1">No agents connected</h3>
-          <p className="text-sm text-slate-500 mb-4">
-            Run the sys-manager-agent on a host, then approve its pairing code below.
-          </p>
-          <button
-            type="button"
-            onClick={onAddAgent}
-            className="inline-flex items-center gap-1.5 text-sm font-medium py-2 px-3 rounded-md bg-blue-600 hover:bg-blue-500 text-white transition-colors"
-          >
-            <PlusIcon className="w-4 h-4" />
-            Connect agent
-          </button>
-        </div>
-      </div>
-    );
-  }
+function ReconnectingState() {
   return (
-    <div className="flex-1 flex items-center justify-center text-slate-500">
+    <div className="h-full flex items-center justify-center text-slate-500">
       <div className="text-center">
-        <p className="text-sm mb-3">Select an agent from the sidebar to manage it.</p>
-        <button
-          type="button"
-          onClick={onOverview}
-          className="inline-flex items-center gap-1.5 text-xs font-medium py-1.5 px-3 rounded-md border border-slate-700 text-slate-300 hover:bg-slate-800 transition-colors"
-        >
-          <GaugeIcon className="w-3.5 h-3.5" />
-          Or open the fleet overview
-        </button>
+        <Loader2Icon className="w-6 h-6 animate-spin mx-auto mb-3 text-slate-400" />
+        <p className="text-sm">Reconnecting to the server…</p>
       </div>
     </div>
   );
