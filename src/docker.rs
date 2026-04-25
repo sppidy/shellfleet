@@ -1087,12 +1087,15 @@ pub async fn system_prune_preview(prune_volumes: bool) -> PruneOutcome {
         #[serde(rename = "Volumes", default)]
         volumes: Vec<DfVolume>,
     }
+    // df -v reports counts as strings, not numbers — keep them as
+    // String and parse on the use-site so a future docker version
+    // changing the type doesn't silently break the parse.
     #[derive(serde::Deserialize, Default)]
     struct DfImage {
         #[serde(rename = "ID", default)]
         id: String,
         #[serde(rename = "Containers", default)]
-        containers: i64,
+        containers: String,
         #[serde(rename = "Size", default)]
         size: String,
     }
@@ -1110,7 +1113,7 @@ pub async fn system_prune_preview(prune_volumes: bool) -> PruneOutcome {
         #[serde(rename = "Name", default)]
         name: String,
         #[serde(rename = "Links", default)]
-        links: i64,
+        links: String,
         #[serde(rename = "Size", default)]
         size: String,
     }
@@ -1119,7 +1122,7 @@ pub async fn system_prune_preview(prune_volumes: bool) -> PruneOutcome {
     out.success = true;
     let mut reclaimed: u64 = 0;
     for img in parsed.images {
-        if img.containers == 0 {
+        if img.containers.parse::<i64>().unwrap_or(0) == 0 {
             out.images_removed.push(img.id.clone());
             reclaimed += parse_docker_size(&img.size);
         }
@@ -1132,7 +1135,7 @@ pub async fn system_prune_preview(prune_volumes: bool) -> PruneOutcome {
     }
     if prune_volumes {
         for v in parsed.volumes {
-            if v.links == 0 {
+            if v.links.parse::<i64>().unwrap_or(0) == 0 {
                 out.volumes_removed.push(v.name.clone());
                 reclaimed += parse_docker_size(&v.size);
             }
