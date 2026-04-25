@@ -1,23 +1,33 @@
 # Installing the sys-manager agent
 
-The agent ships as an amd64 `.deb` published from CI to an apt repo hosted on
-GitHub Pages. Each push to `main` produces a new revision; tags produce signed
-release builds attached to the GitHub Release.
+The agent ships as a multi-arch `.deb` (amd64 + arm64) published from CI
+to an apt repo hosted on GitHub Pages. Each push to `main` produces a new
+revision; tags produce signed release builds attached to the GitHub Release.
+The `Release` file is GPG-signed; the public key is published at
+`https://sys-mgr-repo.sppidy.in/sys-manager.gpg`.
 
 ## Add the apt repo
 
 ```bash
-echo "deb [trusted=yes] https://sys-mgr-repo.sppidy.in stable main" \
+# 1. Import the repo's signing key into a dedicated keyring.
+sudo install -d -m 0755 /etc/apt/keyrings
+curl -fsSL https://sys-mgr-repo.sppidy.in/sys-manager.gpg \
+  | sudo gpg --dearmor -o /etc/apt/keyrings/sys-manager.gpg
+sudo chmod 0644 /etc/apt/keyrings/sys-manager.gpg
+
+# 2. Add the source line, scoped to that keyring.
+echo "deb [signed-by=/etc/apt/keyrings/sys-manager.gpg] https://sys-mgr-repo.sppidy.in stable main" \
   | sudo tee /etc/apt/sources.list.d/sys-manager.list
+
+# 3. Install.
 sudo apt update
 sudo apt install sys-manager-agent
 ```
 
-> The repo is unsigned today (`[trusted=yes]`). To switch to a signed repo,
-> set the `APT_GPG_PRIVATE_KEY` and `APT_GPG_PASSPHRASE` secrets on this
-> repository — the workflow already wires them up. Then drop the
-> `[trusted=yes]` flag and import the public key from
-> `https://sys-mgr-repo.sppidy.in/sys-manager.gpg`.
+The signing key fingerprint is `9181 1FCB AB45 B996 B40E AD1E C6E2 9AC2
+52C7 4AEE` — verify it after import with
+`gpg --show-keys /etc/apt/keyrings/sys-manager.gpg` if you want to be
+extra careful.
 
 ## Configure
 
@@ -80,9 +90,9 @@ so the runner needs a Personal Access Token with read access to them.
 5. Subsequent pushes refresh `dists/stable/main/binary-amd64/Packages.gz` and
    the pool. Tagged releases also attach the `.deb` to the GitHub Release.
 
-Optional, for a signed apt repo:
+Signed apt repo (set up in v12):
 
-- Add `APT_GPG_PRIVATE_KEY` (ASCII-armored secret key) and (if encrypted)
-  `APT_GPG_PASSPHRASE`. The workflow then signs `dists/stable/Release` and
-  publishes the public key at `/sys-manager.gpg`. Drop `[trusted=yes]`
-  from the apt source line and `apt-key add` the published key instead.
+- The workflow signs `dists/stable/Release` (producing `Release.gpg` +
+  `InRelease`) and publishes the public key at `/sys-manager.gpg`.
+- Required secrets: `APT_GPG_PRIVATE_KEY` (ASCII-armored secret key).
+  Optional: `APT_GPG_PASSPHRASE` if the key is passphrase-protected.
