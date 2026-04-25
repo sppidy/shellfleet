@@ -2,6 +2,13 @@
 name = "agent"
 version = "0.1.0"
 edition = "2024"
+description = "Agent for sys-manager: connects a host to a sys-manager server over WebSocket and exposes systemd service control, terminal, and config editing."
+license = "MIT"
+repository = "https://github.com/sppidy/sys-mngr-agent"
+
+[[bin]]
+name = "sys-manager-agent"
+path = "src/main.rs"
 
 [dependencies]
 crossbeam-channel = "0.5.15"
@@ -15,3 +22,31 @@ shared = { version = "0.1.0", path = "../shared" }
 tokio = { version = "1.52.1", features = ["macros", "process", "rt-multi-thread", "sync"] }
 tokio-tungstenite = { version = "0.29.0", features = ["native-tls"] }
 url = "2.5.8"
+
+# cargo-deb metadata. Used by the .github/workflows/agent-deb.yml job in the
+# superproject to publish .deb packages to https://sppidy.github.io/sys-manager.
+[package.metadata.deb]
+name = "sys-manager-agent"
+maintainer = "sppidy <sppidytg@gmail.com>"
+copyright = "2026, sppidy <sppidytg@gmail.com>"
+extended-description = """\
+Agent for sys-manager. Connects a Linux host to a sys-manager server over a
+TLS WebSocket and exposes systemd service control, an interactive terminal,
+and remote read/write of configuration files. Pairing happens through the
+server's device-auth flow; the resulting token is cached at
+/etc/sys-manager/agent-token.txt."""
+section = "admin"
+priority = "optional"
+depends = "$auto, systemd"
+assets = [
+    ["target/release/sys-manager-agent", "usr/bin/sys-manager-agent", "755"],
+    ["debian/env.example", "etc/sys-manager/env.example", "644"],
+]
+maintainer-scripts = "debian"
+
+[package.metadata.deb.systemd-units]
+unit-scripts = "debian"
+unit-name = "sys-manager-agent"
+enable = true
+start = true
+restart-after-upgrade = true

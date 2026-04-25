@@ -1,0 +1,29 @@
+#!/bin/sh
+set -e
+
+CONF_DIR=/etc/sys-manager
+ENV_FILE="$CONF_DIR/env"
+ENV_EXAMPLE="$CONF_DIR/env.example"
+
+case "$1" in
+    configure|reconfigure)
+        # Make sure the config dir exists with safe perms.
+        if [ ! -d "$CONF_DIR" ]; then
+            mkdir -p "$CONF_DIR"
+            chown root:root "$CONF_DIR"
+            chmod 0750 "$CONF_DIR"
+        fi
+
+        # Seed /etc/sys-manager/env on first install. Never overwrite an
+        # existing operator-edited file on upgrade.
+        if [ ! -e "$ENV_FILE" ] && [ -e "$ENV_EXAMPLE" ]; then
+            cp "$ENV_EXAMPLE" "$ENV_FILE"
+            chown root:root "$ENV_FILE"
+            chmod 0640 "$ENV_FILE"
+        fi
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0

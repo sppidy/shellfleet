@@ -1,0 +1,29 @@
+[Unit]
+Description=Sys-Manager Agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+
+ExecStart=/usr/bin/sys-manager-agent
+
+# State (auth token) lives at /etc/sys-manager/agent-token.txt; read-only fields
+# go in /etc/sys-manager/env. A bind mount of /etc lets the config editor see
+# host configs even on systems with strict ProtectHome/ProtectSystem defaults.
+EnvironmentFile=-/etc/sys-manager/env
+
+Restart=on-failure
+RestartSec=5s
+
+# Modest hardening — the agent needs root to control systemd, but it does not
+# need network namespaces or kernel module loading.
+NoNewPrivileges=false
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+
+[Install]
+WantedBy=multi-user.target
