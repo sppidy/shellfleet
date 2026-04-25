@@ -4,14 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useWebSocket } from './providers/WebSocketProvider';
 import { useUi } from './providers/UiProvider';
 import type { DockerImage } from '@/lib/types';
-import {
-  ImageIcon,
-  RefreshCwIcon,
-  Trash2Icon,
-  DownloadIcon,
-  Loader2Icon,
-  AlertCircleIcon,
-} from 'lucide-react';
+import { Loader2Icon } from 'lucide-react';
 
 const REFRESH_MS = 15_000;
 const REQ_TIMEOUT_MS = 60_000;
@@ -37,6 +30,7 @@ export default function ContainerImages({ agentId }: { agentId: string }) {
   const [removing, setRemoving] = useState<string | null>(null);
   const [pullRef, setPullRef] = useState('');
   const [pullLog, setPullLog] = useState<string | null>(null);
+  const [search, setSearch] = useState('');
   const reqTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const refresh = useCallback(() => {
@@ -44,7 +38,7 @@ export default function ContainerImages({ agentId }: { agentId: string }) {
     sendToAgent(agentId, { type: 'DockerImageListRequest' });
     if (reqTimeoutRef.current) clearTimeout(reqTimeoutRef.current);
     reqTimeoutRef.current = setTimeout(() => {
-      setError('agent didn\'t respond');
+      setError("agent didn't respond");
     }, 8_000);
   }, [agentId, sendToAgent]);
 
@@ -129,146 +123,165 @@ export default function ContainerImages({ agentId }: { agentId: string }) {
     });
   };
 
+  const q = search.trim().toLowerCase();
+  const filtered = (images ?? []).filter((img) => {
+    if (!q) return true;
+    return (
+      img.repository.toLowerCase().includes(q) ||
+      img.tag.toLowerCase().includes(q) ||
+      img.id.toLowerCase().includes(q)
+    );
+  });
+  const totalSize = (images ?? []).reduce((s, i) => s + i.size_bytes, 0);
+
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between gap-3 flex-wrap">
-        <div className="flex items-center gap-2">
-          <ImageIcon className="w-5 h-5 text-slate-400" />
-          <h2 className="text-base font-semibold">Images</h2>
-          <span className="text-xs text-slate-500">
-            {images === null ? 'loading…' : `· ${images.length}`}
-          </span>
+    <div className="pane">
+      <div className="panel">
+        <div className="panel-head">
+          <div className="panel-title">
+            <span className="ico">⊟</span> PULL IMAGE
+          </div>
         </div>
-        <button
-          type="button"
-          onClick={refresh}
-          className="text-xs flex items-center gap-1.5 px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-md"
-        >
-          <RefreshCwIcon className="w-3.5 h-3.5" />
-          Refresh
-        </button>
+        <div className="panel-body">
+          <form
+            onSubmit={submitPull}
+            style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}
+          >
+            <div className="field" style={{ flex: 1 }}>
+              <label>image reference</label>
+              <input
+                className="input"
+                type="text"
+                value={pullRef}
+                onChange={(e) => setPullRef(e.target.value)}
+                placeholder="ghcr.io/sppidy/api:1.0.0"
+              />
+            </div>
+            <button
+              type="submit"
+              className="btn primary"
+              disabled={pulling || !pullRef.trim()}
+            >
+              {pulling ? '…' : '▼ pull'}
+            </button>
+          </form>
+          {pullLog !== null && (
+            <details open style={{ marginTop: 8 }}>
+              <summary
+                className="muted"
+                style={{ cursor: 'pointer', fontSize: 11, fontFamily: 'var(--mono)' }}
+              >
+                pull log
+              </summary>
+              <pre className="code" style={{ marginTop: 4 }}>
+                {pullLog || '(empty)'}
+              </pre>
+            </details>
+          )}
+        </div>
       </div>
 
-      <form
-        onSubmit={submitPull}
-        className="rounded-md border border-slate-800 bg-slate-900/40 p-3 flex items-center gap-2 flex-wrap"
-      >
-        <input
-          type="text"
-          value={pullRef}
-          onChange={(e) => setPullRef(e.target.value)}
-          placeholder="image reference (e.g. nginx:1.27, ghcr.io/owner/image@sha256:…)"
-          className="flex-1 min-w-[20ch] bg-slate-950 border border-slate-700 rounded-md px-2 py-1.5 font-mono text-sm text-slate-100"
-        />
-        <button
-          type="submit"
-          disabled={pulling || !pullRef.trim()}
-          className="text-xs flex items-center gap-1.5 px-2.5 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-700 text-white rounded-md"
-        >
-          {pulling ? (
-            <Loader2Icon className="w-3.5 h-3.5 animate-spin" />
-          ) : (
-            <DownloadIcon className="w-3.5 h-3.5" />
-          )}
-          Pull
-        </button>
-      </form>
-
-      {pullLog !== null && (
-        <details
-          open
-          className="rounded-md border border-slate-800 bg-slate-950"
-        >
-          <summary className="cursor-pointer px-2 py-1 text-xs text-slate-400 hover:text-slate-200">
-            pull log
-          </summary>
-          <pre className="text-[11px] px-2 py-2 text-slate-300 whitespace-pre-wrap max-h-72 overflow-auto border-t border-slate-800">
-            {pullLog || '(empty)'}
-          </pre>
-        </details>
-      )}
-
       {error && (
-        <div className="flex items-start gap-2 text-sm text-red-300 bg-red-500/10 border border-red-500/30 rounded-md px-3 py-2">
-          <AlertCircleIcon className="w-4 h-4 mt-0.5 shrink-0" />
-          <span>{error}</span>
+        <div
+          style={{
+            padding: 10,
+            background: 'var(--err-bg)',
+            border: '1px solid var(--err-bd)',
+            borderRadius: 'var(--r)',
+            color: 'var(--err)',
+            fontFamily: 'var(--mono)',
+            fontSize: 11.5,
+          }}
+        >
+          {error}
         </div>
       )}
 
-      {images === null ? (
-        <div className="flex items-center justify-center py-12 text-slate-500">
-          <Loader2Icon className="w-5 h-5 animate-spin" />
+      <div className="panel">
+        <div className="panel-head">
+          <div className="panel-title">
+            <span className="ico">⊠</span> IMAGES
+            <span className="meta">
+              {images === null ? 'loading…' : `${images.length} images · ${fmtBytes(totalSize)}`}
+            </span>
+          </div>
+          <div className="panel-actions">
+            <div className="search-input" style={{ width: 220 }}>
+              <span style={{ color: 'var(--accent)' }}>⌕</span>
+              <input
+                placeholder="repo, tag…"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+              />
+            </div>
+            <button className="btn" onClick={refresh}>
+              ↻
+            </button>
+          </div>
         </div>
-      ) : images.length === 0 ? (
-        <div className="border border-dashed border-slate-800 rounded-md px-4 py-8 text-center text-sm text-slate-500">
-          No images on this host.
-        </div>
-      ) : (
-        <div className="rounded-md border border-slate-800 overflow-hidden">
-          <table className="w-full text-sm">
-            <thead className="bg-slate-900/60 text-[11px] uppercase tracking-wide text-slate-500">
-              <tr>
-                <th className="text-left px-3 py-2 font-medium">Repository</th>
-                <th className="text-left px-3 py-2 font-medium">Tag</th>
-                <th className="text-left px-3 py-2 font-medium">ID</th>
-                <th className="text-right px-3 py-2 font-medium">Size</th>
-                <th className="text-left px-3 py-2 font-medium">Created</th>
-                <th className="px-3 py-2"></th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-800">
-              {images.map((img) => {
-                const dangling = img.repository === '<none>';
-                return (
-                  <tr key={img.id} className="bg-slate-900/30">
-                    <td className="px-3 py-2 font-mono text-slate-200 break-all">
-                      {dangling ? (
-                        <span className="text-slate-500 italic">&lt;none&gt;</span>
-                      ) : (
-                        img.repository
-                      )}
-                    </td>
-                    <td className="px-3 py-2 font-mono text-slate-300">
-                      {img.tag === '<none>' ? <span className="text-slate-500">—</span> : img.tag}
-                    </td>
-                    <td className="px-3 py-2 font-mono text-xs text-slate-500" title={img.id}>
-                      {img.id.slice(0, 12)}
-                    </td>
-                    <td className="px-3 py-2 text-right text-slate-400">{fmtBytes(img.size_bytes)}</td>
-                    <td className="px-3 py-2 text-xs text-slate-500">{img.created}</td>
-                    <td className="px-3 py-2 text-right">
-                      <div className="flex items-center justify-end gap-1">
+        <div className="panel-body flush">
+          {images === null ? (
+            <div className="empty">
+              <Loader2Icon className="w-5 h-5 animate-spin" />
+            </div>
+          ) : filtered.length === 0 ? (
+            <div className="empty">
+              {images.length === 0 ? 'No images on this host.' : 'No images match.'}
+            </div>
+          ) : (
+            <table className="tbl">
+              <thead>
+                <tr>
+                  <th>REPOSITORY</th>
+                  <th>TAG</th>
+                  <th>IMAGE ID</th>
+                  <th className="right">SIZE</th>
+                  <th>CREATED</th>
+                  <th style={{ width: 140 }} />
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map((img) => {
+                  const dangling = img.repository === '<none>';
+                  return (
+                    <tr key={img.id}>
+                      <td className="mono" style={{ color: 'var(--fg)' }}>
+                        {dangling ? <span className="muted">&lt;none&gt;</span> : img.repository}
+                      </td>
+                      <td className="mono" style={{ color: 'var(--accent)' }}>
+                        {img.tag === '<none>' ? <span className="muted">—</span> : img.tag}
+                      </td>
+                      <td className="mono muted" title={img.id}>
+                        {img.id.slice(0, 12)}
+                      </td>
+                      <td className="right mono">{fmtBytes(img.size_bytes)}</td>
+                      <td className="mono muted">{img.created}</td>
+                      <td className="actions">
                         <button
-                          type="button"
-                          onClick={() => remove(img, false)}
-                          disabled={removing === img.id}
-                          title="Remove"
-                          className="p-1.5 rounded text-slate-400 hover:text-red-300 hover:bg-slate-800 disabled:opacity-50"
-                        >
-                          {removing === img.id ? (
-                            <Loader2Icon className="w-4 h-4 animate-spin" />
-                          ) : (
-                            <Trash2Icon className="w-4 h-4" />
-                          )}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => remove(img, true)}
-                          disabled={removing === img.id}
+                          className="btn sm icon"
                           title="Force remove"
-                          className="text-[10px] px-1.5 py-1 rounded text-red-300/80 hover:text-red-200 hover:bg-red-500/20 disabled:opacity-50"
+                          disabled={removing === img.id}
+                          onClick={() => remove(img, true)}
                         >
-                          force
+                          !
                         </button>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+                        <button
+                          className="btn sm icon danger"
+                          title="Remove"
+                          disabled={removing === img.id}
+                          onClick={() => remove(img, false)}
+                        >
+                          {removing === img.id ? '…' : '×'}
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
         </div>
-      )}
+      </div>
     </div>
   );
 }

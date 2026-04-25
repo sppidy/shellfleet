@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useWebSocket } from './providers/WebSocketProvider';
 import { SwarmServiceInspectPayload } from '@/lib/types';
-import { XIcon, Loader2Icon, AlertCircleIcon, RefreshCwIcon } from 'lucide-react';
+import { Loader2Icon } from 'lucide-react';
 
 export default function SwarmServiceDrawer({
   agentId,
@@ -23,7 +23,10 @@ export default function SwarmServiceDrawer({
     setUnsupported(false);
 
     const unsub = onAgentMessage(agentId, (msg) => {
-      if (msg.type === 'SwarmServiceInspectResponse' && msg.payload.name === serviceName) {
+      if (
+        msg.type === 'SwarmServiceInspectResponse' &&
+        msg.payload.name === serviceName
+      ) {
         setData(msg.payload);
       }
     });
@@ -42,66 +45,84 @@ export default function SwarmServiceDrawer({
 
   return (
     <div
-      className="fixed inset-0 z-40 bg-slate-950/70 backdrop-blur-sm flex justify-end"
-      onClick={onClose}
+      className="modal-overlay"
+      style={{ justifyContent: 'flex-end', padding: 0 }}
+      onClick={(e) => e.target === e.currentTarget && onClose()}
     >
       <div
-        className="bg-slate-900 border-l border-slate-800 shadow-2xl w-full max-w-2xl h-full flex flex-col overflow-hidden"
+        style={{
+          width: 'min(640px, 95vw)',
+          height: '100vh',
+          background: 'var(--bg-1)',
+          borderLeft: '1px solid var(--line)',
+          display: 'flex',
+          flexDirection: 'column',
+          overflow: 'hidden',
+        }}
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between px-4 py-3 border-b border-slate-800">
-          <div className="min-w-0">
-            <div className="text-xs uppercase tracking-wide text-slate-500">Swarm service</div>
-            <div className="text-base font-semibold truncate">{serviceName}</div>
+        <div className="panel-head">
+          <div className="panel-title">
+            <span className="ico">⊞</span> SWARM SERVICE
+            <span className="meta">{serviceName}</span>
           </div>
-          <div className="flex items-center gap-1">
+          <div className="panel-actions">
             <button
-              type="button"
+              className="btn sm"
               onClick={() =>
                 sendToAgent(agentId, {
                   type: 'SwarmServiceInspectRequest',
                   payload: { name: serviceName },
                 })
               }
-              title="Refresh"
-              className="p-1.5 rounded-md text-slate-400 hover:text-slate-100 hover:bg-slate-800"
             >
-              <RefreshCwIcon className="w-4 h-4" />
+              ↻
             </button>
-            <button
-              type="button"
-              onClick={onClose}
-              className="p-1.5 rounded-md text-slate-400 hover:text-slate-100 hover:bg-slate-800"
-              title="Close"
-            >
-              <XIcon className="w-4 h-4" />
+            <button className="icon-btn" onClick={onClose} title="Close">
+              ×
             </button>
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        <div style={{ flex: 1, overflow: 'auto', padding: 16 }}>
           {!data ? (
             unsupported ? (
-              <div className="flex items-start gap-2 text-sm text-amber-300 bg-amber-500/10 border border-amber-500/30 rounded-md p-3">
-                <AlertCircleIcon className="w-4 h-4 mt-0.5 shrink-0" />
-                <span>
-                  Inspect not supported on this agent. Upgrade to the latest
-                  sys-manager-agent.
-                </span>
+              <div
+                style={{
+                  padding: 12,
+                  background: 'var(--warn-bg)',
+                  border: '1px solid var(--warn-bd)',
+                  borderRadius: 'var(--r)',
+                  color: 'var(--warn)',
+                  fontFamily: 'var(--mono)',
+                  fontSize: 12,
+                }}
+              >
+                ⚠ Inspect not supported on this agent. Upgrade to the latest sys-manager-agent.
               </div>
             ) : (
-              <div className="flex items-center justify-center py-12 text-slate-500">
+              <div className="empty">
                 <Loader2Icon className="w-5 h-5 animate-spin" />
               </div>
             )
           ) : !data.success ? (
-            <div className="flex items-start gap-2 text-sm text-red-300 bg-red-500/10 border border-red-500/30 rounded-md p-3">
-              <AlertCircleIcon className="w-4 h-4 mt-0.5 shrink-0" />
-              <span>{data.error ?? 'inspect failed'}</span>
+            <div
+              style={{
+                padding: 12,
+                background: 'var(--err-bg)',
+                border: '1px solid var(--err-bd)',
+                borderRadius: 'var(--r)',
+                color: 'var(--err)',
+                fontFamily: 'var(--mono)',
+                fontSize: 12,
+              }}
+            >
+              {data.error ?? 'inspect failed'}
             </div>
           ) : (
             <>
               {data.spec && <SpecBlock spec={data.spec} />}
+              <div style={{ height: 16 }} />
               <TasksBlock tasks={data.tasks} />
             </>
           )}
@@ -111,88 +132,101 @@ export default function SwarmServiceDrawer({
   );
 }
 
-function SpecBlock({ spec }: { spec: NonNullable<SwarmServiceInspectPayload['spec']> }) {
+function SpecBlock({
+  spec,
+}: {
+  spec: NonNullable<SwarmServiceInspectPayload['spec']>;
+}) {
   return (
-    <section>
-      <h4 className="text-xs uppercase tracking-wide text-slate-500 mb-2">Spec</h4>
-      <dl className="grid grid-cols-3 gap-y-1 gap-x-3 text-sm">
-        <Row label="Image" value={spec.image} mono />
-        {spec.image_digest && <Row label="Digest" value={spec.image_digest} mono small />}
+    <div className="panel">
+      <div className="panel-head">
+        <div className="panel-title">SPEC</div>
+      </div>
+      <div className="panel-body" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <Row label="image" value={spec.image} mono />
+        {spec.image_digest && <Row label="digest" value={spec.image_digest} mono />}
         <Row
-          label="Mode"
+          label="mode"
           value={
             spec.mode === 'replicated' && spec.replicas !== null
               ? `replicated · ${spec.replicas}`
               : spec.mode
           }
         />
-        {spec.created_at && <Row label="Created" value={spec.created_at} small />}
-        {spec.updated_at && <Row label="Updated" value={spec.updated_at} small />}
-      </dl>
-      {spec.published_ports.length > 0 && (
-        <ListBlock label="Published ports" items={spec.published_ports} />
-      )}
-      {spec.networks.length > 0 && <ListBlock label="Networks" items={spec.networks} />}
-      {spec.constraints.length > 0 && (
-        <ListBlock label="Constraints" items={spec.constraints} />
-      )}
-      {spec.mounts.length > 0 && <ListBlock label="Mounts" items={spec.mounts} />}
-      {spec.env.length > 0 && <ListBlock label="Environment" items={spec.env} />}
-    </section>
+        {spec.created_at && <Row label="created" value={spec.created_at} />}
+        {spec.updated_at && <Row label="updated" value={spec.updated_at} />}
+        {spec.published_ports.length > 0 && (
+          <ListRow label="published ports" items={spec.published_ports} />
+        )}
+        {spec.networks.length > 0 && (
+          <ListRow label="networks" items={spec.networks} />
+        )}
+        {spec.constraints.length > 0 && (
+          <ListRow label="constraints" items={spec.constraints} />
+        )}
+        {spec.mounts.length > 0 && <ListRow label="mounts" items={spec.mounts} />}
+        {spec.env.length > 0 && <ListRow label="environment" items={spec.env} />}
+      </div>
+    </div>
   );
 }
 
-function TasksBlock({ tasks }: { tasks: SwarmServiceInspectPayload['tasks'] }) {
-  if (tasks.length === 0) {
-    return (
-      <section>
-        <h4 className="text-xs uppercase tracking-wide text-slate-500 mb-2">Tasks</h4>
-        <div className="text-sm text-slate-500 border border-dashed border-slate-800 rounded-md p-4">
-          No task records.
-        </div>
-      </section>
-    );
-  }
+function TasksBlock({
+  tasks,
+}: {
+  tasks: SwarmServiceInspectPayload['tasks'];
+}) {
   return (
-    <section>
-      <h4 className="text-xs uppercase tracking-wide text-slate-500 mb-2">
-        Tasks ({tasks.length})
-      </h4>
-      <ul className="divide-y divide-slate-800 border border-slate-800 rounded-md overflow-hidden">
-        {tasks.map((t) => (
-          <li key={t.id} className="px-3 py-2 bg-slate-950/50">
-            <div className="flex items-center gap-2 flex-wrap">
-              <code className="text-[11px] text-slate-500">{t.id.slice(0, 12)}</code>
-              <span className="font-medium text-slate-100 text-sm">{t.name}</span>
-              <span className="text-xs text-slate-500">on {t.node || '—'}</span>
-            </div>
-            <div className="text-[11px] text-slate-500 mt-1 flex flex-wrap gap-x-3 gap-y-1">
-              <span>
-                desired{' '}
-                <span className="text-slate-300">{t.desired_state}</span>
-              </span>
-              <span>
-                current{' '}
-                <span
-                  className={
-                    t.current_state.startsWith('Running')
-                      ? 'text-emerald-300'
-                      : t.current_state.startsWith('Failed') || t.current_state.startsWith('Rejected')
-                        ? 'text-red-300'
-                        : 'text-slate-300'
-                  }
-                >
-                  {t.current_state}
-                </span>
-              </span>
-            </div>
-            {t.error && (
-              <div className="text-[11px] text-red-300 mt-1 break-words">{t.error}</div>
-            )}
-          </li>
-        ))}
-      </ul>
-    </section>
+    <div className="panel">
+      <div className="panel-head">
+        <div className="panel-title">
+          TASKS<span className="meta">{tasks.length}</span>
+        </div>
+      </div>
+      <div className="panel-body flush">
+        {tasks.length === 0 ? (
+          <div className="empty">No task records.</div>
+        ) : (
+          <table className="tbl">
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>NAME</th>
+                <th>NODE</th>
+                <th>DESIRED</th>
+                <th>CURRENT</th>
+              </tr>
+            </thead>
+            <tbody>
+              {tasks.map((t) => (
+                <tr key={t.id}>
+                  <td className="mono muted">{t.id.slice(0, 12)}</td>
+                  <td className="mono" style={{ color: 'var(--fg)' }}>
+                    {t.name}
+                  </td>
+                  <td className="mono">{t.node || '—'}</td>
+                  <td className="mono">{t.desired_state}</td>
+                  <td
+                    className={`mono ${
+                      t.current_state.startsWith('Running')
+                        ? 'ok'
+                        : t.current_state.startsWith('Failed') ||
+                            t.current_state.startsWith('Rejected')
+                          ? 'err-c'
+                          : 'muted'
+                    }`}
+                    title={t.error || undefined}
+                  >
+                    {t.current_state}
+                    {t.error && <div className="err-c" style={{ fontSize: 10.5 }}>{t.error}</div>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -200,38 +234,62 @@ function Row({
   label,
   value,
   mono,
-  small,
 }: {
   label: string;
   value: string;
   mono?: boolean;
-  small?: boolean;
 }) {
   return (
-    <>
-      <dt className="text-[11px] uppercase tracking-wide text-slate-500 col-span-1 self-center">
+    <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr', gap: 8, alignItems: 'baseline' }}>
+      <span
+        style={{
+          fontSize: 10.5,
+          color: 'var(--fg-3)',
+          textTransform: 'uppercase',
+          letterSpacing: '0.08em',
+          fontFamily: 'var(--mono)',
+        }}
+      >
         {label}
-      </dt>
-      <dd
-        className={`col-span-2 ${small ? 'text-xs' : 'text-sm'} text-slate-100 break-words ${
-          mono ? 'font-mono' : ''
-        }`}
+      </span>
+      <span
+        className={mono ? 'mono' : ''}
+        style={{ color: 'var(--fg)', fontSize: 12, wordBreak: 'break-word' }}
       >
         {value}
-      </dd>
-    </>
+      </span>
+    </div>
   );
 }
 
-function ListBlock({ label, items }: { label: string; items: string[] }) {
+function ListRow({ label, items }: { label: string; items: string[] }) {
   return (
-    <div className="mt-3">
-      <div className="text-[11px] uppercase tracking-wide text-slate-500 mb-1">{label}</div>
-      <ul className="space-y-1 text-xs font-mono">
+    <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr', gap: 8 }}>
+      <span
+        style={{
+          fontSize: 10.5,
+          color: 'var(--fg-3)',
+          textTransform: 'uppercase',
+          letterSpacing: '0.08em',
+          fontFamily: 'var(--mono)',
+        }}
+      >
+        {label}
+      </span>
+      <ul style={{ margin: 0, padding: 0, listStyle: 'none', display: 'flex', flexDirection: 'column', gap: 3 }}>
         {items.map((it, i) => (
           <li
             key={`${label}-${i}`}
-            className="bg-slate-950 border border-slate-800 rounded px-2 py-1 text-slate-200 break-words"
+            className="mono"
+            style={{
+              background: 'var(--bg)',
+              border: '1px solid var(--line)',
+              borderRadius: 'var(--r)',
+              padding: '3px 6px',
+              fontSize: 11,
+              color: 'var(--fg-1)',
+              wordBreak: 'break-word',
+            }}
           >
             {it}
           </li>

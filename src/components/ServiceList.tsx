@@ -3,16 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useWebSocket } from './providers/WebSocketProvider';
 import { ServiceInfo } from '@/lib/types';
-import {
-  PlayIcon,
-  SquareIcon,
-  RefreshCwIcon,
-  AlertCircleIcon,
-  Loader2Icon,
-  SearchIcon,
-  XIcon,
-  ScrollTextIcon,
-} from 'lucide-react';
+import { Loader2Icon } from 'lucide-react';
 import JournalLogViewer from './JournalLogViewer';
 
 type Action = 'start' | 'stop' | 'restart';
@@ -124,104 +115,149 @@ export default function ServiceList({ agentId }: { agentId: string }) {
   }, [services]);
 
   return (
-    <div className="flex flex-col h-full">
-      <div className="flex items-center justify-between gap-3 mb-3">
-        <div className="flex items-center gap-2">
-          <h3 className="text-base font-semibold text-slate-100">Services</h3>
+    <div
+      className="panel"
+      style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}
+    >
+      <div className="panel-head">
+        <div className="panel-title">
+          <span className="ico">≡</span> SERVICES
           {services && (
-            <span className="text-xs text-slate-500">
-              {counts.total} total · <span className="text-emerald-400">{counts.active} active</span>
-              {counts.failed > 0 && <> · <span className="text-red-400">{counts.failed} failed</span></>}
+            <span className="meta">
+              {counts.total} units · {counts.active} active
+              {counts.failed > 0 ? ` · ${counts.failed} failed` : ''}
             </span>
           )}
         </div>
-        <button
-          type="button"
-          onClick={requestList}
-          disabled={!isConnected}
-          className="text-xs flex items-center gap-1.5 px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-300 rounded-md transition-colors"
-          title="Refresh"
-        >
-          <RefreshCwIcon className="w-3.5 h-3.5" />
-          Refresh
-        </button>
-      </div>
-
-      <div className="flex items-center gap-2 mb-3">
-        <div className="relative flex-1">
-          <SearchIcon className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
-          <input
-            type="text"
-            value={filter}
-            onChange={(e) => setFilter(e.target.value)}
-            placeholder="Filter services…"
-            className="w-full pl-8 pr-7 py-1.5 text-sm bg-slate-900 border border-slate-700 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 text-slate-100 placeholder:text-slate-500"
-          />
-          {filter && (
-            <button
-              type="button"
-              onClick={() => setFilter('')}
-              className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-200"
-              aria-label="Clear filter"
-            >
-              <XIcon className="w-4 h-4" />
-            </button>
-          )}
-        </div>
-        <div className="flex bg-slate-900 border border-slate-800 rounded-md p-0.5 text-xs">
-          {(['all', 'active', 'failed', 'inactive'] as const).map((k) => (
-            <button
-              key={k}
-              type="button"
-              onClick={() => setStateFilter(k)}
-              className={`px-2 py-1 rounded-md transition-colors ${
-                stateFilter === k
-                  ? 'bg-slate-700 text-slate-100'
-                  : 'text-slate-400 hover:text-slate-100'
-              }`}
-            >
-              {k}
-            </button>
-          ))}
+        <div className="panel-actions">
+          <div className="search-input" style={{ width: 200, height: 24 }}>
+            <span style={{ color: 'var(--accent)' }}>⌕</span>
+            <input
+              placeholder="filter…"
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+            />
+          </div>
+          <div className="seg">
+            {(['all', 'active', 'failed', 'inactive'] as const).map((k) => (
+              <button
+                key={k}
+                className={stateFilter === k ? 'on' : ''}
+                onClick={() => setStateFilter(k)}
+              >
+                {k}
+              </button>
+            ))}
+          </div>
+          <button className="btn sm" onClick={requestList} disabled={!isConnected}>
+            ↻
+          </button>
         </div>
       </div>
 
       {error && (
-        <div className="mb-3 flex items-start gap-2 text-xs text-amber-300 bg-amber-500/10 border border-amber-500/30 rounded-md p-2">
-          <AlertCircleIcon className="w-4 h-4 mt-0.5 shrink-0" />
-          <span>{error}</span>
+        <div
+          style={{
+            padding: 8,
+            background: 'var(--warn-bg)',
+            color: 'var(--warn)',
+            fontSize: 11,
+            fontFamily: 'var(--mono)',
+            borderBottom: '1px solid var(--line)',
+          }}
+        >
+          ⚠ {error}
         </div>
       )}
 
-      {services === null ? (
-        <div className="flex-1 flex items-center justify-center text-slate-500">
-          <Loader2Icon className="w-5 h-5 animate-spin" />
-        </div>
-      ) : filtered.length === 0 ? (
-        <div className="flex-1 flex items-center justify-center text-sm text-slate-500">
-          {services.length === 0 ? 'No services reported.' : 'No services match the current filter.'}
-        </div>
-      ) : (
-        <ul className="flex-1 overflow-y-auto space-y-1.5 pr-1">
-          {filtered.map((service) => (
-            <ServiceRow
-              key={service.name}
-              service={service}
-              pending={pending[service.name]}
-              onControl={handleControl}
-              onShowLogs={() => setLogUnit(service.name)}
-            />
-          ))}
-        </ul>
-      )}
+      <div className="panel-body flush" style={{ flex: 1, overflow: 'auto', minHeight: 0 }}>
+        {services === null ? (
+          <div className="empty">
+            <Loader2Icon className="w-5 h-5 animate-spin" />
+          </div>
+        ) : filtered.length === 0 ? (
+          <div className="empty">
+            {services.length === 0
+              ? 'No services reported.'
+              : 'No services match the current filter.'}
+          </div>
+        ) : (
+          <table className="tbl">
+            <tbody>
+              {filtered.map((s) => {
+                const cls =
+                  s.active_state === 'active'
+                    ? 'ok'
+                    : s.active_state === 'failed'
+                      ? 'err-c'
+                      : 'muted';
+                const dot = s.active_state === 'active' ? '●' : s.active_state === 'failed' ? '●' : '○';
+                const p = pending[s.name];
+                return (
+                  <tr key={s.name}>
+                    <td style={{ width: 24 }} className={`${cls} center`}>
+                      {dot}
+                    </td>
+                    <td className="mono" style={{ color: 'var(--fg)' }}>
+                      {s.name}
+                    </td>
+                    <td className="muted" title={s.description}>
+                      {s.description}
+                    </td>
+                    <td className={`mono ${cls}`} style={{ width: 90 }}>
+                      {s.active_state || '—'}
+                    </td>
+                    <td className="actions" style={{ width: 130 }}>
+                      <button
+                        className="btn sm icon"
+                        title="Start"
+                        disabled={!!p}
+                        onClick={() => handleControl(s.name, 'start')}
+                      >
+                        {p === 'start' ? '…' : '▶'}
+                      </button>
+                      <button
+                        className="btn sm icon"
+                        title="Stop"
+                        disabled={!!p}
+                        onClick={() => handleControl(s.name, 'stop')}
+                      >
+                        {p === 'stop' ? '…' : '■'}
+                      </button>
+                      <button
+                        className="btn sm icon"
+                        title="Restart"
+                        disabled={!!p}
+                        onClick={() => handleControl(s.name, 'restart')}
+                      >
+                        {p === 'restart' ? '…' : '↻'}
+                      </button>
+                      <button
+                        className="btn sm icon"
+                        title="journalctl -fu"
+                        onClick={() => setLogUnit(s.name)}
+                      >
+                        ≡
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </div>
 
       {toast && (
         <div
-          className={`absolute bottom-4 left-1/2 -translate-x-1/2 px-3 py-2 rounded-md shadow-xl text-sm border ${
-            toast.kind === 'success'
-              ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-200'
-              : 'bg-red-500/15 border-red-500/40 text-red-200'
-          }`}
+          style={{
+            padding: '6px 12px',
+            background: toast.kind === 'success' ? 'var(--accent-bg)' : 'var(--err-bg)',
+            color: toast.kind === 'success' ? 'var(--accent)' : 'var(--err)',
+            fontFamily: 'var(--mono)',
+            fontSize: 11,
+            borderTop: '1px solid var(--line)',
+          }}
         >
           {toast.text}
         </div>
@@ -235,118 +271,5 @@ export default function ServiceList({ agentId }: { agentId: string }) {
         />
       )}
     </div>
-  );
-}
-
-function ServiceRow({
-  service,
-  pending,
-  onControl,
-  onShowLogs,
-}: {
-  service: ServiceInfo;
-  pending?: Action;
-  onControl: (name: string, action: Action) => void;
-  onShowLogs: () => void;
-}) {
-  const stateClasses =
-    service.active_state === 'active'
-      ? 'bg-emerald-500/20 text-emerald-300'
-      : service.active_state === 'failed'
-        ? 'bg-red-500/20 text-red-300'
-        : service.active_state === 'activating'
-          ? 'bg-amber-500/20 text-amber-300'
-          : 'bg-slate-800 text-slate-400';
-
-  return (
-    <li className="flex items-center justify-between gap-3 p-2.5 bg-slate-900 border border-slate-800 rounded-md hover:border-slate-700 transition-colors">
-      <div className="overflow-hidden flex-1 min-w-0">
-        <div className="font-medium text-slate-100 text-sm truncate" title={service.name}>
-          {service.name}
-        </div>
-        {service.description && (
-          <div className="text-xs text-slate-500 truncate mt-0.5" title={service.description}>
-            {service.description}
-          </div>
-        )}
-        <div className="flex items-center gap-1.5 mt-1">
-          <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium uppercase tracking-wide ${stateClasses}`}>
-            {service.active_state || '—'}
-          </span>
-          {service.status && service.status !== service.active_state && (
-            <span className="text-[10px] text-slate-500 uppercase tracking-wide">{service.status}</span>
-          )}
-        </div>
-      </div>
-
-      <div className="flex space-x-0.5 shrink-0">
-        <button
-          type="button"
-          title="journalctl -fu"
-          onClick={onShowLogs}
-          disabled={!!pending}
-          className="p-1.5 text-slate-400 hover:text-slate-100 hover:bg-slate-800 rounded transition-colors"
-        >
-          <ScrollTextIcon className="w-3.5 h-3.5" />
-        </button>
-        <ActionButton
-          label="Start"
-          icon={<PlayIcon className="w-3.5 h-3.5" />}
-          color="emerald"
-          loading={pending === 'start'}
-          disabled={!!pending}
-          onClick={() => onControl(service.name, 'start')}
-        />
-        <ActionButton
-          label="Stop"
-          icon={<SquareIcon className="w-3.5 h-3.5" />}
-          color="red"
-          loading={pending === 'stop'}
-          disabled={!!pending}
-          onClick={() => onControl(service.name, 'stop')}
-        />
-        <ActionButton
-          label="Restart"
-          icon={<RefreshCwIcon className="w-3.5 h-3.5" />}
-          color="blue"
-          loading={pending === 'restart'}
-          disabled={!!pending}
-          onClick={() => onControl(service.name, 'restart')}
-        />
-      </div>
-    </li>
-  );
-}
-
-function ActionButton({
-  label,
-  icon,
-  color,
-  loading,
-  disabled,
-  onClick,
-}: {
-  label: string;
-  icon: React.ReactNode;
-  color: 'emerald' | 'red' | 'blue';
-  loading: boolean;
-  disabled: boolean;
-  onClick: () => void;
-}) {
-  const palette = {
-    emerald: 'hover:text-emerald-300 hover:bg-emerald-500/10',
-    red: 'hover:text-red-300 hover:bg-red-500/10',
-    blue: 'hover:text-blue-300 hover:bg-blue-500/10',
-  }[color];
-  return (
-    <button
-      type="button"
-      title={label}
-      onClick={onClick}
-      disabled={disabled}
-      className={`p-1.5 text-slate-400 ${palette} rounded disabled:opacity-50 disabled:cursor-not-allowed transition-colors`}
-    >
-      {loading ? <Loader2Icon className="w-3.5 h-3.5 animate-spin" /> : icon}
-    </button>
   );
 }

@@ -4,14 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useWebSocket } from './providers/WebSocketProvider';
 import { useUi } from './providers/UiProvider';
 import type { SwarmStackRow, SwarmService, SwarmTask } from '@/lib/types';
-import {
-  LayersIcon,
-  RefreshCwIcon,
-  Trash2Icon,
-  Loader2Icon,
-  AlertCircleIcon,
-  EyeIcon,
-} from 'lucide-react';
+import { Loader2Icon } from 'lucide-react';
 
 const REFRESH_MS = 15_000;
 
@@ -114,96 +107,99 @@ export default function SwarmStacks({ agentId }: { agentId: string }) {
 
   if (isManager === false) {
     return (
-      <div className="flex items-start gap-2 text-sm text-amber-300 bg-amber-500/10 border border-amber-500/30 rounded-md px-3 py-2">
-        <AlertCircleIcon className="w-4 h-4 mt-0.5 shrink-0" />
-        <span>This host isn't a swarm manager. Stack management is manager-only.</span>
+      <div className="pane">
+        <div
+          style={{
+            padding: 12,
+            background: 'var(--warn-bg)',
+            border: '1px solid var(--warn-bd)',
+            borderRadius: 'var(--r)',
+            color: 'var(--warn)',
+            fontFamily: 'var(--mono)',
+            fontSize: 12,
+          }}
+        >
+          ⚠ This host isn&apos;t a swarm manager. Stack management is manager-only.
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between gap-3 flex-wrap">
-        <div className="flex items-center gap-2">
-          <LayersIcon className="w-5 h-5 text-slate-400" />
-          <h2 className="text-base font-semibold">Stacks</h2>
-          <span className="text-xs text-slate-500">
-            {stacks === null ? 'loading…' : `· ${stacks.length}`}
-          </span>
-        </div>
-        <button
-          type="button"
-          onClick={refresh}
-          className="text-xs flex items-center gap-1.5 px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-md"
-        >
-          <RefreshCwIcon className="w-3.5 h-3.5" />
-          Refresh
-        </button>
-      </div>
-
+    <div className="pane">
       {error && (
-        <div className="flex items-start gap-2 text-sm text-red-300 bg-red-500/10 border border-red-500/30 rounded-md px-3 py-2">
-          <AlertCircleIcon className="w-4 h-4 mt-0.5 shrink-0" />
-          <span>{error}</span>
+        <div
+          style={{
+            padding: 10,
+            background: 'var(--err-bg)',
+            border: '1px solid var(--err-bd)',
+            borderRadius: 'var(--r)',
+            color: 'var(--err)',
+            fontFamily: 'var(--mono)',
+            fontSize: 11.5,
+          }}
+        >
+          {error}
         </div>
       )}
 
-      {stacks === null ? (
-        <div className="flex items-center justify-center py-12 text-slate-500">
-          <Loader2Icon className="w-5 h-5 animate-spin" />
+      <div className="panel">
+        <div className="panel-head">
+          <div className="panel-title">
+            <span className="ico">⊞</span> SWARM STACKS
+            <span className="meta">
+              {stacks === null ? 'loading…' : `manager · ${stacks.length} stacks`}
+            </span>
+          </div>
+          <div className="panel-actions">
+            <button className="btn" onClick={refresh}>↻</button>
+          </div>
         </div>
-      ) : stacks.length === 0 ? (
-        <div className="border border-dashed border-slate-800 rounded-md px-4 py-8 text-center text-sm text-slate-500">
-          No stacks deployed.
-        </div>
-      ) : (
-        <div className="rounded-md border border-slate-800 overflow-hidden">
-          <table className="w-full text-sm">
-            <thead className="bg-slate-900/60 text-[11px] uppercase tracking-wide text-slate-500">
-              <tr>
-                <th className="text-left px-3 py-2 font-medium">Name</th>
-                <th className="text-right px-3 py-2 font-medium">Services</th>
-                <th className="text-left px-3 py-2 font-medium">Orchestrator</th>
-                <th className="px-3 py-2"></th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-800">
-              {stacks.map((s) => (
-                <tr key={s.name} className="bg-slate-900/30">
-                  <td className="px-3 py-2 font-medium text-slate-200">{s.name}</td>
-                  <td className="px-3 py-2 text-right text-slate-400">{s.services}</td>
-                  <td className="px-3 py-2 text-slate-400">{s.orchestrator}</td>
-                  <td className="px-3 py-2 text-right">
-                    <div className="flex items-center justify-end gap-1">
-                      <button
-                        type="button"
-                        onClick={() => openInspect(s)}
-                        title="Inspect"
-                        className="p-1.5 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800"
-                      >
-                        <EyeIcon className="w-4 h-4" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => remove(s)}
-                        disabled={removing === s.name}
-                        title="Remove"
-                        className="p-1.5 rounded text-slate-400 hover:text-red-300 hover:bg-slate-800 disabled:opacity-50"
-                      >
-                        {removing === s.name ? (
-                          <Loader2Icon className="w-4 h-4 animate-spin" />
-                        ) : (
-                          <Trash2Icon className="w-4 h-4" />
-                        )}
-                      </button>
-                    </div>
-                  </td>
+        <div className="panel-body flush">
+          {stacks === null ? (
+            <div className="empty">
+              <Loader2Icon className="w-5 h-5 animate-spin" />
+            </div>
+          ) : stacks.length === 0 ? (
+            <div className="empty">No stacks deployed.</div>
+          ) : (
+            <table className="tbl">
+              <thead>
+                <tr>
+                  <th>NAME</th>
+                  <th className="right">SERVICES</th>
+                  <th>ORCHESTRATOR</th>
+                  <th style={{ width: 200 }} />
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {stacks.map((s) => (
+                  <tr key={s.name}>
+                    <td className="mono" style={{ color: 'var(--fg)' }}>
+                      {s.name}
+                    </td>
+                    <td className="right mono">{s.services}</td>
+                    <td className="mono">{s.orchestrator}</td>
+                    <td className="actions">
+                      <button className="btn sm" onClick={() => openInspect(s)}>
+                        inspect
+                      </button>
+                      <button
+                        className="btn sm icon danger"
+                        title="Remove"
+                        disabled={removing === s.name}
+                        onClick={() => remove(s)}
+                      >
+                        {removing === s.name ? '…' : '×'}
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
         </div>
-      )}
+      </div>
 
       {inspect && <InspectModal inspect={inspect} onClose={() => setInspect(null)} />}
     </div>
@@ -224,105 +220,118 @@ function InspectModal({
 }) {
   return (
     <div
-      className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-sm flex items-center justify-center p-4"
-      onClick={onClose}
+      className="modal-overlay"
+      onClick={(e) => e.target === e.currentTarget && onClose()}
     >
       <div
-        className="bg-slate-900 border border-slate-800 rounded-lg shadow-2xl max-w-4xl w-full max-h-[80vh] flex flex-col"
-        onClick={(e) => e.stopPropagation()}
+        className="modal"
+        style={{ width: 'min(900px, 95vw)', maxHeight: '85vh', display: 'flex', flexDirection: 'column' }}
       >
-        <div className="p-4 border-b border-slate-800 flex items-center justify-between">
-          <h3 className="text-base font-semibold text-slate-100 break-all">
-            Stack {inspect.name}
-          </h3>
-          <button type="button" onClick={onClose} className="text-slate-400 hover:text-slate-100">
+        <div className="panel-head">
+          <div className="panel-title">Stack {inspect.name}</div>
+          <button className="icon-btn" onClick={onClose}>
             ×
           </button>
         </div>
-        <div className="flex-1 overflow-auto p-4 space-y-4">
+        <div style={{ flex: 1, overflow: 'auto', padding: 12, display: 'flex', flexDirection: 'column', gap: 12 }}>
           {inspect.error && (
-            <div className="flex items-start gap-2 text-sm text-red-300 bg-red-500/10 border border-red-500/30 rounded-md px-3 py-2">
-              <AlertCircleIcon className="w-4 h-4 mt-0.5 shrink-0" />
-              <span>{inspect.error}</span>
+            <div
+              style={{
+                padding: 8,
+                background: 'var(--err-bg)',
+                border: '1px solid var(--err-bd)',
+                borderRadius: 'var(--r)',
+                color: 'var(--err)',
+                fontSize: 11,
+              }}
+            >
+              {inspect.error}
             </div>
           )}
           {inspect.services === null ? (
-            <div className="flex items-center justify-center py-8 text-slate-500">
+            <div className="empty">
               <Loader2Icon className="w-5 h-5 animate-spin" />
             </div>
           ) : (
             <>
-              <div>
-                <h4 className="text-xs uppercase tracking-wide text-slate-500 mb-2">Services</h4>
-                {inspect.services.length === 0 ? (
-                  <p className="text-xs text-slate-500 italic">none</p>
-                ) : (
-                  <div className="rounded-md border border-slate-800 overflow-hidden">
-                    <table className="w-full text-xs">
-                      <thead className="bg-slate-900/60 text-slate-500">
+              <div className="panel">
+                <div className="panel-head">
+                  <div className="panel-title">SERVICES</div>
+                </div>
+                <div className="panel-body flush">
+                  {inspect.services.length === 0 ? (
+                    <div className="empty">none</div>
+                  ) : (
+                    <table className="tbl">
+                      <thead>
                         <tr>
-                          <th className="text-left px-2 py-1">Name</th>
-                          <th className="text-left px-2 py-1">Mode</th>
-                          <th className="text-left px-2 py-1">Replicas</th>
-                          <th className="text-left px-2 py-1">Image</th>
+                          <th>NAME</th>
+                          <th>MODE</th>
+                          <th>REPLICAS</th>
+                          <th>IMAGE</th>
                         </tr>
                       </thead>
-                      <tbody className="divide-y divide-slate-800">
+                      <tbody>
                         {inspect.services.map((s) => (
-                          <tr key={s.id} className="bg-slate-900/30">
-                            <td className="px-2 py-1 text-slate-200">{s.name}</td>
-                            <td className="px-2 py-1 text-slate-400">{s.mode}</td>
-                            <td className="px-2 py-1 text-slate-400">{s.replicas}</td>
-                            <td className="px-2 py-1 font-mono text-slate-500 break-all">
-                              {s.image}
+                          <tr key={s.id}>
+                            <td className="mono" style={{ color: 'var(--fg)' }}>
+                              {s.name}
                             </td>
+                            <td className="mono">{s.mode}</td>
+                            <td className="mono">{s.replicas}</td>
+                            <td className="mono muted">{s.image}</td>
                           </tr>
                         ))}
                       </tbody>
                     </table>
-                  </div>
-                )}
+                  )}
+                </div>
               </div>
-              <div>
-                <h4 className="text-xs uppercase tracking-wide text-slate-500 mb-2">Tasks</h4>
-                {!inspect.tasks || inspect.tasks.length === 0 ? (
-                  <p className="text-xs text-slate-500 italic">none</p>
-                ) : (
-                  <div className="rounded-md border border-slate-800 overflow-hidden">
-                    <table className="w-full text-xs">
-                      <thead className="bg-slate-900/60 text-slate-500">
+
+              <div className="panel">
+                <div className="panel-head">
+                  <div className="panel-title">TASKS</div>
+                </div>
+                <div className="panel-body flush">
+                  {!inspect.tasks || inspect.tasks.length === 0 ? (
+                    <div className="empty">none</div>
+                  ) : (
+                    <table className="tbl">
+                      <thead>
                         <tr>
-                          <th className="text-left px-2 py-1">Name</th>
-                          <th className="text-left px-2 py-1">Node</th>
-                          <th className="text-left px-2 py-1">Desired</th>
-                          <th className="text-left px-2 py-1">Current</th>
-                          <th className="text-left px-2 py-1">Error</th>
+                          <th>NAME</th>
+                          <th>NODE</th>
+                          <th>DESIRED</th>
+                          <th>CURRENT</th>
+                          <th>ERROR</th>
                         </tr>
                       </thead>
-                      <tbody className="divide-y divide-slate-800">
+                      <tbody>
                         {inspect.tasks.map((t) => (
-                          <tr key={t.id} className="bg-slate-900/30">
-                            <td className="px-2 py-1 text-slate-200 break-all">{t.name}</td>
-                            <td className="px-2 py-1 text-slate-400">{t.node}</td>
-                            <td className="px-2 py-1 text-slate-400">{t.desired_state}</td>
+                          <tr key={t.id}>
+                            <td className="mono" style={{ color: 'var(--fg)' }}>
+                              {t.name}
+                            </td>
+                            <td className="mono">{t.node}</td>
+                            <td className="mono">{t.desired_state}</td>
                             <td
-                              className={`px-2 py-1 ${
+                              className={`mono ${
                                 t.current_state.includes('Failed')
-                                  ? 'text-red-300'
+                                  ? 'err-c'
                                   : t.current_state.includes('Running')
-                                    ? 'text-emerald-300'
-                                    : 'text-slate-400'
+                                    ? 'ok'
+                                    : 'muted'
                               }`}
                             >
                               {t.current_state}
                             </td>
-                            <td className="px-2 py-1 text-red-300 break-all">{t.error}</td>
+                            <td className="mono err-c">{t.error}</td>
                           </tr>
                         ))}
                       </tbody>
                     </table>
-                  </div>
-                )}
+                  )}
+                </div>
               </div>
             </>
           )}

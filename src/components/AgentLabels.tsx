@@ -4,7 +4,6 @@ import { useCallback, useEffect, useState } from 'react';
 import { apiFetch } from '@/lib/api';
 import { useUi } from './providers/UiProvider';
 import type { LabelsResponse } from '@/lib/types';
-import { TagIcon, XIcon, PlusIcon } from 'lucide-react';
 
 export default function AgentLabels({ agentId }: { agentId: string }) {
   const ui = useUi();
@@ -21,7 +20,7 @@ export default function AgentLabels({ agentId }: { agentId: string }) {
       const data: LabelsResponse = await res.json();
       setLabels(data.by_agent[agentId] ?? []);
     } catch {
-      /* swallow — chip just won't render */
+      /* swallow */
     }
   }, [agentId]);
 
@@ -65,26 +64,17 @@ export default function AgentLabels({ agentId }: { agentId: string }) {
   };
 
   return (
-    <div className="flex items-center gap-1.5 flex-wrap">
+    <>
       {labels.map((l) => (
-        <span
-          key={l}
-          className="inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded border border-slate-700 bg-slate-900 text-slate-300"
-        >
-          <TagIcon className="w-3 h-3 text-slate-500" />
+        <span key={l} className="label-chip">
           {l}
-          <button
-            type="button"
-            onClick={() => remove(l)}
-            className="text-slate-500 hover:text-red-300"
-            title={`Remove ${l}`}
-          >
-            <XIcon className="w-3 h-3" />
-          </button>
+          <span className="x" onClick={() => remove(l)} title={`Remove ${l}`}>
+            ×
+          </span>
         </span>
       ))}
       {adding ? (
-        <form onSubmit={add} className="flex items-center gap-1">
+        <form onSubmit={add} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
           <input
             type="text"
             value={draft}
@@ -94,20 +84,15 @@ export default function AgentLabels({ agentId }: { agentId: string }) {
             }}
             autoFocus
             placeholder="label"
-            className="text-[11px] bg-slate-950 border border-slate-700 rounded px-1.5 py-0.5 text-slate-100 w-24 focus:outline-none focus:ring-1 focus:ring-blue-500"
+            className="input"
+            style={{ height: 22, fontSize: 11, padding: '2px 6px', width: 96 }}
           />
         </form>
       ) : (
-        <button
-          type="button"
-          onClick={() => setAdding(true)}
-          title="Add label"
-          className="inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded border border-dashed border-slate-700 text-slate-500 hover:text-slate-200 hover:border-slate-500"
-        >
-          <PlusIcon className="w-3 h-3" />
-          label
-        </button>
+        <span className="label-chip add" onClick={() => setAdding(true)}>
+          + label
+        </span>
       )}
-    </div>
+    </>
   );
 }

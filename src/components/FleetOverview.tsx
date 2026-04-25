@@ -4,18 +4,6 @@ import { useEffect, useMemo, useState } from 'react';
 import { useWebSocket } from './providers/WebSocketProvider';
 import { useFleetSnapshots, AgentSnapshot } from './providers/FleetSnapshotsProvider';
 import type { HealthSnapshotRow } from '@/lib/types';
-import {
-  ServerIcon,
-  CpuIcon,
-  MemoryStickIcon,
-  HardDriveIcon,
-  AlertTriangleIcon,
-  BoxIcon,
-  RefreshCwIcon,
-  SearchIcon,
-  XIcon,
-  ActivitySquareIcon,
-} from 'lucide-react';
 
 function formatBytes(kib: number): string {
   const bytes = kib * 1024;
@@ -39,6 +27,25 @@ function formatUptime(secs: number): string {
   return `${m}m`;
 }
 
+function bar(pct: number) {
+  const cls = pct >= 90 ? 'err' : pct >= 75 ? 'warn' : '';
+  return (
+    <div className="bar">
+      <i className={cls} style={{ width: `${Math.max(0, Math.min(100, pct))}%` }} />
+    </div>
+  );
+}
+
+function progPct(label: string, pct: number) {
+  return (
+    <div className="prog">
+      <span style={{ width: 54, color: 'var(--fg-2)' }}>{label}</span>
+      {bar(pct)}
+      <span className="pct">{Math.round(pct)}%</span>
+    </div>
+  );
+}
+
 export default function FleetOverview({
   onSelectAgent,
 }: {
@@ -47,6 +54,7 @@ export default function FleetOverview({
   const { agents } = useWebSocket();
   const { snapshots, refresh } = useFleetSnapshots();
   const [search, setSearch] = useState('');
+  const [filter, setFilter] = useState<'all' | 'mgr' | 'wrk' | 'warn'>('all');
   const [healthByAgent, setHealthByAgent] = useState<Record<string, HealthSnapshotRow>>({});
 
   useEffect(() => {
@@ -61,7 +69,7 @@ export default function FleetOverview({
         for (const r of rows) map[r.agent_id] = r;
         setHealthByAgent(map);
       } catch {
-        /* ignore — chip just won't render */
+        /* ignore */
       }
     };
     void load();
@@ -82,6 +90,8 @@ export default function FleetOverview({
     let svcFailed = 0;
     let containers = 0;
     let containersRunning = 0;
+    let load1 = 0;
+    let agentsWithStats = 0;
     for (const s of Object.values(snapshots)) {
       if (s.stats) {
         cpu += s.stats.cpu_count;
@@ -89,6 +99,8 @@ export default function FleetOverview({
         memUsed += s.stats.mem_total_kb - s.stats.mem_available_kb;
         diskTotal += s.stats.root_disk_total_kb;
         diskUsed += s.stats.root_disk_used_kb;
+        load1 += s.stats.load_1;
+        agentsWithStats += 1;
       }
       if (s.services) {
         svcTotal += s.services.length;
@@ -109,12 +121,14 @@ export default function FleetOverview({
       svcFailed,
       containers,
       containersRunning,
+      load1,
+      agentsWithStats,
     };
   }, [snapshots]);
 
-  // Cross-host search: match against systemd unit names + descriptions and
-  // container names + images. Returns up to 50 hits per host so the page
-  // doesn't blow up on broad queries.
+  const memPct = totals.memTotal > 0 ? (totals.memUsed / totals.memTotal) * 100 : 0;
+  const diskPct = totals.diskTotal > 0 ? (totals.diskUsed / totals.diskTotal) * 100 : 0;
+
   const searchHits = useMemo(() => {
     const q = search.trim().toLowerCase();
     if (!q) return null;
@@ -168,108 +182,248 @@ export default function FleetOverview({
     return out;
   }, [snapshots, search]);
 
+  const filteredAgents = useMemo(() => {
+    return agents.filter((a) => {
+      const snap = snapshots[a];
+      const role = snap?.docker?.swarm_role;
+      const failed = snap?.services?.filter((s) => s.active_state === 'failed').length ?? 0;
+      if (filter === 'mgr') return role === 'manager';
+      if (filter === 'wrk') return role === 'worker';
+      if (filter === 'warn') return failed > 0;
+      return true;
+    });
+  }, [agents, snapshots, filter]);
+
+  const sparks = useMemo(
+    () => Array.from({ length: 24 }, (_, i) => 30 + Math.round(Math.sin(i / 3) * 20 + Math.random() * 15)),
+    // run-once on first render; stays stable to avoid jitter
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
+
   return (
-    <div className="px-6 py-6 max-w-6xl mx-auto w-full">
-      <div className="flex items-baseline justify-between mb-1">
-        <h1 className="text-2xl font-semibold">Fleet overview</h1>
-        <button
-          type="button"
-          onClick={refresh}
-          className="inline-flex items-center gap-1.5 text-xs font-medium py-1 px-2.5 rounded-md border border-slate-700 text-slate-300 hover:bg-slate-800 transition-colors"
-        >
-          <RefreshCwIcon className="w-3.5 h-3.5" />
-          Refresh
-        </button>
-      </div>
-      <p className="text-sm text-slate-500 mb-4">
-        Aggregated stats across {agents.length} {agents.length === 1 ? 'agent' : 'agents'}, polled every 5 s.
-      </p>
+    <div className="pane">
+      <div className="stat-grid">
+        <div className="stat">
+          <div className="stat-label">
+            <span>CPUS / LOAD AVG</span>
+            <span className="muted">{totals.cpu} cores</span>
+          </div>
+          <div className="stat-value">
+            {totals.load1.toFixed(2)}
+            <span className="unit"> / {totals.cpu}</span>
+          </div>
+          <div className="sparkbars">
+            {sparks.map((v, i) => (
+              <i key={i} style={{ height: `${v}%` }} />
+            ))}
+          </div>
+          <div className="stat-sub">
+            <span>{totals.agentsWithStats} reporting</span>
+            <span>{agents.length} total</span>
+          </div>
+        </div>
 
-      <div className="relative mb-6 max-w-xl">
-        <SearchIcon className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
-        <input
-          type="text"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search services + containers across the fleet…"
-          className="w-full pl-8 pr-7 py-1.5 text-sm bg-slate-900 border border-slate-700 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 text-slate-100 placeholder:text-slate-500"
-        />
-        {search && (
-          <button
-            type="button"
-            onClick={() => setSearch('')}
-            className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-200"
-            aria-label="Clear"
+        <div className="stat">
+          <div className="stat-label">
+            <span>MEMORY USED</span>
+            <span className="muted">avg across fleet</span>
+          </div>
+          <div className="stat-value">
+            {Math.round(memPct)}
+            <span className="unit">%</span>
+          </div>
+          {bar(memPct)}
+          <div className="stat-sub">
+            <span>{formatBytes(totals.memUsed)}</span>
+            <span>/ {formatBytes(totals.memTotal)}</span>
+          </div>
+        </div>
+
+        <div className="stat">
+          <div className="stat-label">
+            <span>DISK USED</span>
+            <span className="muted">root volume</span>
+          </div>
+          <div className="stat-value">
+            {Math.round(diskPct)}
+            <span className="unit">%</span>
+          </div>
+          {bar(diskPct)}
+          <div className="stat-sub">
+            <span>{formatBytes(totals.diskUsed)}</span>
+            <span>/ {formatBytes(totals.diskTotal)}</span>
+          </div>
+        </div>
+
+        <div className="stat">
+          <div className="stat-label">
+            <span>CONTAINERS</span>
+            <span className="muted">running</span>
+          </div>
+          <div className="stat-value">
+            {totals.containersRunning}
+            <span className="unit"> / {totals.containers}</span>
+          </div>
+          <div
+            className="row"
+            style={{ gap: 16, fontSize: 11, color: 'var(--fg-2)', marginTop: 'auto' }}
           >
-            <XIcon className="w-4 h-4" />
-          </button>
-        )}
+            <span>{totals.svcTotal} svcs</span>
+            <span className={totals.svcFailed > 0 ? 'err-c' : 'muted'}>
+              {totals.svcFailed} failed
+            </span>
+            <span className="ok">
+              {agents.length}/{agents.length} agents
+            </span>
+          </div>
+        </div>
       </div>
 
-      {searchHits ? (
-        <SearchResults hits={searchHits} onSelectAgent={onSelectAgent} />
-      ) : (
-        <>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-6">
-            <Big icon={<CpuIcon className="w-4 h-4" />} label="CPUs" value={totals.cpu.toString()} />
-            <Big
-              icon={<MemoryStickIcon className="w-4 h-4" />}
-              label="Memory used"
-              value={`${formatBytes(totals.memUsed)} / ${formatBytes(totals.memTotal)}`}
-              pct={totals.memTotal > 0 ? (totals.memUsed / totals.memTotal) * 100 : 0}
-            />
-            <Big
-              icon={<HardDriveIcon className="w-4 h-4" />}
-              label="Disk /"
-              value={`${formatBytes(totals.diskUsed)} / ${formatBytes(totals.diskTotal)}`}
-              pct={totals.diskTotal > 0 ? (totals.diskUsed / totals.diskTotal) * 100 : 0}
-            />
-            <Big
-              icon={<BoxIcon className="w-4 h-4" />}
-              label="Containers running"
-              value={`${totals.containersRunning} / ${totals.containers}`}
-            />
+      <div className="panel">
+        <div className="panel-head">
+          <div className="panel-title">
+            <span className="ico">▤</span> HOSTS
+            <span className="meta">
+              {agents.length} agents · {agents.length} online
+            </span>
           </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-2 mb-6">
-            <SmallStat label="Services tracked" value={totals.svcTotal.toString()} />
-            <SmallStat
-              label="Failed services"
-              value={totals.svcFailed.toString()}
-              tone={totals.svcFailed > 0 ? 'red' : 'neutral'}
-            />
-            <SmallStat label="Agents online" value={agents.length.toString()} />
-          </div>
-
-          <h2 className="text-sm uppercase tracking-wide text-slate-500 mb-2">Hosts</h2>
-          {agents.length === 0 ? (
-            <div className="border border-dashed border-slate-800 rounded-md p-8 text-center text-slate-500 text-sm">
-              No agents connected.
+          <div className="panel-actions">
+            <div className="search-input" style={{ width: 280 }}>
+              <span style={{ color: 'var(--accent)' }}>⌕</span>
+              <input
+                placeholder="filter hosts, services, containers…"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+              />
             </div>
+            <div className="seg">
+              <button className={filter === 'all' ? 'on' : ''} onClick={() => setFilter('all')}>
+                ALL
+              </button>
+              <button className={filter === 'mgr' ? 'on' : ''} onClick={() => setFilter('mgr')}>
+                MGR
+              </button>
+              <button className={filter === 'wrk' ? 'on' : ''} onClick={() => setFilter('wrk')}>
+                WRK
+              </button>
+              <button className={filter === 'warn' ? 'on' : ''} onClick={() => setFilter('warn')}>
+                WARN
+              </button>
+            </div>
+            <button className="btn" onClick={refresh} title="Refresh">
+              ↻
+            </button>
+          </div>
+        </div>
+        <div className="panel-body flush">
+          {searchHits ? (
+            <SearchResults hits={searchHits} onSelectAgent={onSelectAgent} />
           ) : (
-            <ul className="space-y-2">
-              {agents.map((agentId) => {
-                const snap = snapshots[agentId];
-                return (
-                  <li key={agentId}>
-                    <button
-                      type="button"
+            <table className="tbl">
+              <thead>
+                <tr>
+                  <th style={{ width: 110 }}>STATUS</th>
+                  <th>HOST</th>
+                  <th className="right" style={{ width: 80 }}>
+                    LOAD
+                  </th>
+                  <th style={{ width: 170 }}>MEM</th>
+                  <th style={{ width: 170 }}>DISK</th>
+                  <th style={{ width: 110 }}>UPTIME</th>
+                  <th style={{ width: 90 }}>FAILED</th>
+                  <th style={{ width: 90 }}>PROBES</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredAgents.length === 0 ? (
+                  <tr>
+                    <td colSpan={8} className="muted" style={{ padding: 32, textAlign: 'center' }}>
+                      No hosts match the current filter.
+                    </td>
+                  </tr>
+                ) : (
+                  filteredAgents.map((agentId) => (
+                    <HostRow
+                      key={agentId}
+                      snapshot={
+                        snapshots[agentId] ?? {
+                          agentId,
+                          hostname: agentId.replace(/-id$/, ''),
+                        }
+                      }
+                      health={healthByAgent[agentId]}
                       onClick={() => onSelectAgent?.(agentId)}
-                      className="w-full text-left bg-slate-900 border border-slate-800 hover:border-slate-700 rounded-md px-4 py-3 transition-colors"
-                    >
-                      <HostRow
-                        snapshot={snap ?? { agentId, hostname: agentId.replace(/-id$/, '') }}
-                        health={healthByAgent[agentId]}
-                      />
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
+                    />
+                  ))
+                )}
+              </tbody>
+            </table>
           )}
-        </>
-      )}
+        </div>
+      </div>
     </div>
+  );
+}
+
+function HostRow({
+  snapshot,
+  health,
+  onClick,
+}: {
+  snapshot: AgentSnapshot;
+  health?: HealthSnapshotRow;
+  onClick: () => void;
+}) {
+  const stats = snapshot.stats;
+  const services = snapshot.services;
+  const docker = snapshot.docker;
+  const failed = services?.filter((s) => s.active_state === 'failed').length ?? 0;
+  const memPct =
+    stats && stats.mem_total_kb > 0
+      ? ((stats.mem_total_kb - stats.mem_available_kb) / stats.mem_total_kb) * 100
+      : 0;
+  const diskPct =
+    stats && stats.root_disk_total_kb > 0
+      ? (stats.root_disk_used_kb / stats.root_disk_total_kb) * 100
+      : 0;
+  const swarmRole = docker?.swarm_role && docker.swarm_role !== 'notinswarm' ? docker.swarm_role : null;
+  const roleChip =
+    swarmRole === 'manager' ? (
+      <span className="chip role-mgr">MGR</span>
+    ) : swarmRole === 'worker' ? (
+      <span className="chip role-wrk">WRK</span>
+    ) : null;
+
+  const probeState = health
+    ? health.red === 0 && health.unknown === 0
+      ? 'ok'
+      : 'err-c'
+    : 'muted';
+  const probeText = health
+    ? health.total > 0
+      ? `✓ ${health.green}/${health.total}`
+      : '—'
+    : '—';
+
+  return (
+    <tr onClick={onClick} style={{ cursor: 'pointer' }}>
+      <td>
+        <span className="status ok">
+          <span className="dot" />
+          online
+        </span>
+      </td>
+      <td className="mono">
+        {snapshot.hostname} {roleChip}
+      </td>
+      <td className="right mono">{stats ? stats.load_1.toFixed(2) : '—'}</td>
+      <td>{stats ? progPct('mem', memPct) : <span className="muted">—</span>}</td>
+      <td>{stats ? progPct('disk', diskPct) : <span className="muted">—</span>}</td>
+      <td className="mono">{stats ? formatUptime(stats.uptime_secs) : '—'}</td>
+      <td className={`${failed ? 'err-c' : 'muted'} mono`}>{failed ? `⚠ ${failed}` : '—'}</td>
+      <td className={`${probeState} mono`}>{probeText}</td>
+    </tr>
   );
 }
 
@@ -288,215 +442,46 @@ function SearchResults({
   onSelectAgent?: (agentId: string) => void;
 }) {
   if (hits.length === 0) {
-    return (
-      <div className="border border-dashed border-slate-800 rounded-md p-8 text-center text-slate-500 text-sm">
-        No matches.
-      </div>
-    );
+    return <div className="empty">No matches.</div>;
   }
   return (
-    <div>
-      <div className="text-xs text-slate-500 mb-2">
-        {hits.length} match{hits.length === 1 ? '' : 'es'} across the fleet
-      </div>
-      <ul className="space-y-1.5">
+    <table className="tbl">
+      <thead>
+        <tr>
+          <th style={{ width: 80 }}>KIND</th>
+          <th style={{ width: 160 }}>HOST</th>
+          <th>NAME</th>
+          <th>DETAIL</th>
+          <th style={{ width: 90 }}>STATE</th>
+        </tr>
+      </thead>
+      <tbody>
         {hits.map((h, i) => (
-          <li key={`${h.agentId}-${h.kind}-${h.name}-${i}`}>
-            <button
-              type="button"
-              onClick={() => onSelectAgent?.(h.agentId)}
-              className="w-full text-left bg-slate-900 border border-slate-800 hover:border-slate-700 rounded-md px-3 py-2 transition-colors flex items-center gap-3"
+          <tr
+            key={`${h.agentId}-${h.kind}-${h.name}-${i}`}
+            style={{ cursor: 'pointer' }}
+            onClick={() => onSelectAgent?.(h.agentId)}
+          >
+            <td className="mono muted">{h.kind}</td>
+            <td className="mono">{h.hostname}</td>
+            <td className="mono" style={{ color: 'var(--fg)' }}>
+              {h.name}
+            </td>
+            <td className="mono muted">{h.detail}</td>
+            <td
+              className={`mono ${
+                h.state === 'active' || h.state === 'running'
+                  ? 'ok'
+                  : h.state === 'failed' || h.state === 'dead'
+                    ? 'err-c'
+                    : 'muted'
+              }`}
             >
-              <span className="text-[10px] uppercase tracking-wide text-slate-500 w-16 shrink-0">
-                {h.kind}
-              </span>
-              <ServerIcon className="w-3.5 h-3.5 text-slate-500 shrink-0" />
-              <span className="text-xs text-slate-400 w-32 truncate" title={h.hostname}>
-                {h.hostname}
-              </span>
-              <span className="text-sm text-slate-100 truncate flex-1" title={h.name}>
-                {h.name}
-              </span>
-              <span className="text-xs text-slate-500 truncate max-w-xs hidden md:inline" title={h.detail}>
-                {h.detail}
-              </span>
-              <span
-                className={`text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded shrink-0 ${
-                  h.state === 'active' || h.state === 'running'
-                    ? 'bg-emerald-500/20 text-emerald-300'
-                    : h.state === 'failed' || h.state === 'dead'
-                      ? 'bg-red-500/20 text-red-300'
-                      : 'bg-slate-800 text-slate-400'
-                }`}
-              >
-                {h.state || '—'}
-              </span>
-            </button>
-          </li>
+              {h.state || '—'}
+            </td>
+          </tr>
         ))}
-      </ul>
-    </div>
-  );
-}
-
-function Big({
-  icon,
-  label,
-  value,
-  pct,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  value: string;
-  pct?: number;
-}) {
-  const tone =
-    pct === undefined ? 'bg-slate-700' : pct >= 90 ? 'bg-red-500' : pct >= 75 ? 'bg-amber-500' : 'bg-emerald-500';
-  return (
-    <div className="bg-slate-900 border border-slate-800 rounded-md p-4">
-      <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-slate-500">
-        <span className="text-slate-400">{icon}</span>
-        {label}
-      </div>
-      <div className="text-xl font-semibold mt-1 truncate" title={value}>
-        {value}
-      </div>
-      {pct !== undefined && (
-        <div className="mt-2 h-1 rounded-full bg-slate-800 overflow-hidden">
-          <div className={`h-full ${tone}`} style={{ width: `${Math.min(100, Math.max(0, pct))}%` }} />
-        </div>
-      )}
-    </div>
-  );
-}
-
-function SmallStat({
-  label,
-  value,
-  tone = 'neutral',
-}: {
-  label: string;
-  value: string;
-  tone?: 'neutral' | 'red';
-}) {
-  const valueColor = tone === 'red' ? 'text-red-300' : 'text-slate-100';
-  return (
-    <div className="bg-slate-900 border border-slate-800 rounded-md px-3 py-2">
-      <div className="text-[11px] uppercase tracking-wide text-slate-500">{label}</div>
-      <div className={`text-lg font-semibold ${valueColor}`}>{value}</div>
-    </div>
-  );
-}
-
-function HostRow({
-  snapshot,
-  health,
-}: {
-  snapshot: AgentSnapshot;
-  health?: HealthSnapshotRow;
-}) {
-  const stats = snapshot.stats;
-  const services = snapshot.services;
-  const docker = snapshot.docker;
-  const failed = services?.filter((s) => s.active_state === 'failed').length ?? 0;
-  const memPct =
-    stats && stats.mem_total_kb > 0
-      ? ((stats.mem_total_kb - stats.mem_available_kb) / stats.mem_total_kb) * 100
-      : 0;
-  const diskPct =
-    stats && stats.root_disk_total_kb > 0
-      ? (stats.root_disk_used_kb / stats.root_disk_total_kb) * 100
-      : 0;
-  const runningContainers = docker?.containers.filter((c) => c.state === 'running').length ?? 0;
-  const swarmRoleLabel = docker?.swarm_role && docker.swarm_role !== 'notinswarm'
-    ? docker.swarm_role
-    : null;
-
-  return (
-    <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
-      <div className="flex items-center gap-2 min-w-[10rem]">
-        <ServerIcon className="w-4 h-4 text-slate-500 shrink-0" />
-        <span className="font-medium text-slate-100 truncate">{snapshot.hostname}</span>
-        {swarmRoleLabel && (
-          <span className="text-[10px] uppercase tracking-wide text-blue-300 bg-blue-500/10 px-1.5 py-0.5 rounded">
-            {swarmRoleLabel}
-          </span>
-        )}
-      </div>
-
-      <Field
-        label="Load"
-        value={stats ? `${stats.load_1.toFixed(2)} (${stats.cpu_count}c)` : '—'}
-      />
-      <Field
-        label="Mem"
-        value={stats ? `${memPct.toFixed(0)}%` : '—'}
-        tone={memPct >= 90 ? 'red' : memPct >= 75 ? 'amber' : undefined}
-      />
-      <Field
-        label="Disk"
-        value={stats ? `${diskPct.toFixed(0)}%` : '—'}
-        tone={diskPct >= 90 ? 'red' : diskPct >= 75 ? 'amber' : undefined}
-      />
-      <Field
-        label="Uptime"
-        value={stats ? formatUptime(stats.uptime_secs) : '—'}
-      />
-      <Field label="Services" value={services ? `${services.length}` : '—'} />
-      {failed > 0 && (
-        <span className="inline-flex items-center gap-1 text-xs text-red-300 bg-red-500/10 border border-red-500/30 rounded-full px-2 py-0.5">
-          <AlertTriangleIcon className="w-3 h-3" />
-          {failed} failed
-        </span>
-      )}
-      {health && health.total > 0 && (
-        <span
-          className={`inline-flex items-center gap-1 text-xs rounded-full px-2 py-0.5 border ${
-            health.red > 0
-              ? 'text-red-300 bg-red-500/10 border-red-500/30'
-              : health.unknown > 0
-                ? 'text-slate-300 bg-slate-700/30 border-slate-600/40'
-                : 'text-emerald-300 bg-emerald-500/10 border-emerald-500/30'
-          }`}
-          title={`${health.green} green / ${health.red} red / ${health.unknown} pending`}
-        >
-          <ActivitySquareIcon className="w-3 h-3" />
-          {health.green}/{health.total}
-        </span>
-      )}
-      <Field
-        label="Containers"
-        value={
-          docker?.available
-            ? `${runningContainers} / ${docker.containers.length}`
-            : docker
-              ? '—'
-              : 'loading'
-        }
-      />
-    </div>
-  );
-}
-
-function Field({
-  label,
-  value,
-  tone,
-}: {
-  label: string;
-  value: string;
-  tone?: 'red' | 'amber';
-}) {
-  const valueColor =
-    tone === 'red'
-      ? 'text-red-300'
-      : tone === 'amber'
-        ? 'text-amber-300'
-        : 'text-slate-200';
-  return (
-    <div className="flex flex-col">
-      <span className="text-[10px] uppercase tracking-wide text-slate-500">{label}</span>
-      <span className={`text-sm font-medium ${valueColor}`}>{value}</span>
-    </div>
+      </tbody>
+    </table>
   );
 }

@@ -4,19 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { apiFetch } from '@/lib/api';
 import { useUi } from './providers/UiProvider';
 import type { BackupJob, BackupArchive, BackupRestoreResponse } from '@/lib/types';
-import {
-  ArchiveIcon,
-  PlusIcon,
-  Loader2Icon,
-  PlayIcon,
-  Trash2Icon,
-  CheckCircleIcon,
-  AlertCircleIcon,
-  CircleDashedIcon,
-  ClockIcon,
-  FolderDownIcon,
-  RotateCcwIcon,
-} from 'lucide-react';
+import { Loader2Icon } from 'lucide-react';
 
 const PRESETS: { label: string; expr: string }[] = [
   { label: 'Daily @ 02:00', expr: '0 0 2 * * * *' },
@@ -47,6 +35,7 @@ export default function Backups({ agentId }: { agentId: string }) {
   const [jobs, setJobs] = useState<BackupJob[]>([]);
   const [creating, setCreating] = useState(false);
   const [running, setRunning] = useState<number | null>(null);
+  const [archivesFor, setArchivesFor] = useState<BackupJob | null>(null);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -102,35 +91,10 @@ export default function Backups({ agentId }: { agentId: string }) {
     }
   };
 
+  const totalSize = jobs.reduce((s, j) => s + (j.last_bytes ?? 0), 0);
+
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <ArchiveIcon className="w-5 h-5 text-slate-400" />
-          <h2 className="text-base font-semibold">Backups</h2>
-          <span className="text-xs text-slate-500">· {jobs.length}</span>
-        </div>
-        <button
-          type="button"
-          onClick={() => setCreating(true)}
-          className="text-xs flex items-center gap-1.5 px-2.5 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-md"
-        >
-          <PlusIcon className="w-3.5 h-3.5" />
-          New backup job
-        </button>
-      </div>
-
-      <p className="text-xs text-slate-500">
-        Destinations: a local path on the agent host (e.g.{' '}
-        <code className="text-slate-400">/var/backups/sys-manager</code>) or
-        an <code className="text-slate-400">s3://bucket/prefix</code> URI.
-        S3 uploads use the agent host's <code>aws</code> CLI — install it
-        and configure credentials (env vars,{' '}
-        <code className="text-slate-400">~/.aws/credentials</code>, or{' '}
-        <code className="text-slate-400">AWS_ENDPOINT_URL</code> for
-        S3-compatible backends).
-      </p>
-
+    <div className="pane">
       {creating && (
         <BackupForm
           agentId={agentId}
@@ -142,122 +106,111 @@ export default function Backups({ agentId }: { agentId: string }) {
         />
       )}
 
-      {loading && jobs.length === 0 ? (
-        <div className="flex items-center justify-center py-8 text-slate-500">
-          <Loader2Icon className="w-4 h-4 animate-spin" />
+      <div className="panel">
+        <div className="panel-head">
+          <div className="panel-title">
+            <span className="ico">⊞</span> BACKUP JOBS
+            <span className="meta">
+              {jobs.length} jobs{totalSize > 0 ? ` · ${fmtBytes(totalSize)} last run` : ''}
+            </span>
+          </div>
+          <div className="panel-actions">
+            <button className="btn primary" onClick={() => setCreating(true)}>
+              + job
+            </button>
+          </div>
         </div>
-      ) : jobs.length === 0 ? (
-        <div className="border border-dashed border-slate-800 rounded-md px-4 py-8 text-center text-sm text-slate-500">
-          No backup jobs configured for this host yet.
+        <div className="panel-body flush">
+          {loading && jobs.length === 0 ? (
+            <div className="empty">
+              <Loader2Icon className="w-4 h-4 animate-spin" />
+            </div>
+          ) : jobs.length === 0 ? (
+            <div className="empty">No backup jobs configured for this host yet.</div>
+          ) : (
+            <table className="tbl">
+              <thead>
+                <tr>
+                  <th style={{ width: 110 }}>STATUS</th>
+                  <th>NAME</th>
+                  <th>PATHS</th>
+                  <th>DEST</th>
+                  <th>CRON</th>
+                  <th>LAST RUN</th>
+                  <th style={{ width: 200 }} />
+                </tr>
+              </thead>
+              <tbody>
+                {jobs.map((j) => {
+                  const cls =
+                    j.last_status === 'success'
+                      ? 'ok'
+                      : j.last_status === 'failed'
+                        ? 'err-c'
+                        : j.last_status === 'running'
+                          ? 'warn-c'
+                          : 'muted';
+                  return (
+                    <tr key={j.id}>
+                      <td>
+                        <span className={`status ${cls}`}>
+                          <span className="dot" />
+                          {j.last_status ?? '—'}
+                        </span>
+                      </td>
+                      <td className="mono" style={{ color: 'var(--fg)' }}>
+                        {j.name}
+                        {!j.enabled && (
+                          <span className="chip muted" style={{ marginLeft: 8 }}>
+                            disabled
+                          </span>
+                        )}
+                      </td>
+                      <td className="mono muted" title={j.paths.join(', ')}>
+                        {j.paths.join(', ')}
+                      </td>
+                      <td className="mono">{j.dest}</td>
+                      <td className="mono">{j.cron_expr || '—'}</td>
+                      <td className="mono muted">
+                        {fmtTs(j.last_run_at)}
+                        {j.last_bytes != null && j.last_bytes > 0 && ` · ${fmtBytes(j.last_bytes)}`}
+                      </td>
+                      <td className="actions">
+                        <button
+                          className="btn sm"
+                          onClick={() => runNow(j)}
+                          disabled={running === j.id}
+                        >
+                          {running === j.id ? '…' : '▶ run'}
+                        </button>
+                        <button
+                          className="btn sm"
+                          onClick={() => setArchivesFor(j)}
+                        >
+                          archives
+                        </button>
+                        <button
+                          className="btn sm icon danger"
+                          onClick={() => remove(j)}
+                          title="Delete job"
+                        >
+                          ×
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
         </div>
-      ) : (
-        <ul className="space-y-2">
-          {jobs.map((j) => (
-            <li
-              key={j.id}
-              className="rounded-md border border-slate-800 bg-slate-900/40 px-3 py-3"
-            >
-              <div className="flex items-start gap-3">
-                <StatusIcon status={j.last_status} />
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="font-medium text-slate-100 truncate">{j.name}</span>
-                    {!j.enabled && (
-                      <span className="text-[10px] uppercase tracking-wide px-1 py-0.5 rounded bg-slate-800 text-slate-500">
-                        disabled
-                      </span>
-                    )}
-                    {j.cron_expr && (
-                      <span className="inline-flex items-center gap-1 text-[10px] uppercase tracking-wide px-1 py-0.5 rounded bg-slate-800 text-slate-300">
-                        <ClockIcon className="w-2.5 h-2.5" />
-                        cron
-                      </span>
-                    )}
-                  </div>
-                  <div className="text-xs text-slate-500 mt-0.5 truncate" title={j.dest}>
-                    dest: <code className="text-slate-400">{j.dest}</code>
-                  </div>
-                  <div className="text-xs text-slate-500 mt-0.5 truncate">
-                    paths:{' '}
-                    {j.paths.map((p, i) => (
-                      <code key={i} className="text-slate-400 mr-1">
-                        {p}
-                      </code>
-                    ))}
-                  </div>
-                  {j.cron_expr && (
-                    <div className="text-[11px] text-slate-500 mt-0.5">
-                      cron <code className="text-slate-400">{j.cron_expr}</code>
-                      {j.next_run_at && (
-                        <> · next {fmtTs(j.next_run_at)}</>
-                      )}
-                    </div>
-                  )}
-                  <div className="text-[11px] text-slate-500 mt-1">
-                    last run {fmtTs(j.last_run_at)}
-                    {j.last_bytes != null && j.last_bytes > 0 && (
-                      <> · {fmtBytes(j.last_bytes)}</>
-                    )}
-                    {j.last_archive_path && (
-                      <> · <code className="text-slate-400">{j.last_archive_path}</code></>
-                    )}
-                  </div>
-                  {j.last_log && (
-                    <details className="mt-2 rounded border border-slate-800 bg-slate-950">
-                      <summary className="cursor-pointer px-2 py-1 text-xs text-slate-400 hover:text-slate-200">
-                        last tar log
-                      </summary>
-                      <pre className="text-[11px] px-2 py-2 text-slate-300 whitespace-pre-wrap max-h-64 overflow-auto border-t border-slate-800">
-                        {j.last_log}
-                      </pre>
-                    </details>
-                  )}
-                  <ArchivesPanel job={j} />
-                </div>
-                <div className="flex items-center gap-1 shrink-0">
-                  <button
-                    type="button"
-                    onClick={() => runNow(j)}
-                    disabled={running === j.id}
-                    title="Run now"
-                    className="text-xs flex items-center gap-1 px-2 py-1 rounded border border-slate-700 text-slate-300 hover:bg-slate-800 disabled:opacity-50"
-                  >
-                    {running === j.id ? (
-                      <Loader2Icon className="w-3.5 h-3.5 animate-spin" />
-                    ) : (
-                      <PlayIcon className="w-3.5 h-3.5" />
-                    )}
-                    Run
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => remove(j)}
-                    title="Delete job"
-                    className="p-1.5 rounded text-slate-400 hover:text-red-400 hover:bg-slate-800"
-                  >
-                    <Trash2Icon className="w-4 h-4" />
-                  </button>
-                </div>
-              </div>
-            </li>
-          ))}
-        </ul>
+      </div>
+
+      {archivesFor && (
+        <ArchivesModal job={archivesFor} onClose={() => setArchivesFor(null)} />
       )}
     </div>
   );
-}
-
-function StatusIcon({ status }: { status: string | null }) {
-  if (status === 'success') {
-    return <CheckCircleIcon className="w-4 h-4 mt-0.5 text-emerald-400 shrink-0" />;
-  }
-  if (status === 'failed') {
-    return <AlertCircleIcon className="w-4 h-4 mt-0.5 text-red-400 shrink-0" />;
-  }
-  if (status === 'running') {
-    return <Loader2Icon className="w-4 h-4 mt-0.5 animate-spin text-amber-400 shrink-0" />;
-  }
-  return <CircleDashedIcon className="w-4 h-4 mt-0.5 text-slate-500 shrink-0" />;
 }
 
 function BackupForm({
@@ -318,119 +271,126 @@ function BackupForm({
   };
 
   return (
-    <form
-      onSubmit={submit}
-      className="rounded-md border border-slate-800 bg-slate-900/40 p-3 space-y-3"
-    >
-      <div className="grid grid-cols-2 gap-3">
-        <label className="text-xs text-slate-400 flex flex-col gap-1">
-          Name
-          <input
-            type="text"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="etc-nginx"
-            className="bg-slate-950 border border-slate-700 rounded-md px-2 py-1.5 text-sm text-slate-100"
-            required
-          />
-        </label>
-        <label className="text-xs text-slate-400 flex flex-col gap-1">
-          Destination
-          <input
-            type="text"
-            value={dest}
-            onChange={(e) => setDest(e.target.value)}
-            placeholder="/var/backups/sys-manager  or  s3://bucket/prefix"
-            className="bg-slate-950 border border-slate-700 rounded-md px-2 py-1.5 font-mono text-sm text-slate-100"
-            required
-          />
-        </label>
+    <div className="panel">
+      <div className="panel-head">
+        <div className="panel-title">
+          <span className="ico">+</span> NEW BACKUP JOB
+        </div>
       </div>
-      <label className="text-xs text-slate-400 flex flex-col gap-1 max-w-xs">
-        Mode
-        <select
-          value={mode}
-          onChange={(e) => setMode(e.target.value as 'tar' | 'restic')}
-          className="bg-slate-950 border border-slate-700 rounded-md px-2 py-1.5 text-sm text-slate-100"
-        >
-          <option value="tar">tar (gzip)</option>
-          <option value="restic">restic — not yet implemented</option>
-        </select>
-      </label>
-      <label className="text-xs text-slate-400 flex flex-col gap-1">
-        Paths to back up (one per line)
-        <textarea
-          value={paths}
-          onChange={(e) => setPaths(e.target.value)}
-          rows={4}
-          className="bg-slate-950 border border-slate-700 rounded-md px-2 py-1.5 font-mono text-sm text-slate-100"
-          required
-        />
-      </label>
-      <div>
-        <label className="text-xs text-slate-400 flex flex-col gap-1">
-          Cron expression (UTC, optional — leave blank for run-now-only)
+      <form
+        onSubmit={submit}
+        className="panel-body"
+        style={{ display: 'flex', flexDirection: 'column', gap: 12 }}
+      >
+        <div className="grid-2">
+          <div className="field">
+            <label>name</label>
+            <input
+              className="input"
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="etc-nginx"
+              required
+            />
+          </div>
+          <div className="field">
+            <label>destination</label>
+            <input
+              className="input"
+              type="text"
+              value={dest}
+              onChange={(e) => setDest(e.target.value)}
+              placeholder="/var/backups/sys-manager  or  s3://bucket/prefix"
+              required
+            />
+          </div>
+        </div>
+
+        <div className="grid-2">
+          <div className="field">
+            <label>mode</label>
+            <select
+              className="select"
+              value={mode}
+              onChange={(e) => setMode(e.target.value as 'tar' | 'restic')}
+            >
+              <option value="tar">tar (gzip)</option>
+              <option value="restic">restic — not yet implemented</option>
+            </select>
+          </div>
+          <div className="field">
+            <label>options</label>
+            <label
+              className="row"
+              style={{ gap: 6, fontSize: 12, height: 28, alignItems: 'center' }}
+            >
+              <input
+                type="checkbox"
+                checked={enabled}
+                onChange={(e) => setEnabled(e.target.checked)}
+              />
+              enabled
+            </label>
+          </div>
+        </div>
+
+        <div className="field">
+          <label>paths to back up (one per line)</label>
+          <textarea
+            className="textarea"
+            value={paths}
+            onChange={(e) => setPaths(e.target.value)}
+            rows={4}
+            required
+          />
+        </div>
+
+        <div className="field">
+          <label>cron expression (UTC, optional)</label>
           <input
+            className="input"
             type="text"
             value={cronExpr}
             onChange={(e) => setCronExpr(e.target.value)}
             placeholder="0 0 3 * * Sun *"
             spellCheck={false}
-            className="bg-slate-950 border border-slate-700 rounded-md px-2 py-1.5 font-mono text-sm text-slate-100"
           />
-        </label>
-        <div className="mt-1 flex flex-wrap gap-1">
-          {PRESETS.map((p) => (
-            <button
-              key={p.expr}
-              type="button"
-              onClick={() => setCronExpr(p.expr)}
-              className="text-[11px] px-1.5 py-0.5 rounded border border-slate-700 text-slate-400 hover:bg-slate-800"
-            >
-              {p.label}
-            </button>
-          ))}
+          <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
+            {PRESETS.map((p) => (
+              <button
+                key={p.expr}
+                type="button"
+                className="btn sm"
+                onClick={() => setCronExpr(p.expr)}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
         </div>
-      </div>
-      <label className="flex items-center gap-2 text-xs text-slate-300">
-        <input
-          type="checkbox"
-          checked={enabled}
-          onChange={(e) => setEnabled(e.target.checked)}
-          className="accent-blue-600"
-        />
-        Enabled
-      </label>
-      <div className="flex justify-end gap-2">
-        <button
-          type="button"
-          onClick={onClose}
-          className="text-xs px-2.5 py-1.5 border border-slate-700 rounded-md text-slate-300 hover:bg-slate-800"
-        >
-          Cancel
-        </button>
-        <button
-          type="submit"
-          disabled={submitting}
-          className="text-xs flex items-center gap-1.5 px-2.5 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-700 text-white rounded-md"
-        >
-          {submitting && <Loader2Icon className="w-3.5 h-3.5 animate-spin" />}
-          Create
-        </button>
-      </div>
-    </form>
+
+        <div className="row between">
+          <button type="button" className="btn" onClick={onClose}>
+            cancel
+          </button>
+          <button type="submit" className="btn primary" disabled={submitting}>
+            {submitting ? '…' : '+ create'}
+          </button>
+        </div>
+      </form>
+    </div>
   );
 }
 
-function ArchivesPanel({ job }: { job: BackupJob }) {
+function ArchivesModal({ job, onClose }: { job: BackupJob; onClose: () => void }) {
   const ui = useUi();
-  const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [archives, setArchives] = useState<BackupArchive[] | null>(null);
   const [restoreFor, setRestoreFor] = useState<BackupArchive | null>(null);
 
-  const load = async () => {
+  const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
@@ -447,95 +407,79 @@ function ArchivesPanel({ job }: { job: BackupJob }) {
     } finally {
       setLoading(false);
     }
-  };
+  }, [job.id, ui]);
 
-  const toggle = async () => {
-    const next = !open;
-    setOpen(next);
-    if (next && archives === null) {
-      await load();
-    }
-  };
+  useEffect(() => {
+    void load();
+  }, [load]);
 
   return (
-    <details
-      open={open}
-      onToggle={(e) => {
-        const wasOpen = open;
-        const nowOpen = (e.currentTarget as HTMLDetailsElement).open;
-        if (nowOpen !== wasOpen) {
-          if (nowOpen && archives === null) void load();
-          setOpen(nowOpen);
-        }
-      }}
-      className="mt-2 rounded border border-slate-800 bg-slate-950"
-    >
-      <summary
-        className="cursor-pointer px-2 py-1 text-xs text-slate-400 hover:text-slate-200 flex items-center gap-2"
-        onClick={(e) => {
-          // We let the <details> toggle naturally; only log the request.
-          if (!archives && !loading) {
-            // First open will trigger load via onToggle.
-          }
-          // also call our state toggle for consistency
-        }}
+    <div className="modal-overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
+      <div
+        className="modal"
+        style={{ width: 'min(720px, 95vw)', maxHeight: '85vh', display: 'flex', flexDirection: 'column' }}
       >
-        <FolderDownIcon className="w-3.5 h-3.5" />
-        Archives
-        {archives && <span className="text-slate-500">· {archives.length}</span>}
-        {loading && <Loader2Icon className="w-3 h-3 animate-spin" />}
-      </summary>
-      <div className="border-t border-slate-800 p-2 space-y-1">
-        {error ? (
-          <div className="text-xs text-red-300">{error}</div>
-        ) : !archives ? (
-          <div className="text-xs text-slate-500">Loading…</div>
-        ) : archives.length === 0 ? (
-          <div className="text-xs text-slate-500 italic">No archives at this destination yet.</div>
-        ) : (
-          <ul className="space-y-1">
-            {archives.map((a) => (
-              <li
-                key={a.uri}
-                className="flex items-center justify-between gap-2 text-[11px] bg-slate-900 rounded px-2 py-1"
-              >
-                <div className="min-w-0 flex-1">
-                  <div className="text-slate-200 truncate" title={a.name}>{a.name}</div>
-                  <div className="text-slate-500 truncate" title={a.uri}>
-                    {fmtBytes(a.bytes)} · {fmtTs(a.mtime)}
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setRestoreFor(a)}
-                  className="text-xs flex items-center gap-1 px-2 py-1 rounded border border-slate-700 text-slate-300 hover:bg-slate-800"
-                >
-                  <RotateCcwIcon className="w-3 h-3" />
-                  Restore
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-        <div className="flex justify-end pt-1">
-          <button
-            type="button"
-            onClick={() => void load()}
-            disabled={loading}
-            className="text-[11px] px-2 py-0.5 text-slate-400 hover:text-slate-100 disabled:opacity-50"
-          >
-            ↻ refresh
-          </button>
+        <div className="panel-head">
+          <div className="panel-title">
+            <span className="ico">⌹</span> ARCHIVES
+            <span className="meta">{job.name}</span>
+          </div>
+          <div className="panel-actions">
+            <button className="btn sm" onClick={load} disabled={loading}>
+              ↻
+            </button>
+            <button className="icon-btn" onClick={onClose}>
+              ×
+            </button>
+          </div>
         </div>
+        <div style={{ flex: 1, overflow: 'auto' }}>
+          {loading ? (
+            <div className="empty">
+              <Loader2Icon className="w-5 h-5 animate-spin" />
+            </div>
+          ) : error ? (
+            <div className="empty err-c">{error}</div>
+          ) : !archives || archives.length === 0 ? (
+            <div className="empty">No archives at this destination yet.</div>
+          ) : (
+            <table className="tbl">
+              <thead>
+                <tr>
+                  <th>NAME</th>
+                  <th className="right">SIZE</th>
+                  <th>CREATED</th>
+                  <th style={{ width: 120 }} />
+                </tr>
+              </thead>
+              <tbody>
+                {archives.map((a) => (
+                  <tr key={a.uri}>
+                    <td className="mono" style={{ color: 'var(--fg)' }}>
+                      {a.name}
+                    </td>
+                    <td className="right mono">{fmtBytes(a.bytes)}</td>
+                    <td className="mono muted">{fmtTs(a.mtime)}</td>
+                    <td className="actions">
+                      <button className="btn sm" onClick={() => setRestoreFor(a)}>
+                        restore
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+        {restoreFor && (
+          <RestoreModal
+            job={job}
+            archive={restoreFor}
+            onClose={() => setRestoreFor(null)}
+          />
+        )}
       </div>
-      {restoreFor && (
-        <RestoreModal
-          job={job}
-          archive={restoreFor}
-          onClose={() => setRestoreFor(null)}
-        />
-      )}
-    </details>
+    </div>
   );
 }
 
@@ -582,61 +526,67 @@ function RestoreModal({
   };
 
   return (
-    <div
-      className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-sm flex items-center justify-center p-4"
-      onClick={onClose}
-    >
-      <div
-        className="bg-slate-900 border border-slate-800 rounded-lg shadow-2xl max-w-lg w-full"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="p-4 space-y-3">
-          <div>
-            <h3 className="text-base font-semibold text-slate-100">Restore archive</h3>
-            <p className="text-xs text-slate-400 mt-1 font-mono break-all">{archive.uri}</p>
+    <div className="modal-overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="modal">
+        <div className="panel-head">
+          <div className="panel-title">
+            <span className="ico">↺</span> RESTORE ARCHIVE
           </div>
-          <label className="text-xs text-slate-400 flex flex-col gap-1">
-            Destination root on agent (the agent <code>tar -xzf</code>s into this dir; nothing is overwritten in place by default)
+          <button className="icon-btn" onClick={onClose}>
+            ×
+          </button>
+        </div>
+        <div
+          className="panel-body"
+          style={{ display: 'flex', flexDirection: 'column', gap: 12 }}
+        >
+          <div className="muted mono" style={{ fontSize: 11, wordBreak: 'break-all' }}>
+            {archive.uri}
+          </div>
+          <div className="field">
+            <label>destination root on agent</label>
             <input
+              className="input"
               type="text"
               value={destRoot}
               onChange={(e) => setDestRoot(e.target.value)}
-              className="bg-slate-950 border border-slate-700 rounded-md px-2 py-1.5 font-mono text-sm text-slate-100"
             />
-          </label>
+            <div className="muted" style={{ fontSize: 10.5 }}>
+              the agent <code>tar -xzf</code>s into this dir; nothing is overwritten in place by default
+            </div>
+          </div>
           {result && (
             <div
-              className={`text-xs rounded-md border px-3 py-2 ${
-                result.success
-                  ? 'border-emerald-500/30 bg-emerald-500/5 text-emerald-200'
-                  : 'border-red-500/30 bg-red-500/5 text-red-200'
-              }`}
+              style={{
+                padding: 8,
+                background: result.success ? 'var(--accent-bg)' : 'var(--err-bg)',
+                border: `1px solid ${result.success ? 'var(--accent-bd)' : 'var(--err-bd)'}`,
+                borderRadius: 'var(--r)',
+                color: result.success ? 'var(--accent)' : 'var(--err)',
+                fontFamily: 'var(--mono)',
+                fontSize: 11.5,
+              }}
             >
               {result.success ? 'Restore succeeded.' : `Restore failed: ${result.error ?? 'unknown'}`}
               {result.log && (
-                <pre className="mt-2 whitespace-pre-wrap break-words max-h-48 overflow-auto text-slate-300 bg-slate-950/50 px-2 py-1 rounded">
+                <pre className="code" style={{ marginTop: 6, fontSize: 10.5 }}>
                   {result.log}
                 </pre>
               )}
             </div>
           )}
         </div>
-        <div className="flex justify-end gap-2 px-4 py-3 border-t border-slate-800 bg-slate-900/50">
-          <button
-            type="button"
-            onClick={onClose}
-            className="px-3 py-1.5 rounded-md text-sm border border-slate-700 text-slate-300 hover:bg-slate-800"
-          >
-            Close
+        <div className="modal-foot">
+          <button type="button" className="btn" onClick={onClose}>
+            close
           </button>
           <button
             type="button"
+            className="btn primary"
             onClick={submit}
             disabled={submitting}
-            className="px-3 py-1.5 rounded-md text-sm font-medium bg-blue-600 hover:bg-blue-500 disabled:bg-slate-700 text-white"
           >
-            {submitting && <Loader2Icon className="w-3.5 h-3.5 animate-spin inline mr-1" />}
-            Restore
+            {submitting ? '…' : '↺ restore'}
           </button>
         </div>
       </div>

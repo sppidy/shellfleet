@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useWebSocket } from './providers/WebSocketProvider';
-import { XIcon, Loader2Icon, AlertCircleIcon, PauseIcon, PlayIcon } from 'lucide-react';
+import { Loader2Icon } from 'lucide-react';
 
 const MAX_LINES = 5_000;
 
@@ -27,17 +27,17 @@ export default function LogViewer({
   useEffect(() => {
     const unsub = onAgentMessage(agentId, (msg) => {
       if (msg.type === 'DockerLogsChunk' && msg.payload.container_id === containerId) {
-        setLines((prev) => {
-          const next = prev.length >= MAX_LINES
+        setLines((prev) =>
+          prev.length >= MAX_LINES
             ? [...prev.slice(prev.length - MAX_LINES + 1), msg.payload.data]
-            : [...prev, msg.payload.data];
-          return next;
-        });
-      } else if (msg.type === 'DockerLogsEnd' && msg.payload.container_id === containerId) {
+            : [...prev, msg.payload.data],
+        );
+      } else if (
+        msg.type === 'DockerLogsEnd' &&
+        msg.payload.container_id === containerId
+      ) {
         setStreaming(false);
-        if (msg.payload.error) {
-          setEndError(msg.payload.error);
-        }
+        if (msg.payload.error) setEndError(msg.payload.error);
       }
     });
 
@@ -61,72 +61,72 @@ export default function LogViewer({
   }, [lines, autoscroll]);
 
   return (
-    <div
-      className="fixed inset-0 z-40 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-6"
-      onClick={onClose}
-    >
+    <div className="modal-overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
       <div
-        className="bg-slate-900 border border-slate-800 rounded-lg shadow-2xl w-full max-w-5xl h-[80vh] flex flex-col overflow-hidden"
-        onClick={(e) => e.stopPropagation()}
+        className="modal"
+        style={{
+          width: 'min(1100px, 95vw)',
+          height: '85vh',
+          display: 'flex',
+          flexDirection: 'column',
+        }}
       >
-        <div className="flex items-center justify-between px-4 py-3 border-b border-slate-800 bg-slate-900">
-          <div className="min-w-0">
-            <div className="text-sm font-semibold text-slate-100 truncate" title={containerName}>
-              {containerName}
-            </div>
-            <div className="text-[11px] text-slate-500 flex items-center gap-3 mt-0.5">
-              <code>{containerId.slice(0, 12)}</code>
+        <div className="panel-head">
+          <div className="panel-title">
+            <span className="ico">≡</span> docker logs -f
+            <span className="meta">
+              {containerName} · {containerId.slice(0, 12)} ·{' '}
               {streaming ? (
-                <span className="inline-flex items-center gap-1 text-emerald-300">
-                  <Loader2Icon className="w-3 h-3 animate-spin" /> streaming
-                </span>
+                <span className="ok">streaming</span>
               ) : endError ? (
-                <span className="inline-flex items-center gap-1 text-red-300">
-                  <AlertCircleIcon className="w-3 h-3" /> {endError}
-                </span>
+                <span className="err-c">{endError}</span>
               ) : (
-                <span className="text-slate-500">stream ended</span>
+                'stream ended'
               )}
-              <span>
-                {lines.length} line{lines.length === 1 ? '' : 's'}
-                {lines.length >= MAX_LINES && ' (capped)'}
-              </span>
-            </div>
+              {' · '}
+              {lines.length} line{lines.length === 1 ? '' : 's'}
+              {lines.length >= MAX_LINES && ' (capped)'}
+            </span>
           </div>
-          <div className="flex items-center gap-1">
+          <div className="panel-actions">
             <button
-              type="button"
+              className="btn sm"
               onClick={() => setAutoscroll((v) => !v)}
               title={autoscroll ? 'Pause autoscroll' : 'Resume autoscroll'}
-              className="p-1.5 rounded-md text-slate-400 hover:text-slate-100 hover:bg-slate-800 transition-colors"
             >
-              {autoscroll ? <PauseIcon className="w-4 h-4" /> : <PlayIcon className="w-4 h-4" />}
+              {autoscroll ? '❚❚' : '▶'}
             </button>
-            <button
-              type="button"
-              onClick={onClose}
-              className="p-1.5 rounded-md text-slate-400 hover:text-slate-100 hover:bg-slate-800 transition-colors"
-              title="Close"
-            >
-              <XIcon className="w-4 h-4" />
+            <button className="icon-btn" onClick={onClose} title="Close">
+              ×
             </button>
           </div>
         </div>
         <div
           ref={scrollRef}
-          className="flex-1 overflow-y-auto bg-slate-950 px-3 py-2 font-mono text-[12px] leading-relaxed text-slate-300"
+          style={{
+            flex: 1,
+            overflow: 'auto',
+            background: '#06090b',
+            padding: '8px 14px',
+            fontFamily: 'var(--mono)',
+            fontSize: 12,
+            lineHeight: 1.55,
+            color: '#c8d3dc',
+          }}
           onWheel={(e) => {
-            // Pause autoscroll if the user scrolls up.
             const el = e.currentTarget;
             const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 4;
             setAutoscroll(atBottom);
           }}
         >
           {lines.length === 0 ? (
-            <div className="text-slate-600 italic">Waiting for output…</div>
+            <div style={{ color: 'var(--fg-3)', fontStyle: 'italic' }}>
+              Waiting for output…
+              <Loader2Icon className="w-3 h-3 inline ml-2 animate-spin" />
+            </div>
           ) : (
             lines.map((l, i) => (
-              <div key={i} className="whitespace-pre-wrap break-all">
+              <div key={i} style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
                 {l}
               </div>
             ))

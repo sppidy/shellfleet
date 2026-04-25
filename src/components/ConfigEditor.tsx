@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useWebSocket } from './providers/WebSocketProvider';
 import Editor from '@monaco-editor/react';
-import { SaveIcon, FileTextIcon, AlertCircleIcon, CheckCircleIcon, Loader2Icon } from 'lucide-react';
+import { Loader2Icon } from 'lucide-react';
 
 export default function ConfigEditor({ agentId }: { agentId: string }) {
   const { sendToAgent, onAgentMessage } = useWebSocket();
@@ -87,83 +87,127 @@ export default function ConfigEditor({ agentId }: { agentId: string }) {
   };
 
   return (
-    <div className="flex flex-col h-full bg-slate-950">
-      <div className="p-4 border-b border-slate-800 bg-slate-900 flex items-center justify-between">
-        <form onSubmit={handleReadFile} className="flex flex-1 items-center max-w-2xl">
-          <FileTextIcon className="w-5 h-5 text-slate-500 mr-2" />
-          <input
-            type="text"
-            value={filePath}
-            onChange={(e) => setFilePath(e.target.value)}
-            placeholder="Enter absolute file path (e.g. /etc/nginx/nginx.conf)"
-            spellCheck={false}
-            className="flex-1 bg-slate-950 border border-slate-700 rounded-md px-3 py-1.5 text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
-          />
-          <button
-            type="submit"
-            disabled={pending !== null || !filePath.trim()}
-            className="ml-3 px-4 py-1.5 bg-slate-700 text-white text-sm font-medium rounded-md hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors inline-flex items-center gap-2"
-          >
-            {pending === 'read' && <Loader2Icon className="w-3.5 h-3.5 animate-spin" />}
-            Read
-          </button>
-        </form>
-
-        <button
-          onClick={handleSaveFile}
-          disabled={pending !== null || !fileContent}
-          className="ml-4 flex items-center px-4 py-1.5 bg-blue-600 text-white text-sm font-medium rounded-md hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-sm"
-        >
-          {pending === 'save' ? (
-            <Loader2Icon className="w-4 h-4 mr-2 animate-spin" />
-          ) : (
-            <SaveIcon className="w-4 h-4 mr-2" />
-          )}
-          Save
-        </button>
-      </div>
-
-      {(error || successMsg) && (
-        <div
-          className={`px-4 py-2 text-sm flex items-center border-b ${
-            error
-              ? 'bg-red-500/10 text-red-300 border-red-500/30'
-              : 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30'
-          }`}
-        >
-          {error ? (
-            <AlertCircleIcon className="w-4 h-4 mr-2" />
-          ) : (
-            <CheckCircleIcon className="w-4 h-4 mr-2" />
-          )}
-          {error || successMsg}
+    <div className="pane" style={{ flex: 1, height: '100%' }}>
+      <div
+        className="panel"
+        style={{ flex: 1, display: 'flex', flexDirection: 'column' }}
+      >
+        <div className="panel-head">
+          <div className="panel-title">
+            <span className="ico">▤</span> CONFIG EDITOR
+            {filePath && <span className="meta">{filePath}</span>}
+          </div>
+          <div className="panel-actions">
+            <form
+              onSubmit={handleReadFile}
+              style={{ display: 'flex', alignItems: 'center', gap: 6 }}
+            >
+              <input
+                className="input"
+                type="text"
+                value={filePath}
+                onChange={(e) => setFilePath(e.target.value)}
+                placeholder="/etc/nginx/nginx.conf"
+                spellCheck={false}
+                style={{ width: 320, height: 26 }}
+              />
+              <button
+                type="submit"
+                className="btn"
+                disabled={pending !== null || !filePath.trim()}
+              >
+                {pending === 'read' ? '…' : '↺ read'}
+              </button>
+            </form>
+            <button
+              className="btn primary"
+              onClick={handleSaveFile}
+              disabled={pending !== null || !fileContent}
+            >
+              {pending === 'save' ? '…' : '▼ write'}
+            </button>
+          </div>
         </div>
-      )}
 
-      <div className="flex-1 border-b border-slate-800 relative">
-        <Editor
-          height="100%"
-          language={getLanguage(filePath)}
-          theme="vs-dark"
-          value={fileContent}
-          onChange={(value) => setFileContent(value || '')}
-          options={{
-            minimap: { enabled: false },
-            fontSize: 14,
-            wordWrap: 'on',
-            scrollBeyondLastLine: false,
-            smoothScrolling: true,
-            padding: { top: 16, bottom: 16 },
-          }}
-        />
-        {!fileContent && !filePath && (
-          <div className="absolute inset-0 flex items-center justify-center pointer-events-none bg-slate-950/80 z-10">
-            <div className="text-slate-500 flex flex-col items-center">
-              <FileTextIcon className="w-12 h-12 mb-2 opacity-50" />
-              <p>Enter a file path above to view or edit</p>
-            </div>
+        {(error || successMsg) && (
+          <div
+            style={{
+              padding: '6px 12px',
+              fontSize: 11.5,
+              fontFamily: 'var(--mono)',
+              borderBottom: '1px solid var(--line)',
+              background: error ? 'var(--err-bg)' : 'var(--accent-bg)',
+              color: error ? 'var(--err)' : 'var(--accent)',
+            }}
+          >
+            {error ? `× ${error}` : `✓ ${successMsg}`}
           </div>
         )}
+
+        <div
+          className="panel-body"
+          style={{ flex: 1, padding: 0, position: 'relative', minHeight: 0 }}
+        >
+          <Editor
+            height="100%"
+            language={getLanguage(filePath)}
+            theme="vs-dark"
+            value={fileContent}
+            onChange={(value) => setFileContent(value || '')}
+            options={{
+              minimap: { enabled: false },
+              fontSize: 13,
+              wordWrap: 'on',
+              scrollBeyondLastLine: false,
+              smoothScrolling: true,
+              padding: { top: 12, bottom: 12 },
+              fontFamily: "JetBrains Mono, ui-monospace, 'SF Mono', Menlo, monospace",
+            }}
+          />
+          {!fileContent && !filePath && (
+            <div
+              style={{
+                position: 'absolute',
+                inset: 0,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                pointerEvents: 'none',
+                background: 'rgba(0,0,0,0.5)',
+              }}
+            >
+              <div
+                className="empty"
+                style={{
+                  background: 'var(--bg-1)',
+                  border: '1px solid var(--line)',
+                  borderRadius: 'var(--r-lg)',
+                  padding: 32,
+                }}
+              >
+                <pre style={{ margin: 0, color: 'var(--fg-3)' }}>
+                  {`┌──────────────────────────┐
+│  enter a file path above │
+│  to view or edit         │
+└──────────────────────────┘`}
+                </pre>
+              </div>
+            </div>
+          )}
+          {pending === 'read' && !fileContent && (
+            <div
+              style={{
+                position: 'absolute',
+                inset: 0,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            >
+              <Loader2Icon className="w-5 h-5 animate-spin" />
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

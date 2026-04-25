@@ -3,15 +3,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useWebSocket } from './providers/WebSocketProvider';
 import { ContainerSpec, ServiceSpec, SwarmRole } from '@/lib/types';
-import {
-  AlertCircleIcon,
-  BoxIcon,
-  CheckCircleIcon,
-  Loader2Icon,
-  NetworkIcon,
-  RocketIcon,
-  Layers3Icon,
-} from 'lucide-react';
 
 type Mode = 'container' | 'service' | 'stack';
 type Outcome =
@@ -24,12 +15,6 @@ const linesFrom = (s: string) =>
     .split('\n')
     .map((l) => l.trim())
     .filter(Boolean);
-
-const inputClass =
-  'w-full bg-slate-950 border border-slate-700 rounded-md px-3 py-1.5 text-sm text-slate-100 placeholder:text-slate-600 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500';
-
-const textareaClass =
-  'w-full bg-slate-950 border border-slate-700 rounded-md px-3 py-1.5 text-sm font-mono text-slate-100 placeholder:text-slate-600 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500';
 
 export default function Deploy({ agentId }: { agentId: string }) {
   const { sendToAgent, onAgentMessage } = useWebSocket();
@@ -46,7 +31,9 @@ export default function Deploy({ agentId }: { agentId: string }) {
   // Container-only
   const [volumes, setVolumes] = useState('');
   const [network, setNetwork] = useState('');
-  const [restartPolicy, setRestartPolicy] = useState<'no' | 'always' | 'unless-stopped' | 'on-failure'>('unless-stopped');
+  const [restartPolicy, setRestartPolicy] = useState<
+    'no' | 'always' | 'unless-stopped' | 'on-failure'
+  >('unless-stopped');
   const [pull, setPull] = useState(false);
 
   // Service-only
@@ -156,7 +143,8 @@ export default function Deploy({ agentId }: { agentId: string }) {
       const spec: ServiceSpec = {
         image: image.trim(),
         name: name.trim(),
-        replicas: serviceMode === 'replicated' ? Math.max(0, Number.parseInt(replicas, 10) || 1) : null,
+        replicas:
+          serviceMode === 'replicated' ? Math.max(0, Number.parseInt(replicas, 10) || 1) : null,
         mode: serviceMode,
         ports: linesFrom(ports),
         env: linesFrom(env),
@@ -171,355 +159,329 @@ export default function Deploy({ agentId }: { agentId: string }) {
   };
 
   return (
-    <div className="max-w-3xl mx-auto w-full">
-      <div className="flex items-center gap-2 mb-1">
-        <RocketIcon className="w-5 h-5 text-slate-400" />
-        <h2 className="text-base font-semibold">Deploy a service</h2>
-      </div>
-      <p className="text-sm text-slate-500 mb-4">
-        Create a container, a swarm service, or a full compose stack. The
-        agent shells out to the docker CLI and echoes the full output back.
-      </p>
-
-      <div className="inline-flex bg-slate-900 border border-slate-800 rounded-md p-0.5 text-xs mb-4">
-        <ModeButton
-          active={mode === 'container'}
-          onClick={() => setMode('container')}
-          icon={<BoxIcon className="w-3.5 h-3.5" />}
-          label="Container"
-        />
-        <ModeButton
-          active={mode === 'service'}
-          disabled={!canSubmitService}
-          onClick={() => setMode('service')}
-          icon={<NetworkIcon className="w-3.5 h-3.5" />}
-          label={canSubmitService ? 'Swarm service' : 'Swarm service (manager only)'}
-        />
-        <ModeButton
-          active={mode === 'stack'}
-          disabled={!canSubmitService}
-          onClick={() => setMode('stack')}
-          icon={<Layers3Icon className="w-3.5 h-3.5" />}
-          label={canSubmitService ? 'Stack (compose)' : 'Stack (manager only)'}
-        />
-      </div>
-
-      <form onSubmit={handleSubmit} className="space-y-4">
-        {mode === 'stack' ? (
-          <>
-            <Field label="Stack name" required>
-              <input
-                type="text"
-                required
-                value={stackName}
-                onChange={(e) => setStackName(e.target.value)}
-                placeholder="my-app"
-                spellCheck={false}
-                className={inputClass}
-              />
-            </Field>
-            <Field label="Compose YAML" hint="Sent on stdin to docker stack deploy">
-              <textarea
-                rows={16}
-                value={composeYaml}
-                onChange={(e) => setComposeYaml(e.target.value)}
-                spellCheck={false}
-                className={`${textareaClass} h-96`}
-              />
-            </Field>
-            <label className="flex items-center gap-2 text-sm text-slate-300">
-              <input
-                type="checkbox"
-                checked={stackPrune}
-                onChange={(e) => setStackPrune(e.target.checked)}
-                className="accent-blue-500"
-              />
-              <code className="text-xs">--prune</code>
-              <span className="text-xs text-slate-500">
-                Remove services no longer referenced in the compose file
-              </span>
-            </label>
-            <div className="flex items-center gap-3">
+    <div className="pane">
+      <div className="panel">
+        <div className="panel-head">
+          <div className="panel-title">
+            <span className="ico">▷</span> DEPLOY
+          </div>
+          <div className="panel-actions">
+            <div className="seg">
               <button
-                type="submit"
-                disabled={
-                  submitting || !canSubmitService || !stackName.trim() || !composeYaml.trim()
-                }
-                className="inline-flex items-center gap-2 px-4 py-2 rounded-md bg-blue-600 hover:bg-blue-500 disabled:bg-slate-700 disabled:cursor-not-allowed text-white text-sm font-medium transition-colors"
+                className={mode === 'container' ? 'on' : ''}
+                onClick={() => setMode('container')}
               >
-                {submitting ? (
-                  <Loader2Icon className="w-4 h-4 animate-spin" />
-                ) : (
-                  <Layers3Icon className="w-4 h-4" />
-                )}
-                {submitting ? 'Deploying stack…' : 'Deploy stack'}
+                container
               </button>
-              {!canSubmitService && (
-                <span className="text-xs text-amber-300">
-                  Switch to a swarm manager (this host is {swarmRole ?? 'unknown'}).
-                </span>
-              )}
-            </div>
-          </>
-        ) : (
-          <>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              <Field label="Image" required>
-                <input
-                  type="text"
-                  required
-                  value={image}
-                  onChange={(e) => setImage(e.target.value)}
-                  placeholder="nginx:1.27-alpine"
-                  spellCheck={false}
-                  className={inputClass}
-                />
-              </Field>
-              <Field
-                label={mode === 'service' ? 'Service name' : 'Container name (optional)'}
-                required={mode === 'service'}
+              <button
+                className={mode === 'service' ? 'on' : ''}
+                disabled={!canSubmitService}
+                onClick={() => setMode('service')}
               >
-                <input
-                  type="text"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  required={mode === 'service'}
-                  placeholder={mode === 'service' ? 'my-app' : '(auto-generated)'}
-                  spellCheck={false}
-                  className={inputClass}
-                />
-              </Field>
+                swarm service
+              </button>
+              <button
+                className={mode === 'stack' ? 'on' : ''}
+                disabled={!canSubmitService}
+                onClick={() => setMode('stack')}
+              >
+                stack
+              </button>
             </div>
-
-            <Field label="Ports" hint="One per line. host:container[/proto]">
-              <textarea
-                rows={2}
-                value={ports}
-                onChange={(e) => setPorts(e.target.value)}
-                placeholder={'80:80\n8080:8080/tcp'}
-                className={textareaClass}
-              />
-            </Field>
-
-            <Field label="Environment" hint="One KEY=value per line">
-              <textarea
-                rows={2}
-                value={env}
-                onChange={(e) => setEnv(e.target.value)}
-                placeholder={'TZ=UTC\nLOG_LEVEL=info'}
-                className={textareaClass}
-              />
-            </Field>
-
-            {mode === 'container' ? (
-              <>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  <Field label="Volumes" hint="One per line. host:container[:ro]">
-                    <textarea
-                      rows={2}
-                      value={volumes}
-                      onChange={(e) => setVolumes(e.target.value)}
-                      placeholder="/var/log:/logs:ro"
-                      className={textareaClass}
-                    />
-                  </Field>
-                  <Field label="Network">
-                    <input
-                      type="text"
-                      value={network}
-                      onChange={(e) => setNetwork(e.target.value)}
-                      placeholder="bridge"
-                      className={inputClass}
-                    />
-                  </Field>
+          </div>
+        </div>
+        <form
+          onSubmit={handleSubmit}
+          className="panel-body"
+          style={{ display: 'flex', flexDirection: 'column', gap: 12 }}
+        >
+          {mode === 'stack' ? (
+            <>
+              <div className="grid-2">
+                <div className="field">
+                  <label>stack name</label>
+                  <input
+                    className="input"
+                    type="text"
+                    required
+                    value={stackName}
+                    onChange={(e) => setStackName(e.target.value)}
+                    placeholder="my-app"
+                    spellCheck={false}
+                  />
                 </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  <Field label="Restart policy">
-                    <select
-                      value={restartPolicy}
-                      onChange={(e) => setRestartPolicy(e.target.value as typeof restartPolicy)}
-                      className={inputClass}
-                    >
-                      <option value="no">no</option>
-                      <option value="always">always</option>
-                      <option value="unless-stopped">unless-stopped</option>
-                      <option value="on-failure">on-failure</option>
-                    </select>
-                  </Field>
-                  <label className="flex items-center gap-2 self-end pb-1.5 text-sm text-slate-300">
+                <div className="field">
+                  <label>options</label>
+                  <label
+                    className="row"
+                    style={{ gap: 6, fontSize: 12, height: 28, alignItems: 'center' }}
+                  >
                     <input
                       type="checkbox"
-                      checked={pull}
-                      onChange={(e) => setPull(e.target.checked)}
-                      className="accent-blue-500"
+                      checked={stackPrune}
+                      onChange={(e) => setStackPrune(e.target.checked)}
                     />
-                    <code className="text-xs">--pull always</code>
+                    prune services not in compose
                   </label>
                 </div>
-              </>
-            ) : (
-              <>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                  <Field label="Mode">
-                    <select
-                      value={serviceMode}
-                      onChange={(e) => setServiceMode(e.target.value as typeof serviceMode)}
-                      className={inputClass}
-                    >
-                      <option value="replicated">replicated</option>
-                      <option value="global">global</option>
-                    </select>
-                  </Field>
-                  <Field label="Replicas" hint={serviceMode === 'global' ? '(ignored)' : ''}>
-                    <input
-                      type="number"
-                      min={0}
-                      value={replicas}
-                      onChange={(e) => setReplicas(e.target.value)}
-                      disabled={serviceMode === 'global'}
-                      className={inputClass}
-                    />
-                  </Field>
-                  <Field label="Restart condition">
-                    <select
-                      value={restartCondition}
-                      onChange={(e) => setRestartCondition(e.target.value as typeof restartCondition)}
-                      className={inputClass}
-                    >
-                      <option value="any">any</option>
-                      <option value="on-failure">on-failure</option>
-                      <option value="none">none</option>
-                    </select>
-                  </Field>
+              </div>
+              <div className="field">
+                <label>compose yaml</label>
+                <textarea
+                  className="textarea"
+                  rows={16}
+                  value={composeYaml}
+                  onChange={(e) => setComposeYaml(e.target.value)}
+                  spellCheck={false}
+                  style={{ minHeight: 320, fontFamily: 'var(--mono)' }}
+                />
+              </div>
+              <div className="row between">
+                <div className="kbd-hint">
+                  <kbd>⌘</kbd>+<kbd>⏎</kbd> deploy
                 </div>
-                <Field
-                  label="Mounts"
-                  hint="One per line. type=bind,source=...,target=... or src=...,dst=..."
+                <button
+                  type="submit"
+                  className="btn primary"
+                  disabled={
+                    submitting ||
+                    !canSubmitService ||
+                    !stackName.trim() ||
+                    !composeYaml.trim()
+                  }
                 >
-                  <textarea
-                    rows={2}
-                    value={mounts}
-                    onChange={(e) => setMounts(e.target.value)}
-                    placeholder="type=volume,source=app-data,target=/data"
-                    className={textareaClass}
-                  />
-                </Field>
-                <Field label="Networks" hint="One overlay network name per line">
-                  <textarea
-                    rows={2}
-                    value={networks}
-                    onChange={(e) => setNetworks(e.target.value)}
-                    placeholder="ingress"
-                    className={textareaClass}
-                  />
-                </Field>
-                <Field label="Placement constraints" hint='One per line, e.g. node.role==manager'>
-                  <textarea
-                    rows={2}
-                    value={constraints}
-                    onChange={(e) => setConstraints(e.target.value)}
-                    placeholder="node.role==worker"
-                    className={textareaClass}
-                  />
-                </Field>
-              </>
-            )}
-
-            <Field label="Command (optional)" hint="Overrides the image's CMD. Quotes preserved.">
-              <input
-                type="text"
-                value={command}
-                onChange={(e) => setCommand(e.target.value)}
-                placeholder="--help"
-                spellCheck={false}
-                className={inputClass}
-              />
-            </Field>
-
-            <div className="flex items-center gap-3">
-              <button
-                type="submit"
-                disabled={submitting || !image.trim() || (mode === 'service' && !canSubmitService)}
-                className="inline-flex items-center gap-2 px-4 py-2 rounded-md bg-blue-600 hover:bg-blue-500 disabled:bg-slate-700 disabled:cursor-not-allowed text-white text-sm font-medium transition-colors"
-              >
-                {submitting ? (
-                  <Loader2Icon className="w-4 h-4 animate-spin" />
-                ) : (
-                  <RocketIcon className="w-4 h-4" />
-                )}
-                {submitting
-                  ? mode === 'container'
-                    ? 'Creating container…'
-                    : 'Creating service…'
-                  : mode === 'container'
-                    ? 'Create container'
-                    : 'Create service'}
-              </button>
-              {mode === 'service' && !canSubmitService && (
-                <span className="text-xs text-amber-300">
-                  Switch to a swarm manager (this host is {swarmRole ?? 'unknown'}).
-                </span>
+                  {submitting ? '…' : '▷ deploy stack'}
+                </button>
+              </div>
+              {!canSubmitService && (
+                <div className="warn-c" style={{ fontSize: 11, fontFamily: 'var(--mono)' }}>
+                  ⚠ this host is {swarmRole ?? 'unknown'}, not a swarm manager.
+                </div>
               )}
-            </div>
-          </>
-        )}
-      </form>
+            </>
+          ) : (
+            <>
+              <div className="grid-2">
+                <div className="field">
+                  <label>image</label>
+                  <input
+                    className="input"
+                    type="text"
+                    required
+                    value={image}
+                    onChange={(e) => setImage(e.target.value)}
+                    placeholder="nginx:1.27-alpine"
+                    spellCheck={false}
+                  />
+                </div>
+                <div className="field">
+                  <label>{mode === 'service' ? 'service name' : 'container name (optional)'}</label>
+                  <input
+                    className="input"
+                    type="text"
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    required={mode === 'service'}
+                    placeholder={mode === 'service' ? 'my-app' : '(auto-generated)'}
+                    spellCheck={false}
+                  />
+                </div>
+              </div>
+
+              <div className="field">
+                <label>ports — host:container[/proto], one per line</label>
+                <textarea
+                  className="textarea"
+                  rows={2}
+                  value={ports}
+                  onChange={(e) => setPorts(e.target.value)}
+                  placeholder={'80:80\n8080:8080/tcp'}
+                />
+              </div>
+
+              <div className="field">
+                <label>environment — KEY=value, one per line</label>
+                <textarea
+                  className="textarea"
+                  rows={2}
+                  value={env}
+                  onChange={(e) => setEnv(e.target.value)}
+                  placeholder={'TZ=UTC\nLOG_LEVEL=info'}
+                />
+              </div>
+
+              {mode === 'container' ? (
+                <>
+                  <div className="grid-2">
+                    <div className="field">
+                      <label>volumes — host:container[:ro]</label>
+                      <textarea
+                        className="textarea"
+                        rows={2}
+                        value={volumes}
+                        onChange={(e) => setVolumes(e.target.value)}
+                        placeholder="/var/log:/logs:ro"
+                      />
+                    </div>
+                    <div className="field">
+                      <label>network</label>
+                      <input
+                        className="input"
+                        type="text"
+                        value={network}
+                        onChange={(e) => setNetwork(e.target.value)}
+                        placeholder="bridge"
+                      />
+                    </div>
+                  </div>
+                  <div className="grid-2">
+                    <div className="field">
+                      <label>restart policy</label>
+                      <select
+                        className="select"
+                        value={restartPolicy}
+                        onChange={(e) =>
+                          setRestartPolicy(e.target.value as typeof restartPolicy)
+                        }
+                      >
+                        <option value="no">no</option>
+                        <option value="always">always</option>
+                        <option value="unless-stopped">unless-stopped</option>
+                        <option value="on-failure">on-failure</option>
+                      </select>
+                    </div>
+                    <div className="field">
+                      <label>options</label>
+                      <label
+                        className="row"
+                        style={{ gap: 6, fontSize: 12, height: 28, alignItems: 'center' }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={pull}
+                          onChange={(e) => setPull(e.target.checked)}
+                        />
+                        --pull always
+                      </label>
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="grid-3">
+                    <div className="field">
+                      <label>mode</label>
+                      <select
+                        className="select"
+                        value={serviceMode}
+                        onChange={(e) =>
+                          setServiceMode(e.target.value as typeof serviceMode)
+                        }
+                      >
+                        <option value="replicated">replicated</option>
+                        <option value="global">global</option>
+                      </select>
+                    </div>
+                    <div className="field">
+                      <label>replicas</label>
+                      <input
+                        className="input"
+                        type="number"
+                        min={0}
+                        value={replicas}
+                        onChange={(e) => setReplicas(e.target.value)}
+                        disabled={serviceMode === 'global'}
+                      />
+                    </div>
+                    <div className="field">
+                      <label>restart condition</label>
+                      <select
+                        className="select"
+                        value={restartCondition}
+                        onChange={(e) =>
+                          setRestartCondition(e.target.value as typeof restartCondition)
+                        }
+                      >
+                        <option value="any">any</option>
+                        <option value="on-failure">on-failure</option>
+                        <option value="none">none</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div className="field">
+                    <label>mounts — type=…,source=…,target=…</label>
+                    <textarea
+                      className="textarea"
+                      rows={2}
+                      value={mounts}
+                      onChange={(e) => setMounts(e.target.value)}
+                      placeholder="type=volume,source=app-data,target=/data"
+                    />
+                  </div>
+                  <div className="field">
+                    <label>networks — overlay names, one per line</label>
+                    <textarea
+                      className="textarea"
+                      rows={2}
+                      value={networks}
+                      onChange={(e) => setNetworks(e.target.value)}
+                      placeholder="ingress"
+                    />
+                  </div>
+                  <div className="field">
+                    <label>placement constraints</label>
+                    <textarea
+                      className="textarea"
+                      rows={2}
+                      value={constraints}
+                      onChange={(e) => setConstraints(e.target.value)}
+                      placeholder="node.role==worker"
+                    />
+                  </div>
+                </>
+              )}
+
+              <div className="field">
+                <label>command (optional)</label>
+                <input
+                  className="input"
+                  type="text"
+                  value={command}
+                  onChange={(e) => setCommand(e.target.value)}
+                  placeholder="--help"
+                  spellCheck={false}
+                />
+              </div>
+
+              <div className="row between">
+                {mode === 'service' && !canSubmitService ? (
+                  <div className="warn-c" style={{ fontSize: 11, fontFamily: 'var(--mono)' }}>
+                    ⚠ this host is {swarmRole ?? 'unknown'}.
+                  </div>
+                ) : (
+                  <div />
+                )}
+                <button
+                  type="submit"
+                  className="btn primary"
+                  disabled={
+                    submitting || !image.trim() || (mode === 'service' && !canSubmitService)
+                  }
+                >
+                  {submitting
+                    ? '…'
+                    : mode === 'container'
+                      ? '▷ create container'
+                      : '▷ create service'}
+                </button>
+              </div>
+            </>
+          )}
+        </form>
+      </div>
 
       {outcome && <OutcomePanel outcome={outcome} mode={mode} />}
     </div>
-  );
-}
-
-function Field({
-  label,
-  hint,
-  required,
-  children,
-}: {
-  label: string;
-  hint?: string;
-  required?: boolean;
-  children: React.ReactNode;
-}) {
-  return (
-    <label className="flex flex-col gap-1">
-      <span className="text-[11px] uppercase tracking-wide text-slate-500">
-        {label}
-        {required && <span className="text-blue-400 ml-1">*</span>}
-        {hint && <span className="ml-1 normal-case tracking-normal text-slate-600">— {hint}</span>}
-      </span>
-      {children}
-    </label>
-  );
-}
-
-function ModeButton({
-  active,
-  onClick,
-  icon,
-  label,
-  disabled,
-}: {
-  active: boolean;
-  onClick: () => void;
-  icon: React.ReactNode;
-  label: string;
-  disabled?: boolean;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      className={`px-3 py-1.5 rounded-md flex items-center gap-1.5 transition-colors ${
-        active
-          ? 'bg-slate-700 text-slate-100'
-          : 'text-slate-400 hover:text-slate-100 disabled:opacity-50 disabled:cursor-not-allowed'
-      }`}
-    >
-      {icon}
-      {label}
-    </button>
   );
 }
 
@@ -528,42 +490,33 @@ function OutcomePanel({ outcome, mode }: { outcome: NonNullable<Outcome>; mode: 
     mode === 'container' ? 'Container' : mode === 'service' ? 'Service' : 'Stack';
   return (
     <div
-      className={`mt-4 rounded-md border ${
-        outcome.kind === 'success'
-          ? 'border-emerald-500/30 bg-emerald-500/5'
-          : 'border-red-500/30 bg-red-500/5'
-      }`}
+      className="panel"
+      style={{
+        borderColor: outcome.kind === 'success' ? 'var(--accent-bd)' : 'var(--err-bd)',
+      }}
     >
       <div
-        className={`flex items-start gap-2 px-3 py-2 text-sm ${
-          outcome.kind === 'success' ? 'text-emerald-200' : 'text-red-200'
-        }`}
+        className="panel-head"
+        style={{ background: outcome.kind === 'success' ? 'var(--accent-bg)' : 'var(--err-bg)' }}
       >
-        {outcome.kind === 'success' ? (
-          <CheckCircleIcon className="w-4 h-4 mt-0.5 shrink-0" />
-        ) : (
-          <AlertCircleIcon className="w-4 h-4 mt-0.5 shrink-0" />
-        )}
-        <div className="min-w-0">
-          {outcome.kind === 'success' ? (
-            <div>
-              {verb} {mode === 'stack' ? 'deployed' : 'created'}.
-              {outcome.id && (
-                <>
-                  {' '}
-                  <code className="text-slate-200">
-                    {outcome.id.length > 32 ? `${outcome.id.slice(0, 12)}…` : outcome.id}
-                  </code>
-                </>
-              )}
-            </div>
-          ) : (
-            <div>{outcome.error ?? 'Docker rejected the request. See log below.'}</div>
+        <div
+          className="panel-title"
+          style={{ color: outcome.kind === 'success' ? 'var(--accent)' : 'var(--err)' }}
+        >
+          {outcome.kind === 'success' ? '✓' : '×'} {verb}{' '}
+          {mode === 'stack' ? 'deployed' : 'created'}
+          {outcome.kind === 'success' && outcome.id && (
+            <span className="meta">
+              {outcome.id.length > 32 ? `${outcome.id.slice(0, 12)}…` : outcome.id}
+            </span>
+          )}
+          {outcome.kind === 'error' && outcome.error && (
+            <span className="meta">{outcome.error}</span>
           )}
         </div>
       </div>
       {outcome.log && (
-        <pre className="text-[11px] bg-slate-950 text-slate-300 px-3 py-2 overflow-x-auto whitespace-pre-wrap max-h-64 border-t border-slate-800">
+        <pre className="code" style={{ margin: 0, borderRadius: 0, border: 0, maxHeight: 240 }}>
           {outcome.log}
         </pre>
       )}

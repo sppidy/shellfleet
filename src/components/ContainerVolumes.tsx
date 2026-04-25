@@ -4,15 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useWebSocket } from './providers/WebSocketProvider';
 import { useUi } from './providers/UiProvider';
 import type { DockerVolume } from '@/lib/types';
-import {
-  HardDriveIcon,
-  RefreshCwIcon,
-  Trash2Icon,
-  Loader2Icon,
-  AlertCircleIcon,
-  EyeIcon,
-  ScissorsIcon,
-} from 'lucide-react';
+import { Loader2Icon } from 'lucide-react';
 
 const REFRESH_MS = 15_000;
 
@@ -121,7 +113,7 @@ export default function ContainerVolumes({ agentId }: { agentId: string }) {
     const ok = await ui.confirm({
       title: 'Prune unused volumes?',
       description:
-        'Removes every volume not currently referenced by any container. This frees disk but is destructive — anonymous volumes from stopped one-shot containers will also disappear.',
+        'Removes every volume not currently referenced by any container.',
       destructive: true,
       confirmLabel: 'Prune',
     });
@@ -136,117 +128,100 @@ export default function ContainerVolumes({ agentId }: { agentId: string }) {
     sendToAgent(agentId, { type: 'DockerVolumeInspectRequest', payload: { name: v.name } });
   };
 
+  const totalSize = (volumes ?? []).reduce((s, v) => s + v.size_bytes, 0);
+
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between gap-3 flex-wrap">
-        <div className="flex items-center gap-2">
-          <HardDriveIcon className="w-5 h-5 text-slate-400" />
-          <h2 className="text-base font-semibold">Volumes</h2>
-          <span className="text-xs text-slate-500">
-            {volumes === null ? 'loading…' : `· ${volumes.length}`}
-          </span>
+    <div className="pane">
+      {error && (
+        <div
+          style={{
+            padding: 10,
+            background: 'var(--err-bg)',
+            border: '1px solid var(--err-bd)',
+            borderRadius: 'var(--r)',
+            color: 'var(--err)',
+            fontFamily: 'var(--mono)',
+            fontSize: 11.5,
+          }}
+        >
+          {error}
         </div>
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={refresh}
-            className="text-xs flex items-center gap-1.5 px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-md"
-          >
-            <RefreshCwIcon className="w-3.5 h-3.5" />
-            Refresh
-          </button>
-          <button
-            type="button"
-            onClick={prune}
-            disabled={pruning}
-            className="text-xs flex items-center gap-1.5 px-2.5 py-1.5 bg-amber-600/20 hover:bg-amber-600/40 disabled:opacity-50 text-amber-200 rounded-md border border-amber-600/40"
-          >
-            {pruning ? (
-              <Loader2Icon className="w-3.5 h-3.5 animate-spin" />
-            ) : (
-              <ScissorsIcon className="w-3.5 h-3.5" />
-            )}
-            Prune unused
-          </button>
+      )}
+
+      <div className="panel">
+        <div className="panel-head">
+          <div className="panel-title">
+            <span className="ico">⊠</span> VOLUMES
+            <span className="meta">
+              {volumes === null
+                ? 'loading…'
+                : `${volumes.length} volumes · ${fmtBytes(totalSize)}`}
+            </span>
+          </div>
+          <div className="panel-actions">
+            <button className="btn" onClick={refresh}>↻</button>
+            <button className="btn warn" onClick={prune} disabled={pruning}>
+              {pruning ? '…' : '⚠ prune unused'}
+            </button>
+          </div>
+        </div>
+        <div className="panel-body flush">
+          {volumes === null ? (
+            <div className="empty">
+              <Loader2Icon className="w-5 h-5 animate-spin" />
+            </div>
+          ) : volumes.length === 0 ? (
+            <div className="empty">No volumes.</div>
+          ) : (
+            <table className="tbl">
+              <thead>
+                <tr>
+                  <th>NAME</th>
+                  <th>DRIVER</th>
+                  <th>MOUNTPOINT</th>
+                  <th className="right">SIZE</th>
+                  <th style={{ width: 200 }} />
+                </tr>
+              </thead>
+              <tbody>
+                {volumes.map((v) => (
+                  <tr key={v.name}>
+                    <td className="mono" style={{ color: 'var(--fg)' }}>
+                      {v.name}
+                    </td>
+                    <td className="mono">{v.driver}</td>
+                    <td className="mono muted" style={{ fontSize: 11 }}>
+                      {v.mountpoint}
+                    </td>
+                    <td className="right mono">{fmtBytes(v.size_bytes)}</td>
+                    <td className="actions">
+                      <button className="btn sm" onClick={() => inspect(v)}>
+                        inspect
+                      </button>
+                      <button
+                        className="btn sm icon"
+                        title="Force remove"
+                        disabled={removing === v.name}
+                        onClick={() => remove(v, true)}
+                      >
+                        !
+                      </button>
+                      <button
+                        className="btn sm icon danger"
+                        title="Remove"
+                        disabled={removing === v.name}
+                        onClick={() => remove(v, false)}
+                      >
+                        {removing === v.name ? '…' : '×'}
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
         </div>
       </div>
-
-      {error && (
-        <div className="flex items-start gap-2 text-sm text-red-300 bg-red-500/10 border border-red-500/30 rounded-md px-3 py-2">
-          <AlertCircleIcon className="w-4 h-4 mt-0.5 shrink-0" />
-          <span>{error}</span>
-        </div>
-      )}
-
-      {volumes === null ? (
-        <div className="flex items-center justify-center py-12 text-slate-500">
-          <Loader2Icon className="w-5 h-5 animate-spin" />
-        </div>
-      ) : volumes.length === 0 ? (
-        <div className="border border-dashed border-slate-800 rounded-md px-4 py-8 text-center text-sm text-slate-500">
-          No volumes.
-        </div>
-      ) : (
-        <div className="rounded-md border border-slate-800 overflow-hidden">
-          <table className="w-full text-sm">
-            <thead className="bg-slate-900/60 text-[11px] uppercase tracking-wide text-slate-500">
-              <tr>
-                <th className="text-left px-3 py-2 font-medium">Name</th>
-                <th className="text-left px-3 py-2 font-medium">Driver</th>
-                <th className="text-left px-3 py-2 font-medium">Mountpoint</th>
-                <th className="text-right px-3 py-2 font-medium">Size</th>
-                <th className="px-3 py-2"></th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-800">
-              {volumes.map((v) => (
-                <tr key={v.name} className="bg-slate-900/30">
-                  <td className="px-3 py-2 font-mono text-slate-200 break-all">{v.name}</td>
-                  <td className="px-3 py-2 text-slate-400">{v.driver}</td>
-                  <td className="px-3 py-2 font-mono text-xs text-slate-500 break-all">
-                    {v.mountpoint}
-                  </td>
-                  <td className="px-3 py-2 text-right text-slate-400">{fmtBytes(v.size_bytes)}</td>
-                  <td className="px-3 py-2 text-right">
-                    <div className="flex items-center justify-end gap-1">
-                      <button
-                        type="button"
-                        onClick={() => inspect(v)}
-                        title="Inspect"
-                        className="p-1.5 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800"
-                      >
-                        <EyeIcon className="w-4 h-4" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => remove(v, false)}
-                        disabled={removing === v.name}
-                        title="Remove"
-                        className="p-1.5 rounded text-slate-400 hover:text-red-300 hover:bg-slate-800 disabled:opacity-50"
-                      >
-                        {removing === v.name ? (
-                          <Loader2Icon className="w-4 h-4 animate-spin" />
-                        ) : (
-                          <Trash2Icon className="w-4 h-4" />
-                        )}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => remove(v, true)}
-                        disabled={removing === v.name}
-                        title="Force remove"
-                        className="text-[10px] px-1.5 py-1 rounded text-red-300/80 hover:text-red-200 hover:bg-red-500/20 disabled:opacity-50"
-                      >
-                        force
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
 
       {inspectName && (
         <InspectModal
@@ -273,26 +248,26 @@ function InspectModal({
 }) {
   return (
     <div
-      className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-sm flex items-center justify-center p-4"
-      onClick={onClose}
+      className="modal-overlay"
+      onClick={(e) => e.target === e.currentTarget && onClose()}
     >
-      <div
-        className="bg-slate-900 border border-slate-800 rounded-lg shadow-2xl max-w-3xl w-full max-h-[80vh] flex flex-col"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="p-4 border-b border-slate-800 flex items-center justify-between">
-          <h3 className="text-base font-semibold text-slate-100 break-all">{title}</h3>
-          <button type="button" onClick={onClose} className="text-slate-400 hover:text-slate-100">
+      <div className="modal" style={{ maxHeight: '80vh', display: 'flex', flexDirection: 'column' }}>
+        <div className="panel-head">
+          <div className="panel-title">{title}</div>
+          <button className="icon-btn" onClick={onClose}>
             ×
           </button>
         </div>
-        <div className="flex-1 overflow-auto p-4">
+        <div style={{ flex: 1, overflow: 'auto', padding: 12 }}>
           {json === null ? (
-            <div className="flex items-center justify-center py-8 text-slate-500">
+            <div className="empty">
               <Loader2Icon className="w-5 h-5 animate-spin" />
             </div>
           ) : (
-            <pre className="text-[11px] whitespace-pre-wrap break-words text-slate-300 bg-slate-950 rounded p-3 border border-slate-800">
+            <pre
+              className="code"
+              style={{ maxHeight: 'none', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
+            >
               {json}
             </pre>
           )}

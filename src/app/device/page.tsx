@@ -2,13 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import {
-  ServerIcon,
-  CheckCircleIcon,
-  AlertCircleIcon,
-  Loader2Icon,
-  ArrowLeftIcon,
-} from 'lucide-react';
+import { Loader2Icon } from 'lucide-react';
 import { apiFetch } from '@/lib/api';
 
 type AuthStatus = 'checking' | 'authed' | 'guest';
@@ -74,90 +68,128 @@ export default function DeviceAuthPage() {
 
   if (authStatus === 'checking') {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-slate-950 text-slate-300">
-        <Loader2Icon className="w-6 h-6 animate-spin" />
+      <div className="app-shell" style={{ alignItems: 'center', justifyContent: 'center' }}>
+        <Loader2Icon className="w-6 h-6 animate-spin" style={{ color: 'var(--fg-2)' }} />
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col">
-      <header className="border-b border-slate-800 px-6 py-4 flex items-center justify-between">
-        <button
-          type="button"
-          onClick={() => router.push('/')}
-          className="inline-flex items-center text-sm text-slate-400 hover:text-slate-100"
-        >
-          <ArrowLeftIcon className="w-4 h-4 mr-1.5" />
-          Back to dashboard
-        </button>
-        <span className="text-sm text-slate-500">Connect an agent</span>
-      </header>
-
-      <main className="flex-1 flex items-center justify-center px-4">
-        <div className="w-full max-w-md">
-          <div className="text-center mb-8">
-            <div className="inline-flex w-12 h-12 items-center justify-center rounded-lg bg-blue-500/10 text-blue-400 mb-4">
-              <ServerIcon className="w-6 h-6" />
-            </div>
-            <h1 className="text-2xl font-semibold">Connect a new agent</h1>
-            <p className="text-sm text-slate-400 mt-2">
-              On the agent host, run{' '}
-              <code className="bg-slate-800/80 text-slate-200 px-1.5 py-0.5 rounded text-xs">
-                journalctl -u sys-manager-agent -n 20
-              </code>{' '}
-              and paste the 8-character code below.
-            </p>
-          </div>
-
-          <form
-            onSubmit={handleSubmit}
-            className="bg-slate-900 border border-slate-800 rounded-lg p-6 space-y-4"
-          >
-            <label className="block">
-              <span className="block text-xs uppercase tracking-wide text-slate-400 mb-2">
-                Device code
-              </span>
-              <input
-                type="text"
-                required
-                autoFocus
-                value={userCode}
-                onChange={(e) => setUserCode(e.target.value)}
-                placeholder="ABCD-1234"
-                spellCheck={false}
-                autoCorrect="off"
-                autoCapitalize="characters"
-                className="w-full bg-slate-950 border border-slate-700 rounded-md px-3 py-3 text-center text-lg tracking-[0.4em] uppercase font-mono focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
-              />
-            </label>
-
+    <div className="app-shell" style={{ gridTemplateColumns: '1fr' }}>
+      <main className="main">
+        <div className="topbar">
+          <div className="breadcrumb">
+            <span className="prompt">$</span>
             <button
-              type="submit"
-              disabled={submitStatus === 'loading' || !userCode.trim()}
-              className="w-full inline-flex items-center justify-center gap-2 py-2.5 rounded-md bg-blue-600 hover:bg-blue-500 disabled:bg-slate-700 disabled:cursor-not-allowed text-white text-sm font-medium transition-colors"
+              type="button"
+              className="nav-item"
+              onClick={() => router.push('/')}
+              style={{ height: 'auto', padding: '0 4px', display: 'inline-flex' }}
             >
-              {submitStatus === 'loading' && <Loader2Icon className="w-4 h-4 animate-spin" />}
-              {submitStatus === 'loading' ? 'Approving…' : 'Approve agent'}
+              ←&nbsp;back
             </button>
+            <span className="sep">/</span>
+            <span className="here">connect-agent</span>
+          </div>
+        </div>
 
-            {submitStatus === 'success' && (
-              <div className="flex items-start gap-2 text-sm text-emerald-400 bg-emerald-500/5 border border-emerald-500/20 rounded-md p-3">
-                <CheckCircleIcon className="w-4 h-4 mt-0.5 shrink-0" />
-                <span>{message}</span>
+        <div className="scroll">
+          <div className="pane" style={{ alignItems: 'center' }}>
+            <div className="panel" style={{ width: 'min(560px, 100%)', marginTop: 48 }}>
+              <div className="panel-head">
+                <div className="panel-title">
+                  <span className="ico">＋</span> CONNECT AGENT
+                </div>
               </div>
-            )}
-            {submitStatus === 'error' && (
-              <div className="flex items-start gap-2 text-sm text-red-400 bg-red-500/5 border border-red-500/20 rounded-md p-3">
-                <AlertCircleIcon className="w-4 h-4 mt-0.5 shrink-0" />
-                <span>{message}</span>
-              </div>
-            )}
-          </form>
+              <div className="panel-body" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                <pre
+                  style={{
+                    fontFamily: 'var(--mono)',
+                    fontSize: 11,
+                    color: 'var(--fg-3)',
+                    margin: 0,
+                    lineHeight: 1.4,
+                  }}
+                >
+                  {`┌──────────────────────────────────────┐
+│  on the new host run:                │
+│                                      │
+│    $ journalctl -u sys-manager-agent │
+│      -n 20                           │
+│                                      │
+│  it will print an 8-char code.       │
+└──────────────────────────────────────┘`}
+                </pre>
 
-          <p className="mt-6 text-xs text-slate-500 text-center">
-            Codes expire after 5 minutes. Generate a new one by restarting the agent service.
-          </p>
+                <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  <div className="field">
+                    <label>pairing code</label>
+                    <input
+                      type="text"
+                      required
+                      autoFocus
+                      value={userCode}
+                      onChange={(e) => setUserCode(e.target.value)}
+                      placeholder="ABCD-1234"
+                      spellCheck={false}
+                      autoCorrect="off"
+                      autoCapitalize="characters"
+                      className="input"
+                      style={{
+                        height: 46,
+                        fontSize: 18,
+                        textAlign: 'center',
+                        letterSpacing: '0.3em',
+                        textTransform: 'uppercase',
+                      }}
+                    />
+                  </div>
+
+                  <div className="row between">
+                    <div className="kbd-hint">codes expire after ~5 min</div>
+                    <button
+                      type="submit"
+                      disabled={submitStatus === 'loading' || !userCode.trim()}
+                      className="btn primary"
+                    >
+                      {submitStatus === 'loading' ? '…' : '▶ approve & connect'}
+                    </button>
+                  </div>
+                </form>
+
+                {submitStatus === 'success' && (
+                  <div
+                    style={{
+                      padding: 10,
+                      background: 'var(--accent-bg)',
+                      border: '1px solid var(--accent-bd)',
+                      borderRadius: 'var(--r)',
+                      color: 'var(--accent)',
+                      fontFamily: 'var(--mono)',
+                      fontSize: 12,
+                    }}
+                  >
+                    {message}
+                  </div>
+                )}
+                {submitStatus === 'error' && (
+                  <div
+                    style={{
+                      padding: 10,
+                      background: 'var(--err-bg)',
+                      border: '1px solid var(--err-bd)',
+                      borderRadius: 'var(--r)',
+                      color: 'var(--err)',
+                      fontFamily: 'var(--mono)',
+                      fontSize: 12,
+                    }}
+                  >
+                    {message}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
         </div>
       </main>
     </div>

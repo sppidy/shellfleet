@@ -4,15 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useUi } from './providers/UiProvider';
 import { apiFetch } from '@/lib/api';
 import type { HealthProbe, HealthProbeKind, ProbeLibraryEntry } from '@/lib/types';
-import {
-  ActivitySquareIcon,
-  PlusIcon,
-  Trash2Icon,
-  Loader2Icon,
-  CheckCircleIcon,
-  AlertCircleIcon,
-  CircleDashedIcon,
-} from 'lucide-react';
+import { Loader2Icon } from 'lucide-react';
 
 function fmtTs(secs: number | null | undefined) {
   if (!secs) return '—';
@@ -53,9 +45,7 @@ export default function HealthProbes({ agentId }: { agentId: string }) {
     });
     if (!ok) return;
     try {
-      const res = await apiFetch(`/api/health-probes/${id}`, {
-        method: 'DELETE',
-      });
+      const res = await apiFetch(`/api/health-probes/${id}`, { method: 'DELETE' });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       ui.toast('success', `Probe "${name}" removed`);
       void refresh();
@@ -64,24 +54,11 @@ export default function HealthProbes({ agentId }: { agentId: string }) {
     }
   };
 
-  return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
-          <ActivitySquareIcon className="w-5 h-5 text-slate-400" />
-          <h2 className="text-base font-semibold">Health probes</h2>
-          <span className="text-xs text-slate-500">· {probes.length}</span>
-        </div>
-        <button
-          type="button"
-          onClick={() => setCreating(true)}
-          className="text-xs flex items-center gap-1.5 px-2.5 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-md"
-        >
-          <PlusIcon className="w-3.5 h-3.5" />
-          Add probe
-        </button>
-      </div>
+  const greenCount = probes.filter((p) => p.last_state === 'green').length;
+  const redCount = probes.filter((p) => p.last_state === 'red').length;
 
+  return (
+    <div className="pane">
       {creating && (
         <ProbeForm
           agentId={agentId}
@@ -93,84 +70,82 @@ export default function HealthProbes({ agentId }: { agentId: string }) {
         />
       )}
 
-      {loading && probes.length === 0 ? (
-        <div className="flex items-center justify-center py-8 text-slate-500">
-          <Loader2Icon className="w-4 h-4 animate-spin" />
+      <div className="panel">
+        <div className="panel-head">
+          <div className="panel-title">
+            <span className="ico">♡</span> HEALTH PROBES
+            <span className="meta">
+              {probes.length} probes · {greenCount} green · {redCount} red
+            </span>
+          </div>
+          <div className="panel-actions">
+            <button className="btn primary" onClick={() => setCreating(true)}>
+              + probe
+            </button>
+          </div>
         </div>
-      ) : probes.length === 0 ? (
-        <div className="border border-dashed border-slate-800 rounded-md px-4 py-8 text-center text-sm text-slate-500">
-          No probes configured for this host yet. Add one to start monitoring.
+        <div className="panel-body flush">
+          {loading && probes.length === 0 ? (
+            <div className="empty">
+              <Loader2Icon className="w-4 h-4 animate-spin" />
+            </div>
+          ) : probes.length === 0 ? (
+            <div className="empty">No probes configured for this host yet.</div>
+          ) : (
+            <table className="tbl">
+              <tbody>
+                {probes.map((p) => {
+                  const cls =
+                    p.last_state === 'green'
+                      ? 'ok'
+                      : p.last_state === 'red'
+                        ? 'err-c'
+                        : 'muted';
+                  return (
+                    <tr key={p.id}>
+                      <td className={`${cls} center`} style={{ width: 24 }}>
+                        ●
+                      </td>
+                      <td className="mono" style={{ color: 'var(--fg)' }}>
+                        {p.name}
+                        {!p.enabled && (
+                          <span className="chip muted" style={{ marginLeft: 8 }}>
+                            disabled
+                          </span>
+                        )}
+                      </td>
+                      <td className="mono muted" style={{ width: 60 }}>
+                        {p.kind}
+                      </td>
+                      <td className="mono">{p.target}</td>
+                      <td className="mono" style={{ width: 80 }}>
+                        {p.last_latency_ms != null ? `${p.last_latency_ms}ms` : '—'}
+                      </td>
+                      <td className={`mono ${cls}`} style={{ width: 220 }}>
+                        {p.last_state ? p.last_detail ?? '—' : 'awaiting first sample…'}
+                      </td>
+                      <td className="muted" style={{ fontSize: 10.5, width: 180 }}>
+                        every {p.interval_secs}s · {fmtTs(p.last_run_at)}
+                      </td>
+                      <td className="actions" style={{ width: 80 }}>
+                        <button
+                          className="btn sm icon danger"
+                          title="Remove"
+                          onClick={() => remove(p.id, p.name)}
+                        >
+                          ×
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
         </div>
-      ) : (
-        <ul className="divide-y divide-slate-800 border border-slate-800 rounded-md overflow-hidden">
-          {probes.map((p) => (
-            <li
-              key={p.id}
-              className="px-3 py-2 bg-slate-900 flex items-center gap-3"
-            >
-              <StateIcon state={p.last_state} />
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2">
-                  <span className="font-medium text-slate-100 text-sm truncate">
-                    {p.name}
-                  </span>
-                  <span className="text-[10px] uppercase tracking-wide px-1 py-0.5 rounded bg-slate-800 text-slate-300">
-                    {p.kind}
-                  </span>
-                  {!p.enabled && (
-                    <span className="text-[10px] uppercase tracking-wide px-1 py-0.5 rounded bg-slate-800 text-slate-500">
-                      disabled
-                    </span>
-                  )}
-                </div>
-                <div className="text-xs text-slate-500 truncate" title={p.target}>
-                  <code className="text-slate-400">{p.target}</code>
-                  <span className="ml-2 text-slate-500">
-                    every {p.interval_secs}s · timeout {p.timeout_secs}s
-                  </span>
-                </div>
-                <div className="text-[11px] text-slate-500 truncate">
-                  {p.last_state ? (
-                    <>
-                      {p.last_detail ?? '—'}
-                      {p.last_latency_ms != null && (
-                        <span className="ml-2 text-slate-600">
-                          {p.last_latency_ms}ms
-                        </span>
-                      )}
-                      <span className="ml-2 text-slate-600">
-                        @ {fmtTs(p.last_run_at)}
-                      </span>
-                    </>
-                  ) : (
-                    'awaiting first sample…'
-                  )}
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => remove(p.id, p.name)}
-                title="Delete probe"
-                className="p-1.5 rounded text-slate-400 hover:text-red-400 hover:bg-slate-800"
-              >
-                <Trash2Icon className="w-4 h-4" />
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
+      </div>
     </div>
   );
-}
-
-function StateIcon({ state }: { state: string | null }) {
-  if (state === 'green') {
-    return <CheckCircleIcon className="w-4 h-4 text-emerald-400 shrink-0" />;
-  }
-  if (state === 'red') {
-    return <AlertCircleIcon className="w-4 h-4 text-red-400 shrink-0" />;
-  }
-  return <CircleDashedIcon className="w-4 h-4 text-slate-500 shrink-0" />;
 }
 
 function ProbeForm({
@@ -205,7 +180,7 @@ function ProbeForm({
         const data: ProbeLibraryEntry[] = await res.json();
         if (!cancelled) setLibrary(data);
       } catch {
-        /* ignore — library tab just shows empty */
+        /* ignore */
       }
     };
     void load();
@@ -264,44 +239,45 @@ function ProbeForm({
   };
 
   return (
-    <form
-      onSubmit={submit}
-      className="rounded-md border border-slate-800 bg-slate-900/40 p-3 space-y-3"
-    >
-      <div className="flex items-center gap-3 text-xs text-slate-400 border-b border-slate-800 pb-2">
-        <label className="flex items-center gap-1.5">
-          <input
-            type="radio"
-            name="probeMode"
-            checked={mode === 'custom'}
-            onChange={() => setMode('custom')}
-            className="accent-blue-600"
-          />
-          Custom
-        </label>
-        <label className="flex items-center gap-1.5">
-          <input
-            type="radio"
-            name="probeMode"
-            checked={mode === 'library'}
-            onChange={() => setMode('library')}
-            className="accent-blue-600"
-          />
-          From library
-        </label>
+    <div className="panel">
+      <div className="panel-head">
+        <div className="panel-title">
+          <span className="ico">+</span> NEW PROBE
+        </div>
+        <div className="panel-actions">
+          <div className="seg">
+            <button
+              className={mode === 'custom' ? 'on' : ''}
+              onClick={() => setMode('custom')}
+            >
+              custom
+            </button>
+            <button
+              className={mode === 'library' ? 'on' : ''}
+              onClick={() => setMode('library')}
+            >
+              library
+            </button>
+          </div>
+        </div>
       </div>
-
-      {mode === 'library' && (
-        <div className="space-y-3">
-          <label className="text-xs text-slate-400 flex flex-col gap-1">
-            Stock probe
+      <form
+        onSubmit={submit}
+        className="panel-body"
+        style={{ display: 'flex', flexDirection: 'column', gap: 12 }}
+      >
+        {mode === 'library' && (
+          <div className="field">
+            <label>stock probe</label>
             {library.length === 0 ? (
-              <span className="text-slate-500 italic">Loading library…</span>
+              <span className="muted" style={{ fontSize: 11 }}>
+                Loading library…
+              </span>
             ) : (
               <select
+                className="select"
                 value={libraryPick}
                 onChange={(e) => applyLibraryPick(e.target.value)}
-                className="bg-slate-950 border border-slate-700 rounded-md px-2 py-1.5 text-sm text-slate-100"
               >
                 <option value="">— pick a probe —</option>
                 {library.map((e) => (
@@ -311,170 +287,173 @@ function ProbeForm({
                 ))}
               </select>
             )}
-          </label>
-          {libraryPick && (
-            <p className="text-[11px] text-slate-500">
-              {library.find((e) => e.script === libraryPick)?.description}
-            </p>
-          )}
-        </div>
-      )}
+            {libraryPick && (
+              <div className="muted" style={{ fontSize: 11 }}>
+                {library.find((e) => e.script === libraryPick)?.description}
+              </div>
+            )}
+          </div>
+        )}
 
-      <div className="grid grid-cols-2 gap-3">
-        <label className="text-xs text-slate-400 flex flex-col gap-1">
-          Name
+        <div className="grid-2">
+          <div className="field">
+            <label>name</label>
+            <input
+              className="input"
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="api-healthz"
+              required
+            />
+          </div>
+          <div className="field">
+            <label>kind</label>
+            <select
+              className="select"
+              value={kind}
+              onChange={(e) => setKind(e.target.value as HealthProbeKind)}
+            >
+              <option value="http">http</option>
+              <option value="tcp">tcp</option>
+              <option value="exec">exec</option>
+            </select>
+          </div>
+        </div>
+
+        <div className="field">
+          <label>target</label>
           <input
+            className="input"
             type="text"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="api-healthz"
-            className="bg-slate-950 border border-slate-700 rounded-md px-2 py-1.5 text-sm text-slate-100 focus:outline-none focus:ring-1 focus:ring-blue-500"
+            value={target}
+            onChange={(e) => setTarget(e.target.value)}
+            placeholder={
+              kind === 'http'
+                ? 'https://example.com/healthz'
+                : kind === 'tcp'
+                  ? 'host:port'
+                  : 'script-name.sh (in /etc/sys-manager/probes.d/)'
+            }
             required
           />
-        </label>
-        <label className="text-xs text-slate-400 flex flex-col gap-1">
-          Kind
-          <select
-            value={kind}
-            onChange={(e) => setKind(e.target.value as HealthProbeKind)}
-            className="bg-slate-950 border border-slate-700 rounded-md px-2 py-1.5 text-sm text-slate-100"
-          >
-            <option value="http">http</option>
-            <option value="tcp">tcp</option>
-            <option value="exec">exec</option>
-          </select>
-        </label>
-      </div>
-      <label className="text-xs text-slate-400 flex flex-col gap-1">
-        Target
-        <input
-          type="text"
-          value={target}
-          onChange={(e) => setTarget(e.target.value)}
-          placeholder={
-            kind === 'http'
-              ? 'https://example.com/healthz'
-              : kind === 'tcp'
-                ? 'host:port'
-                : 'script-name.sh (in /etc/sys-manager/probes.d/)'
-          }
-          className="bg-slate-950 border border-slate-700 rounded-md px-2 py-1.5 font-mono text-sm text-slate-100 focus:outline-none focus:ring-1 focus:ring-blue-500"
-          required
-        />
-      </label>
-      <div className="grid grid-cols-2 gap-3">
-        <label className="text-xs text-slate-400 flex flex-col gap-1">
-          Interval (s)
-          <input
-            type="number"
-            min={1}
-            value={intervalSecs}
-            onChange={(e) => setIntervalSecs(Number(e.target.value))}
-            className="bg-slate-950 border border-slate-700 rounded-md px-2 py-1.5 text-sm text-slate-100"
-          />
-        </label>
-        <label className="text-xs text-slate-400 flex flex-col gap-1">
-          Timeout (s)
-          <input
-            type="number"
-            min={1}
-            value={timeoutSecs}
-            onChange={(e) => setTimeoutSecs(Number(e.target.value))}
-            className="bg-slate-950 border border-slate-700 rounded-md px-2 py-1.5 text-sm text-slate-100"
-          />
-        </label>
-      </div>
-      {kind === 'exec' && (
-        <div className="space-y-2">
-          <div className="flex items-center justify-between">
-            <span className="text-xs text-slate-400">Env (KEY=VALUE)</span>
-            <button
-              type="button"
-              onClick={() => setEnvPairs((p) => [...p, { key: '', value: '' }])}
-              className="text-[11px] text-slate-400 hover:text-slate-100"
-            >
-              + add
-            </button>
-          </div>
-          {envPairs.length === 0 ? (
-            <p className="text-[11px] text-slate-500 italic">
-              No env overrides. Click "add" to set things like THRESHOLD=85.
-            </p>
-          ) : (
-            envPairs.map((p, i) => (
-              <div key={i} className="grid grid-cols-[1fr_1fr_auto] gap-2">
-                <input
-                  type="text"
-                  value={p.key}
-                  onChange={(e) =>
-                    setEnvPairs((arr) => arr.map((x, j) => (j === i ? { ...x, key: e.target.value } : x)))
-                  }
-                  placeholder="KEY"
-                  className="bg-slate-950 border border-slate-700 rounded-md px-2 py-1 font-mono text-xs text-slate-100"
-                />
-                <input
-                  type="text"
-                  value={p.value}
-                  onChange={(e) =>
-                    setEnvPairs((arr) => arr.map((x, j) => (j === i ? { ...x, value: e.target.value } : x)))
-                  }
-                  placeholder="value"
-                  className="bg-slate-950 border border-slate-700 rounded-md px-2 py-1 font-mono text-xs text-slate-100"
-                />
-                <button
-                  type="button"
-                  onClick={() => setEnvPairs((arr) => arr.filter((_, j) => j !== i))}
-                  className="text-slate-500 hover:text-red-300 px-1"
-                  title="Remove"
-                >
-                  ×
-                </button>
-              </div>
-            ))
-          )}
         </div>
-      )}
-      {kind === 'http' && (
-        <div className="grid grid-cols-2 gap-3">
-          <label className="text-xs text-slate-400 flex flex-col gap-1">
-            Expect status (optional)
+
+        <div className="grid-2">
+          <div className="field">
+            <label>interval (s)</label>
             <input
+              className="input"
               type="number"
-              value={expectStatus}
-              onChange={(e) => setExpectStatus(e.target.value)}
-              placeholder="200"
-              className="bg-slate-950 border border-slate-700 rounded-md px-2 py-1.5 text-sm text-slate-100"
+              min={1}
+              value={intervalSecs}
+              onChange={(e) => setIntervalSecs(Number(e.target.value))}
             />
-          </label>
-          <label className="text-xs text-slate-400 flex flex-col gap-1">
-            Body must contain (optional)
+          </div>
+          <div className="field">
+            <label>timeout (s)</label>
             <input
-              type="text"
-              value={expectBody}
-              onChange={(e) => setExpectBody(e.target.value)}
-              placeholder="ok"
-              className="bg-slate-950 border border-slate-700 rounded-md px-2 py-1.5 text-sm text-slate-100"
+              className="input"
+              type="number"
+              min={1}
+              value={timeoutSecs}
+              onChange={(e) => setTimeoutSecs(Number(e.target.value))}
             />
-          </label>
+          </div>
         </div>
-      )}
-      <div className="flex justify-end gap-2 pt-1">
-        <button
-          type="button"
-          onClick={onClose}
-          className="text-xs px-2.5 py-1.5 rounded-md border border-slate-700 text-slate-300 hover:bg-slate-800"
-        >
-          Cancel
-        </button>
-        <button
-          type="submit"
-          disabled={submitting}
-          className="text-xs flex items-center gap-1.5 px-2.5 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-700 text-white rounded-md"
-        >
-          {submitting && <Loader2Icon className="w-3.5 h-3.5 animate-spin" />}
-          Create probe
-        </button>
-      </div>
-    </form>
+
+        {kind === 'exec' && (
+          <div className="field">
+            <div className="row between">
+              <label>env (KEY=VALUE)</label>
+              <button
+                type="button"
+                className="btn sm"
+                onClick={() => setEnvPairs((p) => [...p, { key: '', value: '' }])}
+              >
+                + add
+              </button>
+            </div>
+            {envPairs.length === 0 ? (
+              <span className="muted" style={{ fontSize: 11 }}>
+                No env overrides. Add things like THRESHOLD=85.
+              </span>
+            ) : (
+              envPairs.map((p, i) => (
+                <div
+                  key={i}
+                  style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: 6 }}
+                >
+                  <input
+                    className="input"
+                    type="text"
+                    value={p.key}
+                    onChange={(e) =>
+                      setEnvPairs((arr) =>
+                        arr.map((x, j) => (j === i ? { ...x, key: e.target.value } : x)),
+                      )
+                    }
+                    placeholder="KEY"
+                  />
+                  <input
+                    className="input"
+                    type="text"
+                    value={p.value}
+                    onChange={(e) =>
+                      setEnvPairs((arr) =>
+                        arr.map((x, j) => (j === i ? { ...x, value: e.target.value } : x)),
+                      )
+                    }
+                    placeholder="value"
+                  />
+                  <button
+                    type="button"
+                    className="btn sm icon danger"
+                    onClick={() => setEnvPairs((arr) => arr.filter((_, j) => j !== i))}
+                    title="Remove"
+                  >
+                    ×
+                  </button>
+                </div>
+              ))
+            )}
+          </div>
+        )}
+
+        {kind === 'http' && (
+          <div className="grid-2">
+            <div className="field">
+              <label>expect status (optional)</label>
+              <input
+                className="input"
+                type="number"
+                value={expectStatus}
+                onChange={(e) => setExpectStatus(e.target.value)}
+                placeholder="200"
+              />
+            </div>
+            <div className="field">
+              <label>body must contain (optional)</label>
+              <input
+                className="input"
+                type="text"
+                value={expectBody}
+                onChange={(e) => setExpectBody(e.target.value)}
+                placeholder="ok"
+              />
+            </div>
+          </div>
+        )}
+
+        <div className="row between">
+          <button type="button" className="btn" onClick={onClose}>
+            cancel
+          </button>
+          <button type="submit" className="btn primary" disabled={submitting}>
+            {submitting ? '…' : '+ create probe'}
+          </button>
+        </div>
+      </form>
+    </div>
   );
 }

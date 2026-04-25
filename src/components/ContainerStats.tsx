@@ -3,15 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useWebSocket } from './providers/WebSocketProvider';
 import type { DockerContainerStats } from '@/lib/types';
-import {
-  ActivityIcon,
-  RefreshCwIcon,
-  PauseIcon,
-  PlayIcon,
-  Loader2Icon,
-  AlertCircleIcon,
-  InfoIcon,
-} from 'lucide-react';
+import { Loader2Icon } from 'lucide-react';
 
 const POLL_MS = 10_000;
 const HISTORY_LEN = 12;
@@ -44,17 +36,12 @@ export default function ContainerStats({ agentId }: { agentId: string }) {
     sendToAgent(agentId, { type: 'DockerStatsRequest' });
   }, [agentId, sendToAgent]);
 
-  // Reset state when the operator switches agents.
   useEffect(() => {
     setSnapshots(null);
     setError(null);
-    setPaused(false);
     historyRef.current = {};
   }, [agentId]);
 
-  // Subscribe to responses + drive polling. Polling pauses when the
-  // browser tab is hidden so an idle dashboard doesn't keep
-  // hammering docker stats.
   useEffect(() => {
     const unsub = onAgentMessage(agentId, (msg) => {
       if (msg.type !== 'DockerStatsResponse') return;
@@ -66,7 +53,6 @@ export default function ContainerStats({ agentId }: { agentId: string }) {
       }
       setError(msg.payload.error);
       setSnapshots(msg.payload.snapshots);
-      // Append to history rings.
       for (const s of msg.payload.snapshots) {
         const memPct =
           s.mem_limit_bytes > 0 ? (s.mem_bytes / s.mem_limit_bytes) * 100 : 0;
@@ -93,11 +79,8 @@ export default function ContainerStats({ agentId }: { agentId: string }) {
 
     const onVisibility = () => {
       visibleRef.current = document.visibilityState === 'visible';
-      if (visibleRef.current && !paused) {
-        startPolling();
-      } else {
-        stopPolling();
-      }
+      if (visibleRef.current && !paused) startPolling();
+      else stopPolling();
     };
     document.addEventListener('visibilitychange', onVisibility);
     visibleRef.current = document.visibilityState === 'visible';
@@ -111,134 +94,119 @@ export default function ContainerStats({ agentId }: { agentId: string }) {
   }, [agentId, onAgentMessage, refresh, paused]);
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between gap-3 flex-wrap">
-        <div className="flex items-center gap-2">
-          <ActivityIcon className="w-5 h-5 text-slate-400" />
-          <h2 className="text-base font-semibold">Container stats</h2>
-          <span className="text-xs text-slate-500">
-            {snapshots === null ? 'loading…' : `· ${snapshots.length}`}
-          </span>
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() => setPaused((p) => !p)}
-            className="text-xs flex items-center gap-1.5 px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-md border border-slate-700"
-            title={paused ? 'Resume polling' : 'Pause polling'}
-          >
-            {paused ? (
-              <PlayIcon className="w-3.5 h-3.5" />
-            ) : (
-              <PauseIcon className="w-3.5 h-3.5" />
-            )}
-            {paused ? 'Resume' : 'Pause'}
-          </button>
-          <button
-            type="button"
-            onClick={refresh}
-            className="text-xs flex items-center gap-1.5 px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-md"
-          >
-            <RefreshCwIcon className="w-3.5 h-3.5" />
-            Refresh now
-          </button>
-        </div>
-      </div>
-
-      <div className="rounded-md border border-slate-800 bg-slate-900/40 p-3 text-xs text-slate-400 flex items-start gap-2">
-        <InfoIcon className="w-4 h-4 mt-0.5 text-slate-500 shrink-0" />
-        <div className="space-y-1">
-          <p>
-            Stats are pulled <strong>on demand</strong>. Each tick runs{' '}
-            <code>docker stats --no-stream</code> on the agent — one short
-            docker daemon call per visible host. The agent has no background
-            polling loop; this view is the only thing that triggers it.
-          </p>
-          <p>
-            Cadence: every 10 s while this tab is in focus. The polling
-            pauses automatically when the browser tab is hidden, and the
-            Pause button stops it manually. Sparklines are kept in memory
-            only — there&apos;s no time-series store on the agent or server.
-          </p>
+    <div className="pane">
+      <div
+        className="panel"
+        style={{ background: 'var(--bg-2)', borderColor: 'var(--accent-bd)' }}
+      >
+        <div className="panel-body" style={{ fontSize: 11.5, color: 'var(--fg-1)' }}>
+          <div style={{ marginBottom: 4, color: 'var(--accent)' }}>
+            ▾ Cost banner
+          </div>
+          Stats are pulled <strong>on demand</strong>. Each tick runs{' '}
+          <code style={{ background: 'rgba(0,0,0,0.2)', padding: '0 4px' }}>
+            docker stats --no-stream
+          </code>{' '}
+          on the agent — one short docker daemon call per visible host. The agent
+          has no background polling loop. Polling pauses when the tab is hidden;
+          sparklines are kept in memory only.
         </div>
       </div>
 
       {error && (
-        <div className="flex items-start gap-2 text-sm text-red-300 bg-red-500/10 border border-red-500/30 rounded-md px-3 py-2">
-          <AlertCircleIcon className="w-4 h-4 mt-0.5 shrink-0" />
-          <span>{error}</span>
+        <div
+          style={{
+            padding: 10,
+            background: 'var(--err-bg)',
+            border: '1px solid var(--err-bd)',
+            borderRadius: 'var(--r)',
+            color: 'var(--err)',
+            fontFamily: 'var(--mono)',
+            fontSize: 11.5,
+          }}
+        >
+          {error}
         </div>
       )}
 
-      {snapshots === null ? (
-        <div className="flex items-center justify-center py-12 text-slate-500">
-          <Loader2Icon className="w-5 h-5 animate-spin" />
+      <div className="panel">
+        <div className="panel-head">
+          <div className="panel-title">
+            <span className="ico">▥</span> CONTAINER STATS
+            <span className="meta">
+              {snapshots === null ? 'loading…' : `${snapshots.length} running · 10s tick`}
+              {lastFetchAt &&
+                ` · last fetch ${Math.max(0, Math.floor((Date.now() - lastFetchAt) / 1000))}s ago`}
+              {paused && ' · paused'}
+            </span>
+          </div>
+          <div className="panel-actions">
+            <button className="btn" onClick={() => setPaused((p) => !p)}>
+              {paused ? '▶ resume' : '❚❚ pause'}
+            </button>
+            <button className="btn" onClick={refresh}>
+              ↻ refresh now
+            </button>
+          </div>
         </div>
-      ) : snapshots.length === 0 ? (
-        <div className="border border-dashed border-slate-800 rounded-md px-4 py-8 text-center text-sm text-slate-500">
-          No running containers.
-        </div>
-      ) : (
-        <>
-          <div className="rounded-md border border-slate-800 overflow-hidden">
-            <table className="w-full text-sm">
-              <thead className="bg-slate-900/60 text-[11px] uppercase tracking-wide text-slate-500">
+        <div className="panel-body flush">
+          {snapshots === null ? (
+            <div className="empty">
+              <Loader2Icon className="w-5 h-5 animate-spin" />
+            </div>
+          ) : snapshots.length === 0 ? (
+            <div className="empty">No running containers.</div>
+          ) : (
+            <table className="tbl">
+              <thead>
                 <tr>
-                  <th className="text-left px-3 py-2 font-medium">Name</th>
-                  <th className="text-right px-3 py-2 font-medium">CPU %</th>
-                  <th className="text-right px-3 py-2 font-medium">Mem</th>
-                  <th className="px-3 py-2"></th>
-                  <th className="text-right px-3 py-2 font-medium">Net I/O (rx/tx)</th>
-                  <th className="text-right px-3 py-2 font-medium">Blk I/O (r/w)</th>
-                  <th className="text-right px-3 py-2 font-medium">PIDs</th>
+                  <th>NAME</th>
+                  <th className="right">CPU%</th>
+                  <th>MEM</th>
+                  <th>SPARK</th>
+                  <th className="right">NET RX/TX</th>
+                  <th className="right">BLK R/W</th>
+                  <th className="right">PIDS</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-800">
+              <tbody>
                 {snapshots.map((s) => {
                   const memPct =
                     s.mem_limit_bytes > 0 ? (s.mem_bytes / s.mem_limit_bytes) * 100 : 0;
                   const hist = historyRef.current[s.id];
                   return (
-                    <tr key={s.id} className="bg-slate-900/30">
-                      <td className="px-3 py-2 text-slate-200 truncate max-w-[20ch]" title={s.name}>
+                    <tr key={s.id}>
+                      <td className="mono" style={{ color: 'var(--fg)' }} title={s.name}>
                         {s.name}
                       </td>
-                      <td className="px-3 py-2 text-right text-slate-300">
-                        {s.cpu_percent.toFixed(1)}
+                      <td className="right mono">{s.cpu_percent.toFixed(1)}</td>
+                      <td className="mono" style={{ fontSize: 11 }}>
+                        {fmtBytes(s.mem_bytes)} / {fmtBytes(s.mem_limit_bytes)}{' '}
+                        <span className="muted">({memPct.toFixed(1)}%)</span>
                       </td>
-                      <td className="px-3 py-2 text-right text-slate-300">
-                        <div>{fmtBytes(s.mem_bytes)} / {fmtBytes(s.mem_limit_bytes)}</div>
-                        <div className="text-[10px] text-slate-500">{memPct.toFixed(1)}%</div>
-                      </td>
-                      <td className="px-3 py-2">
+                      <td>
                         {hist && (
-                          <div className="flex flex-col gap-0.5">
-                            <Sparkline values={hist.cpu} max={100} color="#3b82f6" />
-                            <Sparkline values={hist.mem} max={100} color="#10b981" />
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                            <Sparkline values={hist.cpu} max={100} color="var(--info)" />
+                            <Sparkline values={hist.mem} max={100} color="var(--accent)" />
                           </div>
                         )}
                       </td>
-                      <td className="px-3 py-2 text-right text-xs text-slate-400">
+                      <td className="right mono">
                         {fmtBytes(s.net_rx_bytes)} / {fmtBytes(s.net_tx_bytes)}
                       </td>
-                      <td className="px-3 py-2 text-right text-xs text-slate-400">
+                      <td className="right mono">
                         {fmtBytes(s.blk_read_bytes)} / {fmtBytes(s.blk_write_bytes)}
                       </td>
-                      <td className="px-3 py-2 text-right text-slate-400">{s.pids}</td>
+                      <td className="right mono">{s.pids}</td>
                     </tr>
                   );
                 })}
               </tbody>
             </table>
-          </div>
-          {lastFetchAt && (
-            <p className="text-[11px] text-slate-500">
-              Last fetch {Math.max(0, Math.floor((Date.now() - lastFetchAt) / 1000))}s ago.
-              {paused && ' Polling paused.'}
-            </p>
           )}
-        </>
-      )}
+        </div>
+      </div>
     </div>
   );
 }
@@ -253,7 +221,7 @@ function Sparkline({
   color: string;
 }) {
   if (values.length < 2) {
-    return <div className="w-24 h-3" />;
+    return <div style={{ width: 96, height: 12 }} />;
   }
   const W = 96;
   const H = 12;
@@ -266,7 +234,7 @@ function Sparkline({
     })
     .join(' ');
   return (
-    <svg width={W} height={H} className="block">
+    <svg width={W} height={H} style={{ display: 'block' }}>
       <polyline
         points={points}
         fill="none"

@@ -9,7 +9,6 @@ import {
   useRef,
   useState,
 } from 'react';
-import { AlertCircleIcon, CheckCircleIcon, InfoIcon, XIcon } from 'lucide-react';
 
 type ToastKind = 'success' | 'error' | 'info';
 
@@ -58,7 +57,6 @@ export function UiProvider({ children }: { children: React.ReactNode }) {
 
   const value: UiContextValue = useMemo(() => ({ toast, confirm }), [toast, confirm]);
 
-  // Close confirm on Escape, accept on Enter.
   useEffect(() => {
     if (!pendingConfirm) return;
     const handler = (e: KeyboardEvent) => {
@@ -77,88 +75,108 @@ export function UiProvider({ children }: { children: React.ReactNode }) {
   return (
     <Ctx.Provider value={value}>
       {children}
-      {/* Toasts */}
-      <div className="fixed bottom-4 right-4 z-50 flex flex-col gap-2 max-w-sm">
+
+      <div className="toasts">
         {toasts.map((t) => (
           <div
             key={t.id}
-            className={`flex items-start gap-2 px-3 py-2 rounded-md shadow-xl text-sm border backdrop-blur-sm ${
-              t.kind === 'success'
-                ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-100'
-                : t.kind === 'error'
-                  ? 'bg-red-500/15 border-red-500/40 text-red-100'
-                  : 'bg-slate-900/90 border-slate-700 text-slate-100'
-            }`}
+            className={`toast ${t.kind === 'error' ? 'err' : t.kind === 'info' ? '' : ''}`}
+            style={{
+              borderLeftColor:
+                t.kind === 'success'
+                  ? 'var(--accent)'
+                  : t.kind === 'error'
+                    ? 'var(--err)'
+                    : 'var(--info)',
+            }}
           >
-            {t.kind === 'success' ? (
-              <CheckCircleIcon className="w-4 h-4 mt-0.5 shrink-0" />
-            ) : t.kind === 'error' ? (
-              <AlertCircleIcon className="w-4 h-4 mt-0.5 shrink-0" />
-            ) : (
-              <InfoIcon className="w-4 h-4 mt-0.5 shrink-0" />
-            )}
-            <span className="whitespace-pre-wrap break-words">{t.text}</span>
-            <button
-              type="button"
-              onClick={() => setToasts((prev) => prev.filter((x) => x.id !== t.id))}
-              className="ml-1 text-slate-400 hover:text-slate-100"
-              aria-label="Dismiss"
-            >
-              <XIcon className="w-3.5 h-3.5" />
-            </button>
+            <div className="row between" style={{ alignItems: 'flex-start' }}>
+              <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', minWidth: 0 }}>
+                <span
+                  style={{
+                    color:
+                      t.kind === 'success'
+                        ? 'var(--accent)'
+                        : t.kind === 'error'
+                          ? 'var(--err)'
+                          : 'var(--info)',
+                    marginRight: 6,
+                  }}
+                >
+                  {t.kind === 'success' ? '✓' : t.kind === 'error' ? '×' : 'i'}
+                </span>
+                {t.text}
+              </div>
+              <button
+                type="button"
+                onClick={() => setToasts((prev) => prev.filter((x) => x.id !== t.id))}
+                className="icon-btn"
+                style={{ width: 18, height: 18 }}
+                aria-label="Dismiss"
+              >
+                ×
+              </button>
+            </div>
           </div>
         ))}
       </div>
 
-      {/* Confirm modal */}
       {pendingConfirm && (
         <div
-          className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-sm flex items-center justify-center p-4"
+          className="modal-overlay"
           onClick={() => {
             pendingConfirm.resolve(false);
             setPendingConfirm(null);
           }}
         >
           <div
-            className="bg-slate-900 border border-slate-800 rounded-lg shadow-2xl max-w-md w-full"
+            className={`modal ${pendingConfirm.opts.destructive ? 'danger' : ''}`}
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="p-4">
-              <h3 className="text-base font-semibold text-slate-100">
-                {pendingConfirm.opts.title}
-              </h3>
-              {pendingConfirm.opts.description && (
-                <p className="text-sm text-slate-400 mt-2 whitespace-pre-wrap">
-                  {pendingConfirm.opts.description}
-                </p>
-              )}
+            <div className="panel-head">
+              <div
+                className="panel-title"
+                style={{
+                  color: pendingConfirm.opts.destructive ? 'var(--err)' : 'var(--accent)',
+                }}
+              >
+                {pendingConfirm.opts.destructive ? '⚠' : '?'} {pendingConfirm.opts.title}
+              </div>
             </div>
-            <div className="flex justify-end gap-2 px-4 py-3 border-t border-slate-800 bg-slate-900/50">
+            {pendingConfirm.opts.description && (
+              <div
+                className="panel-body"
+                style={{
+                  color: 'var(--fg-1)',
+                  fontSize: 12,
+                  whiteSpace: 'pre-wrap',
+                }}
+              >
+                {pendingConfirm.opts.description}
+              </div>
+            )}
+            <div className="modal-foot">
               <button
                 type="button"
+                className="btn"
                 onClick={() => {
                   pendingConfirm.resolve(false);
                   setPendingConfirm(null);
                 }}
-                className="px-3 py-1.5 rounded-md text-sm border border-slate-700 text-slate-300 hover:bg-slate-800 transition-colors"
               >
-                {pendingConfirm.opts.cancelLabel ?? 'Cancel'}
+                {pendingConfirm.opts.cancelLabel ?? 'cancel'}
               </button>
               <button
                 type="button"
                 autoFocus
+                className={`btn ${pendingConfirm.opts.destructive ? 'danger' : 'primary'}`}
                 onClick={() => {
                   pendingConfirm.resolve(true);
                   setPendingConfirm(null);
                 }}
-                className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
-                  pendingConfirm.opts.destructive
-                    ? 'bg-red-600 hover:bg-red-500 text-white'
-                    : 'bg-blue-600 hover:bg-blue-500 text-white'
-                }`}
               >
                 {pendingConfirm.opts.confirmLabel ??
-                  (pendingConfirm.opts.destructive ? 'Confirm' : 'OK')}
+                  (pendingConfirm.opts.destructive ? 'confirm' : 'ok')}
               </button>
             </div>
           </div>

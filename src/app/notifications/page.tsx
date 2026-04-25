@@ -6,18 +6,7 @@ import { useSession } from '@/components/providers/SessionProvider';
 import { useUi } from '@/components/providers/UiProvider';
 import { apiFetch } from '@/lib/api';
 import type { Notification } from '@/lib/types';
-import {
-  ArrowLeftIcon,
-  RefreshCwIcon,
-  Loader2Icon,
-  CheckCircleIcon,
-  AlertCircleIcon,
-  AlertTriangleIcon,
-  InfoIcon,
-  Trash2Icon,
-  CheckCheckIcon,
-  BellIcon,
-} from 'lucide-react';
+import { Loader2Icon } from 'lucide-react';
 
 const RELATIVE = (ts: number) => {
   if (!ts) return '—';
@@ -28,12 +17,14 @@ const RELATIVE = (ts: number) => {
   return `${Math.floor(delta / 86_400)}d ago`;
 };
 
+type LevelFilter = 'all' | 'unread' | 'error' | 'warn';
+
 export default function NotificationsPage() {
   const router = useRouter();
   const ui = useUi();
   const { status } = useSession();
   const [rows, setRows] = useState<Notification[] | null>(null);
-  const [unreadOnly, setUnreadOnly] = useState(false);
+  const [filter, setFilter] = useState<LevelFilter>('all');
 
   useEffect(() => {
     if (status === 'guest') router.replace('/login');
@@ -41,9 +32,10 @@ export default function NotificationsPage() {
 
   const refresh = useCallback(async () => {
     try {
-      const url = unreadOnly
-        ? '/api/notifications?unread=true&limit=200'
-        : '/api/notifications?limit=200';
+      const url =
+        filter === 'unread'
+          ? '/api/notifications?unread=true&limit=200'
+          : '/api/notifications?limit=200';
       const res = await apiFetch(url);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data: Notification[] = await res.json();
@@ -51,7 +43,7 @@ export default function NotificationsPage() {
     } catch (e) {
       ui.toast('error', `Load failed: ${(e as Error).message}`);
     }
-  }, [unreadOnly, ui]);
+  }, [filter, ui]);
 
   useEffect(() => {
     void refresh();
@@ -80,145 +72,189 @@ export default function NotificationsPage() {
 
   if (status === 'loading' || status === 'guest') {
     return (
-      <div className="flex h-screen items-center justify-center text-slate-500 bg-slate-950">
-        <Loader2Icon className="w-6 h-6 animate-spin" />
+      <div
+        className="app-shell"
+        style={{ alignItems: 'center', justifyContent: 'center' }}
+      >
+        <Loader2Icon className="w-6 h-6 animate-spin" style={{ color: 'var(--fg-2)' }} />
       </div>
     );
   }
 
+  const filtered = (rows ?? []).filter((n) => {
+    if (filter === 'unread') return n.read_at == null;
+    if (filter === 'error') return n.level === 'error';
+    if (filter === 'warn') return n.level === 'warn';
+    return true;
+  });
+  const unreadCount = (rows ?? []).filter((n) => n.read_at == null).length;
+
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100">
-      <header className="border-b border-slate-800 bg-slate-900">
-        <div className="max-w-4xl mx-auto px-6 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-3">
+    <div className="app-shell" style={{ gridTemplateColumns: '1fr' }}>
+      <main className="main">
+        <div className="topbar">
+          <div className="breadcrumb">
+            <span className="prompt">$</span>
             <button
               type="button"
+              className="nav-item"
               onClick={() => router.push('/')}
-              className="text-slate-400 hover:text-slate-100"
-              aria-label="Back"
+              style={{ height: 'auto', padding: '0 4px', display: 'inline-flex' }}
             >
-              <ArrowLeftIcon className="w-5 h-5" />
+              ←&nbsp;back
             </button>
-            <BellIcon className="w-5 h-5 text-slate-400" />
-            <h1 className="text-lg font-semibold">Notifications</h1>
+            <span className="sep">/</span>
+            <span className="here">notifications</span>
           </div>
-          <div className="flex items-center gap-2">
-            <label className="text-xs text-slate-400 flex items-center gap-1.5 select-none">
-              <input
-                type="checkbox"
-                checked={unreadOnly}
-                onChange={(e) => setUnreadOnly(e.target.checked)}
-                className="accent-blue-600"
-              />
-              Unread only
-            </label>
-            <button
-              type="button"
-              onClick={markAll}
-              className="text-xs flex items-center gap-1.5 px-2.5 py-1.5 border border-slate-700 rounded-md text-slate-300 hover:bg-slate-800"
-            >
-              <CheckCheckIcon className="w-3.5 h-3.5" />
-              Mark all read
-            </button>
-            <button
-              type="button"
-              onClick={refresh}
-              className="text-xs flex items-center gap-1.5 px-2.5 py-1.5 border border-slate-700 rounded-md text-slate-300 hover:bg-slate-800"
-            >
-              <RefreshCwIcon className="w-3.5 h-3.5" />
-              Refresh
+          <div className="topbar-actions">
+            <button className="btn" onClick={refresh}>
+              ↻ refresh
             </button>
           </div>
         </div>
-      </header>
 
-      <main className="max-w-4xl mx-auto px-6 py-6">
-        {rows === null ? (
-          <div className="flex items-center justify-center py-12 text-slate-500">
-            <Loader2Icon className="w-5 h-5 animate-spin" />
-          </div>
-        ) : rows.length === 0 ? (
-          <div className="border border-dashed border-slate-800 rounded-md py-16 text-center text-slate-500">
-            {unreadOnly ? 'No unread notifications.' : 'Inbox is empty.'}
-          </div>
-        ) : (
-          <ul className="space-y-2">
-            {rows.map((n) => (
-              <li
-                key={n.id}
-                className={`rounded-md border px-3 py-3 flex items-start gap-3 transition-colors ${
-                  n.read_at == null
-                    ? 'bg-slate-900 border-slate-700'
-                    : 'bg-slate-900/40 border-slate-800'
-                }`}
-              >
-                <LevelIcon level={n.level} />
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="text-sm font-medium text-slate-100 truncate">
-                      {n.title}
-                    </span>
-                    <span className="text-[10px] uppercase tracking-wide px-1 py-0.5 rounded bg-slate-800 text-slate-400">
-                      {n.kind}
-                    </span>
-                    {n.read_at == null && (
-                      <span className="text-[10px] uppercase tracking-wide px-1 py-0.5 rounded bg-blue-500/20 text-blue-300">
-                        new
-                      </span>
-                    )}
-                  </div>
-                  {n.body && (
-                    <pre className="mt-1.5 text-xs text-slate-400 whitespace-pre-wrap break-words bg-slate-950/40 rounded px-2 py-1.5 max-h-48 overflow-auto">
-                      {n.body}
-                    </pre>
-                  )}
-                  <div className="mt-1.5 text-[11px] text-slate-500">
-                    {RELATIVE(n.created_at)}
-                    {n.agent_id && (
-                      <>
-                        {' · '}
-                        <code className="text-slate-400">
-                          {n.agent_id.replace(/-id$/, '')}
-                        </code>
-                      </>
-                    )}
-                  </div>
+        <div className="scroll">
+          <div className="pane">
+            <div className="panel">
+              <div className="panel-head">
+                <div className="panel-title">
+                  <span className="ico">◇</span> NOTIFICATIONS
+                  <span className="meta">{unreadCount} unread</span>
                 </div>
-                <div className="flex items-center gap-1 shrink-0">
-                  {n.read_at == null && (
+                <div className="panel-actions">
+                  <div className="seg">
                     <button
-                      type="button"
-                      onClick={() => markRead(n.id)}
-                      title="Mark read"
-                      className="p-1.5 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800"
+                      className={filter === 'all' ? 'on' : ''}
+                      onClick={() => setFilter('all')}
                     >
-                      <CheckCircleIcon className="w-4 h-4" />
+                      all
                     </button>
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => remove(n.id)}
-                    title="Delete"
-                    className="p-1.5 rounded text-slate-400 hover:text-red-400 hover:bg-slate-800"
-                  >
-                    <Trash2Icon className="w-4 h-4" />
+                    <button
+                      className={filter === 'unread' ? 'on' : ''}
+                      onClick={() => setFilter('unread')}
+                    >
+                      unread
+                    </button>
+                    <button
+                      className={filter === 'error' ? 'on' : ''}
+                      onClick={() => setFilter('error')}
+                    >
+                      error
+                    </button>
+                    <button
+                      className={filter === 'warn' ? 'on' : ''}
+                      onClick={() => setFilter('warn')}
+                    >
+                      warn
+                    </button>
+                  </div>
+                  <button className="btn" onClick={markAll}>
+                    mark all read
                   </button>
                 </div>
-              </li>
-            ))}
-          </ul>
-        )}
+              </div>
+              <div className="panel-body flush">
+                {rows === null ? (
+                  <div className="empty">
+                    <Loader2Icon className="w-5 h-5 animate-spin" />
+                  </div>
+                ) : filtered.length === 0 ? (
+                  <div className="empty">
+                    {filter === 'unread' ? 'No unread notifications.' : 'Inbox is empty.'}
+                  </div>
+                ) : (
+                  filtered.map((n) => {
+                    const cls =
+                      n.level === 'error'
+                        ? 'err-c'
+                        : n.level === 'warn'
+                          ? 'warn-c'
+                          : 'info-c';
+                    const ico = n.level === 'error' ? '×' : n.level === 'warn' ? '!' : 'i';
+                    const unread = n.read_at == null;
+                    return (
+                      <div
+                        key={n.id}
+                        style={{
+                          display: 'grid',
+                          gridTemplateColumns: '24px 1fr auto',
+                          gap: 10,
+                          padding: '10px 14px',
+                          borderBottom: '1px solid var(--line)',
+                          background: unread ? 'var(--accent-bg)' : 'transparent',
+                        }}
+                      >
+                        <span
+                          className={cls}
+                          style={{
+                            fontFamily: 'var(--mono)',
+                            fontWeight: 700,
+                            textAlign: 'center',
+                          }}
+                        >
+                          {ico}
+                        </span>
+                        <div style={{ minWidth: 0 }}>
+                          <div
+                            style={{
+                              color: 'var(--fg)',
+                              fontFamily: 'var(--mono)',
+                              fontSize: 12.5,
+                            }}
+                          >
+                            {n.title}
+                          </div>
+                          {n.body && (
+                            <pre
+                              className="code"
+                              style={{
+                                fontSize: 11,
+                                marginTop: 4,
+                                maxHeight: 160,
+                                whiteSpace: 'pre-wrap',
+                                wordBreak: 'break-word',
+                              }}
+                            >
+                              {n.body}
+                            </pre>
+                          )}
+                          <div
+                            className="muted"
+                            style={{
+                              fontSize: 11,
+                              fontFamily: 'var(--mono)',
+                              marginTop: 4,
+                            }}
+                          >
+                            {n.kind}
+                            {n.agent_id ? ` · ${n.agent_id.replace(/-id$/, '')}` : ''}
+                            {' · '}
+                            {RELATIVE(n.created_at)}
+                          </div>
+                        </div>
+                        <div className="row" style={{ gap: 6, alignSelf: 'start' }}>
+                          {unread && (
+                            <button className="btn sm" onClick={() => markRead(n.id)}>
+                              mark read
+                            </button>
+                          )}
+                          <button
+                            className="btn sm icon danger"
+                            onClick={() => remove(n.id)}
+                            title="Delete"
+                          >
+                            ×
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
       </main>
     </div>
   );
-}
-
-function LevelIcon({ level }: { level: string }) {
-  if (level === 'error') {
-    return <AlertCircleIcon className="w-4 h-4 mt-0.5 text-red-400 shrink-0" />;
-  }
-  if (level === 'warn') {
-    return <AlertTriangleIcon className="w-4 h-4 mt-0.5 text-amber-400 shrink-0" />;
-  }
-  return <InfoIcon className="w-4 h-4 mt-0.5 text-slate-400 shrink-0" />;
 }

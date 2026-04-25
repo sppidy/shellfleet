@@ -4,15 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useWebSocket } from './providers/WebSocketProvider';
 import { useUi } from './providers/UiProvider';
 import type { DockerNetwork } from '@/lib/types';
-import {
-  NetworkIcon,
-  RefreshCwIcon,
-  Trash2Icon,
-  PlusIcon,
-  Loader2Icon,
-  AlertCircleIcon,
-  EyeIcon,
-} from 'lucide-react';
+import { Loader2Icon } from 'lucide-react';
 
 const REFRESH_MS = 15_000;
 
@@ -21,7 +13,6 @@ export default function ContainerNetworks({ agentId }: { agentId: string }) {
   const { sendToAgent, onAgentMessage } = useWebSocket();
   const [networks, setNetworks] = useState<DockerNetwork[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [creating, setCreating] = useState(false);
   const [removing, setRemoving] = useState<string | null>(null);
   const [inspectId, setInspectId] = useState<string | null>(null);
   const [inspectJson, setInspectJson] = useState<string | null>(null);
@@ -67,7 +58,6 @@ export default function ContainerNetworks({ agentId }: { agentId: string }) {
       } else if (msg.type === 'DockerNetworkCreateResponse') {
         if (msg.payload.success) {
           ui.toast('success', `Created network ${msg.payload.name}`);
-          setCreating(false);
         } else {
           ui.toast('error', msg.payload.error ?? 'create failed');
         }
@@ -102,115 +92,94 @@ export default function ContainerNetworks({ agentId }: { agentId: string }) {
   };
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between gap-3 flex-wrap">
-        <div className="flex items-center gap-2">
-          <NetworkIcon className="w-5 h-5 text-slate-400" />
-          <h2 className="text-base font-semibold">Networks</h2>
-          <span className="text-xs text-slate-500">
-            {networks === null ? 'loading…' : `· ${networks.length}`}
-          </span>
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={refresh}
-            className="text-xs flex items-center gap-1.5 px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-md"
-          >
-            <RefreshCwIcon className="w-3.5 h-3.5" />
-            Refresh
-          </button>
-          <button
-            type="button"
-            onClick={() => setCreating(true)}
-            className="text-xs flex items-center gap-1.5 px-2.5 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-md"
-          >
-            <PlusIcon className="w-3.5 h-3.5" />
-            Create
-          </button>
-        </div>
-      </div>
-
-      {creating && (
-        <CreateForm
-          agentId={agentId}
-          onClose={() => setCreating(false)}
-        />
-      )}
+    <div className="pane">
+      <CreateForm agentId={agentId} />
 
       {error && (
-        <div className="flex items-start gap-2 text-sm text-red-300 bg-red-500/10 border border-red-500/30 rounded-md px-3 py-2">
-          <AlertCircleIcon className="w-4 h-4 mt-0.5 shrink-0" />
-          <span>{error}</span>
+        <div
+          style={{
+            padding: 10,
+            background: 'var(--err-bg)',
+            border: '1px solid var(--err-bd)',
+            borderRadius: 'var(--r)',
+            color: 'var(--err)',
+            fontFamily: 'var(--mono)',
+            fontSize: 11.5,
+          }}
+        >
+          {error}
         </div>
       )}
 
-      {networks === null ? (
-        <div className="flex items-center justify-center py-12 text-slate-500">
-          <Loader2Icon className="w-5 h-5 animate-spin" />
+      <div className="panel">
+        <div className="panel-head">
+          <div className="panel-title">
+            <span className="ico">⊟</span> NETWORKS
+            <span className="meta">
+              {networks === null ? 'loading…' : `${networks.length} networks`}
+            </span>
+          </div>
+          <div className="panel-actions">
+            <button className="btn" onClick={refresh}>↻</button>
+          </div>
         </div>
-      ) : networks.length === 0 ? (
-        <div className="border border-dashed border-slate-800 rounded-md px-4 py-8 text-center text-sm text-slate-500">
-          No networks.
-        </div>
-      ) : (
-        <div className="rounded-md border border-slate-800 overflow-hidden">
-          <table className="w-full text-sm">
-            <thead className="bg-slate-900/60 text-[11px] uppercase tracking-wide text-slate-500">
-              <tr>
-                <th className="text-left px-3 py-2 font-medium">Name</th>
-                <th className="text-left px-3 py-2 font-medium">Driver</th>
-                <th className="text-left px-3 py-2 font-medium">Scope</th>
-                <th className="text-left px-3 py-2 font-medium">ID</th>
-                <th className="text-left px-3 py-2 font-medium">Flags</th>
-                <th className="px-3 py-2"></th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-800">
-              {networks.map((n) => (
-                <tr key={n.id} className="bg-slate-900/30">
-                  <td className="px-3 py-2 font-medium text-slate-200">{n.name}</td>
-                  <td className="px-3 py-2 text-slate-400">{n.driver}</td>
-                  <td className="px-3 py-2 text-slate-400">{n.scope}</td>
-                  <td className="px-3 py-2 font-mono text-xs text-slate-500" title={n.id}>
-                    {n.id.slice(0, 12)}
-                  </td>
-                  <td className="px-3 py-2 text-xs text-slate-400 space-x-1">
-                    {n.attachable && <span className="px-1 py-0.5 rounded bg-slate-800">attachable</span>}
-                    {n.internal && <span className="px-1 py-0.5 rounded bg-slate-800">internal</span>}
-                    {n.ipv6 && <span className="px-1 py-0.5 rounded bg-slate-800">ipv6</span>}
-                  </td>
-                  <td className="px-3 py-2 text-right">
-                    <div className="flex items-center justify-end gap-1">
-                      <button
-                        type="button"
-                        onClick={() => inspect(n)}
-                        title="Inspect"
-                        className="p-1.5 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800"
-                      >
-                        <EyeIcon className="w-4 h-4" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => remove(n)}
-                        disabled={removing === n.id}
-                        title="Remove"
-                        className="p-1.5 rounded text-slate-400 hover:text-red-300 hover:bg-slate-800 disabled:opacity-50"
-                      >
-                        {removing === n.id ? (
-                          <Loader2Icon className="w-4 h-4 animate-spin" />
-                        ) : (
-                          <Trash2Icon className="w-4 h-4" />
-                        )}
-                      </button>
-                    </div>
-                  </td>
+        <div className="panel-body flush">
+          {networks === null ? (
+            <div className="empty">
+              <Loader2Icon className="w-5 h-5 animate-spin" />
+            </div>
+          ) : networks.length === 0 ? (
+            <div className="empty">No networks.</div>
+          ) : (
+            <table className="tbl">
+              <thead>
+                <tr>
+                  <th>NAME</th>
+                  <th>DRIVER</th>
+                  <th>SCOPE</th>
+                  <th>ID</th>
+                  <th>FLAGS</th>
+                  <th style={{ width: 140 }} />
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {networks.map((n) => {
+                  const flags: string[] = [];
+                  if (n.attachable) flags.push('attachable');
+                  if (n.internal) flags.push('internal');
+                  if (n.ipv6) flags.push('ipv6');
+                  return (
+                    <tr key={n.id}>
+                      <td className="mono" style={{ color: 'var(--fg)' }}>
+                        {n.name}
+                      </td>
+                      <td className="mono">{n.driver}</td>
+                      <td className={`mono ${n.scope === 'swarm' ? 'info-c' : ''}`}>
+                        {n.scope}
+                      </td>
+                      <td className="mono muted">{n.id.slice(0, 12)}</td>
+                      <td className="mono">{flags.join(', ') || '—'}</td>
+                      <td className="actions">
+                        <button className="btn sm" onClick={() => inspect(n)}>
+                          inspect
+                        </button>
+                        <button
+                          className="btn sm icon danger"
+                          title="Remove"
+                          disabled={removing === n.id}
+                          onClick={() => remove(n)}
+                        >
+                          {removing === n.id ? '…' : '×'}
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
         </div>
-      )}
+      </div>
 
       {inspectId && (
         <InspectModal
@@ -226,12 +195,12 @@ export default function ContainerNetworks({ agentId }: { agentId: string }) {
   );
 }
 
-function CreateForm({ agentId, onClose }: { agentId: string; onClose: () => void }) {
+function CreateForm({ agentId }: { agentId: string }) {
   const { sendToAgent } = useWebSocket();
   const [name, setName] = useState('');
   const [driver, setDriver] = useState('bridge');
   const [subnet, setSubnet] = useState('');
-  const [attachable, setAttachable] = useState(false);
+  const [attachable, setAttachable] = useState(true);
   const [internal, setInternal] = useState(false);
 
   const submit = (e: React.FormEvent) => {
@@ -247,86 +216,88 @@ function CreateForm({ agentId, onClose }: { agentId: string; onClose: () => void
         internal,
       },
     });
+    setName('');
+    setSubnet('');
   };
 
   return (
-    <form
-      onSubmit={submit}
-      className="rounded-md border border-slate-800 bg-slate-900/40 p-3 space-y-3"
-    >
-      <div className="grid grid-cols-3 gap-3">
-        <label className="text-xs text-slate-400 flex flex-col gap-1">
-          Name
-          <input
-            type="text"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="my-network"
-            className="bg-slate-950 border border-slate-700 rounded-md px-2 py-1.5 font-mono text-sm text-slate-100"
-            required
-          />
-        </label>
-        <label className="text-xs text-slate-400 flex flex-col gap-1">
-          Driver
-          <select
-            value={driver}
-            onChange={(e) => setDriver(e.target.value)}
-            className="bg-slate-950 border border-slate-700 rounded-md px-2 py-1.5 text-sm text-slate-100"
-          >
-            <option value="bridge">bridge</option>
-            <option value="overlay">overlay (swarm manager only)</option>
-            <option value="macvlan">macvlan</option>
-            <option value="host">host</option>
-            <option value="none">none</option>
-          </select>
-        </label>
-        <label className="text-xs text-slate-400 flex flex-col gap-1">
-          Subnet (optional)
-          <input
-            type="text"
-            value={subnet}
-            onChange={(e) => setSubnet(e.target.value)}
-            placeholder="172.30.0.0/16"
-            className="bg-slate-950 border border-slate-700 rounded-md px-2 py-1.5 font-mono text-sm text-slate-100"
-          />
-        </label>
+    <div className="panel">
+      <div className="panel-head">
+        <div className="panel-title">
+          <span className="ico">⌑</span> CREATE NETWORK
+        </div>
       </div>
-      <div className="flex items-center gap-4 text-xs text-slate-300">
-        <label className="flex items-center gap-1.5">
-          <input
-            type="checkbox"
-            checked={attachable}
-            onChange={(e) => setAttachable(e.target.checked)}
-            className="accent-blue-600"
-          />
-          Attachable (overlay)
-        </label>
-        <label className="flex items-center gap-1.5">
-          <input
-            type="checkbox"
-            checked={internal}
-            onChange={(e) => setInternal(e.target.checked)}
-            className="accent-blue-600"
-          />
-          Internal (no external connectivity)
-        </label>
+      <div className="panel-body">
+        <form onSubmit={submit}>
+          <div className="grid-3" style={{ gap: 12 }}>
+            <div className="field">
+              <label>name</label>
+              <input
+                className="input"
+                type="text"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="proxy_net"
+                required
+              />
+            </div>
+            <div className="field">
+              <label>driver</label>
+              <select
+                className="select"
+                value={driver}
+                onChange={(e) => setDriver(e.target.value)}
+              >
+                <option value="bridge">bridge</option>
+                <option value="overlay">overlay (swarm manager)</option>
+                <option value="macvlan">macvlan</option>
+                <option value="host">host</option>
+                <option value="none">none</option>
+              </select>
+            </div>
+            <div className="field">
+              <label>subnet (optional)</label>
+              <input
+                className="input"
+                type="text"
+                value={subnet}
+                onChange={(e) => setSubnet(e.target.value)}
+                placeholder="10.20.0.0/24"
+              />
+            </div>
+          </div>
+          <div className="row between" style={{ marginTop: 12 }}>
+            <div className="row" style={{ gap: 18 }}>
+              <label
+                className="row"
+                style={{ gap: 6, fontSize: 11.5, color: 'var(--fg-1)' }}
+              >
+                <input
+                  type="checkbox"
+                  checked={attachable}
+                  onChange={(e) => setAttachable(e.target.checked)}
+                />
+                attachable
+              </label>
+              <label
+                className="row"
+                style={{ gap: 6, fontSize: 11.5, color: 'var(--fg-1)' }}
+              >
+                <input
+                  type="checkbox"
+                  checked={internal}
+                  onChange={(e) => setInternal(e.target.checked)}
+                />
+                internal
+              </label>
+            </div>
+            <button type="submit" className="btn primary">
+              + create
+            </button>
+          </div>
+        </form>
       </div>
-      <div className="flex justify-end gap-2">
-        <button
-          type="button"
-          onClick={onClose}
-          className="text-xs px-2.5 py-1.5 border border-slate-700 rounded-md text-slate-300 hover:bg-slate-800"
-        >
-          Cancel
-        </button>
-        <button
-          type="submit"
-          className="text-xs flex items-center gap-1.5 px-2.5 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-md"
-        >
-          Create
-        </button>
-      </div>
-    </form>
+    </div>
   );
 }
 
@@ -341,30 +312,23 @@ function InspectModal({
 }) {
   return (
     <div
-      className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-sm flex items-center justify-center p-4"
-      onClick={onClose}
+      className="modal-overlay"
+      onClick={(e) => e.target === e.currentTarget && onClose()}
     >
-      <div
-        className="bg-slate-900 border border-slate-800 rounded-lg shadow-2xl max-w-3xl w-full max-h-[80vh] flex flex-col"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="p-4 border-b border-slate-800 flex items-center justify-between">
-          <h3 className="text-base font-semibold text-slate-100">{title}</h3>
-          <button
-            type="button"
-            onClick={onClose}
-            className="text-slate-400 hover:text-slate-100"
-          >
+      <div className="modal" style={{ maxHeight: '80vh', display: 'flex', flexDirection: 'column' }}>
+        <div className="panel-head">
+          <div className="panel-title">{title}</div>
+          <button className="icon-btn" onClick={onClose}>
             ×
           </button>
         </div>
-        <div className="flex-1 overflow-auto p-4">
+        <div style={{ flex: 1, overflow: 'auto', padding: 12 }}>
           {json === null ? (
-            <div className="flex items-center justify-center py-8 text-slate-500">
+            <div className="empty">
               <Loader2Icon className="w-5 h-5 animate-spin" />
             </div>
           ) : (
-            <pre className="text-[11px] whitespace-pre-wrap break-words text-slate-300 bg-slate-950 rounded p-3 border border-slate-800">
+            <pre className="code" style={{ maxHeight: 'none', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
               {json}
             </pre>
           )}

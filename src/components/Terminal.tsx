@@ -8,12 +8,8 @@ import '@xterm/xterm/css/xterm.css';
 
 type TerminalProps = {
   agentId: string;
-  /** When set, opens `docker exec -it <container_id> <shell>` instead
-   * of the host shell. The agent routes TerminalData/TerminalResize
-   * to the active exec session if one exists. */
   containerId?: string;
   shell?: string;
-  /** Optional title rendered above the xterm canvas. */
   title?: string;
 };
 
@@ -28,9 +24,30 @@ export default function Terminal({ agentId, containerId, shell, title }: Termina
 
     const term = new XTerm({
       cursorBlink: true,
+      fontFamily: "JetBrains Mono, ui-monospace, 'SF Mono', Menlo, monospace",
+      fontSize: 12,
       theme: {
-        background: '#020617',
-        foreground: '#f8fafc',
+        background: '#06090b',
+        foreground: '#c8d3dc',
+        cursor: '#7fb069',
+        cursorAccent: '#06090b',
+        selectionBackground: 'rgba(127,176,105,0.25)',
+        black: '#0a0d0f',
+        red: '#e57373',
+        green: '#7fb069',
+        yellow: '#e6b450',
+        blue: '#82a8d4',
+        magenta: '#c885c4',
+        cyan: '#6ec1c1',
+        white: '#d8dee5',
+        brightBlack: '#4a525b',
+        brightRed: '#e57373',
+        brightGreen: '#a8d5a0',
+        brightYellow: '#f0c878',
+        brightBlue: '#82a8d4',
+        brightMagenta: '#d9a3d6',
+        brightCyan: '#93d4d4',
+        brightWhite: '#ffffff',
       },
     });
 
@@ -70,9 +87,6 @@ export default function Terminal({ agentId, containerId, shell, title }: Termina
     }
     setTimeout(() => handleResize(), 100);
 
-    // Subscribe directly so every TerminalData chunk is delivered. The
-    // earlier "lastAgentMessage" approach lost output when several chunks
-    // arrived in the same React tick.
     const unsubscribe = onAgentMessage(agentId, (msg) => {
       if (msg.type === 'TerminalData') {
         const bytes = new Uint8Array(msg.payload.data);
@@ -83,9 +97,6 @@ export default function Terminal({ agentId, containerId, shell, title }: Termina
     return () => {
       unsubscribe();
       window.removeEventListener('resize', handleResize);
-      // Tell the agent to drop the exec session when the modal closes.
-      // Host terminal sessions stay open across re-mounts so we don't
-      // emit a stop for those.
       if (containerId) {
         sendToAgent(agentId, { type: 'DockerExecStopRequest' });
       }
@@ -94,11 +105,25 @@ export default function Terminal({ agentId, containerId, shell, title }: Termina
   }, [agentId, sendToAgent, onAgentMessage, containerId, shell]);
 
   return (
-    <div className="h-full w-full p-2 flex flex-col">
-      <div className="flex justify-between items-center mb-2 px-2">
-        <h3 className="text-slate-300 font-medium">{title ?? 'Terminal'}</h3>
+    <div
+      style={{
+        height: '100%',
+        width: '100%',
+        display: 'flex',
+        flexDirection: 'column',
+        background: '#06090b',
+      }}
+    >
+      <div
+        className="panel-head"
+        style={{ background: 'var(--bg-1)', flexShrink: 0 }}
+      >
+        <div className="panel-title">
+          <span className="ico">›_</span> {title ?? 'SHELL'}
+          <span className="meta">root@{agentId.replace(/-id$/, '')}</span>
+        </div>
       </div>
-      <div ref={terminalRef} className="flex-1 overflow-hidden" />
+      <div ref={terminalRef} style={{ flex: 1, overflow: 'hidden', padding: 8 }} />
     </div>
   );
 }

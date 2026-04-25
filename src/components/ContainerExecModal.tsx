@@ -1,7 +1,6 @@
 'use client';
 
 import Terminal from './Terminal';
-import { XIcon, InfoIcon } from 'lucide-react';
 
 export default function ContainerExecModal({
   agentId,
@@ -17,41 +16,41 @@ export default function ContainerExecModal({
   onClose: () => void;
 }) {
   return (
-    <div
-      className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-sm flex items-center justify-center p-4"
-      onClick={onClose}
-    >
+    <div className="modal-overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
       <div
-        className="bg-slate-900 border border-slate-800 rounded-lg shadow-2xl max-w-4xl w-full h-[80vh] flex flex-col"
-        onClick={(e) => e.stopPropagation()}
+        className="modal"
+        style={{
+          width: 'min(1000px, 95vw)',
+          height: '80vh',
+          display: 'flex',
+          flexDirection: 'column',
+        }}
       >
-        <div className="px-4 py-3 border-b border-slate-800 flex items-center justify-between">
-          <div className="min-w-0">
-            <h3 className="text-sm font-semibold text-slate-100 truncate">
-              docker exec — {containerName}
-            </h3>
-            <p className="text-[11px] text-slate-500 mt-0.5 truncate">
-              container <code>{containerId.slice(0, 12)}</code> · shell{' '}
-              <code>{shell ?? 'sh'}</code>
-            </p>
+        <div className="panel-head">
+          <div className="panel-title">
+            <span className="ico">›_</span> docker exec
+            <span className="meta">
+              {containerName} · {containerId.slice(0, 12)} · shell {shell ?? 'sh'}
+            </span>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Close"
-            className="p-1 rounded text-slate-400 hover:bg-slate-800"
-          >
-            <XIcon className="w-4 h-4" />
+          <button className="icon-btn" onClick={onClose} aria-label="Close">
+            ×
           </button>
         </div>
-        <div className="px-3 py-2 border-b border-slate-800 text-[11px] text-slate-400 flex items-start gap-2">
-          <InfoIcon className="w-3.5 h-3.5 mt-0.5 text-slate-500 shrink-0" />
-          <span>
-            One exec session per host at a time. Closing this modal kills the
-            PTY on the agent — nothing keeps running in the background.
-          </span>
+        <div
+          style={{
+            padding: '6px 12px',
+            borderBottom: '1px solid var(--line)',
+            background: 'var(--bg-2)',
+            color: 'var(--fg-2)',
+            fontSize: 11,
+            fontFamily: 'var(--mono)',
+          }}
+        >
+          ▾ One exec session per host at a time. Closing this modal kills the PTY on the agent —
+          nothing keeps running in the background.
         </div>
-        <div className="flex-1 min-h-0 bg-slate-950">
+        <div style={{ flex: 1, minHeight: 0, background: '#06090b' }}>
           <Terminal
             agentId={agentId}
             containerId={containerId}
