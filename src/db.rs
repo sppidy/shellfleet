@@ -96,6 +96,22 @@ pub async fn init() -> Result<SqlitePool, sqlx::Error> {
         .execute(&pool)
         .await?;
 
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS update_windows (
+            agent_id TEXT PRIMARY KEY,
+            cron_expr TEXT NOT NULL,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            last_run_at INTEGER NOT NULL DEFAULT 0,
+            last_status TEXT,
+            last_log TEXT,
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        "#,
+    )
+    .execute(&pool)
+    .await?;
+
     migrate_legacy_tokens(&pool).await?;
 
     Ok(pool)
@@ -351,6 +367,103 @@ pub async fn record_audit(
     .bind(detail)
     .execute(pool)
     .await;
+}
+
+#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize)]
+pub struct UpdateWindowRow {
+    pub agent_id: String,
+    pub cron_expr: String,
+    pub enabled: i64,
+    pub last_run_at: i64,
+    pub last_status: Option<String>,
+    pub last_log: Option<String>,
+    pub updated_at: i64,
+}
+
+pub async fn list_update_windows(
+    pool: &SqlitePool,
+) -> Result<Vec<UpdateWindowRow>, sqlx::Error> {
+    sqlx::query_as::<_, UpdateWindowRow>(
+        "SELECT agent_id, cron_expr, enabled, last_run_at, last_status, last_log, updated_at \
+         FROM update_windows ORDER BY agent_id ASC",
+    )
+    .fetch_all(pool)
+    .await
+}
+
+pub async fn get_update_window(
+    pool: &SqlitePool,
+    agent_id: &str,
+) -> Result<Option<UpdateWindowRow>, sqlx::Error> {
+    sqlx::query_as::<_, UpdateWindowRow>(
+        "SELECT agent_id, cron_expr, enabled, last_run_at, last_status, last_log, updated_at \
+         FROM update_windows WHERE agent_id = ?",
+    )
+    .bind(agent_id)
+    .fetch_optional(pool)
+    .await
+}
+
+pub async fn upsert_update_window(
+    pool: &SqlitePool,
+    agent_id: &str,
+    cron_expr: &str,
+    enabled: bool,
+    now: i64,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        r#"
+        INSERT INTO update_windows (agent_id, cron_expr, enabled, updated_at)
+        VALUES (?1, ?2, ?3, ?4)
+        ON CONFLICT(agent_id) DO UPDATE SET
+            cron_expr = excluded.cron_expr,
+            enabled = excluded.enabled,
+            updated_at = excluded.updated_at
+        "#,
+    )
+    .bind(agent_id)
+    .bind(cron_expr)
+    .bind(if enabled { 1 } else { 0 })
+    .bind(now)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn delete_update_window(
+    pool: &SqlitePool,
+    agent_id: &str,
+) -> Result<bool, sqlx::Error> {
+    let res = sqlx::query("DELETE FROM update_windows WHERE agent_id = ?")
+        .bind(agent_id)
+        .execute(pool)
+        .await?;
+    Ok(res.rows_affected() > 0)
+}
+
+pub async fn record_update_window_result(
+    pool: &SqlitePool,
+    agent_id: &str,
+    last_run_at: i64,
+    last_status: &str,
+    last_log: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        r#"
+        UPDATE update_windows
+           SET last_run_at = ?2,
+               last_status = ?3,
+               last_log = ?4
+         WHERE agent_id = ?1
+        "#,
+    )
+    .bind(agent_id)
+    .bind(last_run_at)
+    .bind(last_status)
+    .bind(last_log)
+    .execute(pool)
+    .await?;
+    Ok(())
 }
 
 pub async fn recent_audit(pool: &SqlitePool, limit: i64) -> Result<Vec<AuditRow>, sqlx::Error> {

@@ -18,6 +18,8 @@ tower-http = { version = "0.6.8", features = ["fs", "cors", "trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 urlencoding = "2.1.3"
+cron = "0.12"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 
 # sqlx for the persistent token / pending-device / audit store. The
 # `bundled` libsqlite3-sys feature compiles sqlite into the binary so

@@ -2,6 +2,7 @@ mod auth;
 mod db;
 mod device_auth;
 mod tokens;
+mod update_windows;
 
 use axum::{
     extract::{Query, State, ws::{Message as WsMessage, WebSocket, WebSocketUpgrade}},
@@ -16,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use shared::{Message, UiMessage};
 use sqlx::SqlitePool;
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     net::SocketAddr,
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -43,6 +44,10 @@ pub struct AppState {
     pub ui_clients: Mutex<HashMap<u64, UiTx>>,
     pub ui_id_counter: AtomicU64,
     pub db: SqlitePool,
+    /// agent_ids currently expecting an `AptUpgradeResponse` that should
+    /// be attributed to the auto-update scheduler (or `run_now` button)
+    /// rather than a UI-driven upgrade. Cleared when the response lands.
+    pub scheduled_apt_runs: Mutex<HashSet<String>>,
 }
 
 #[derive(Deserialize)]
@@ -152,11 +157,15 @@ async fn main() {
         ui_clients: Mutex::new(HashMap::new()),
         ui_id_counter: AtomicU64::new(0),
         db: pool,
+        scheduled_apt_runs: Mutex::new(HashSet::new()),
     });
+
+    update_windows::spawn_scheduler(state.clone());
 
     let api_routes = Router::new()
         .nest("/device", device_auth::routes())
         .nest("/tokens", tokens::routes())
+        .nest("/update-windows", update_windows::routes())
         .route("/me", get(me_handler))
         .route("/healthz", get(healthz))
         .route("/audit", get(audit_handler))
@@ -329,11 +338,54 @@ async fn handle_agent_socket(socket: WebSocket, state: Arc<AppState>, token: Str
 
                     broadcast_agent_list(&state).await;
                 }
-                _ => {
+                other => {
                     if let Some(agent_id) = &agent_id_opt {
+                        // Auto-update window bookkeeping: if a scheduled
+                        // (or run-now) upgrade is in flight for this
+                        // agent, attribute the AptUpgradeResponse to it.
+                        if let Message::AptUpgradeResponse {
+                            success,
+                            log,
+                            error,
+                            ..
+                        } = &other
+                        {
+                            let mut sched = state.scheduled_apt_runs.lock().await;
+                            if sched.remove(agent_id) {
+                                drop(sched);
+                                let status = if *success { "success" } else { "failed" };
+                                let log_combined = match error {
+                                    Some(e) if !e.is_empty() => {
+                                        format!("{log}\n[error] {e}")
+                                    }
+                                    _ => log.clone(),
+                                };
+                                if let Err(e) = db::record_update_window_result(
+                                    &state.db,
+                                    agent_id,
+                                    now_unix(),
+                                    status,
+                                    &log_combined,
+                                )
+                                .await
+                                {
+                                    tracing::warn!(error = %e, "failed to persist update_window result");
+                                }
+                                db::record_audit(
+                                    &state.db,
+                                    now_unix(),
+                                    Some("scheduler"),
+                                    Some(agent_id),
+                                    "update_window.result",
+                                    *success,
+                                    error.as_deref(),
+                                )
+                                .await;
+                            }
+                        }
                         let ui_msg = UiMessage::AgentMessage {
                             agent_id: agent_id.clone(),
-                            message: parsed_msg,
+                            message: other,
                         };
                         let mut clients = state.ui_clients.lock().await;
                         clients.retain(|_id, ctx| ctx.send(ui_msg.clone()).is_ok());
