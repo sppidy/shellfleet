@@ -350,6 +350,31 @@ export type SwarmStackRow = {
   orchestrator: string;
 };
 
+export type DockerContainerStats = {
+  id: string;
+  name: string;
+  cpu_percent: number;
+  mem_bytes: number;
+  mem_limit_bytes: number;
+  net_rx_bytes: number;
+  net_tx_bytes: number;
+  blk_read_bytes: number;
+  blk_write_bytes: number;
+  pids: number;
+};
+
+export type DockerSystemPrunePayload = {
+  dry_run: boolean;
+  success: boolean;
+  reclaimed_bytes: number;
+  containers_removed: string[];
+  images_removed: string[];
+  networks_removed: string[];
+  volumes_removed: string[];
+  log: string;
+  error: string | null;
+};
+
 export type HealthSnapshotRow = {
   agent_id: string;
   total: number;
@@ -456,7 +481,14 @@ export type AgentMessagePayload =
   | { type: 'SwarmStackInspectRequest'; payload: { name: string } }
   | { type: 'SwarmStackInspectResponse'; payload: { name: string; success: boolean; services: SwarmService[]; tasks: SwarmTask[]; log: string; error: string | null } }
   | { type: 'SwarmStackRemoveRequest'; payload: { name: string } }
-  | { type: 'SwarmStackRemoveResponse'; payload: { name: string; success: boolean; log: string; error: string | null } };
+  | { type: 'SwarmStackRemoveResponse'; payload: { name: string; success: boolean; log: string; error: string | null } }
+  | { type: 'DockerSystemPruneRequest'; payload: { dry_run: boolean; prune_volumes: boolean } }
+  | { type: 'DockerSystemPruneResponse'; payload: DockerSystemPrunePayload }
+  | { type: 'DockerStatsRequest' }
+  | { type: 'DockerStatsResponse'; payload: { available: boolean; snapshots: DockerContainerStats[]; error: string | null } }
+  | { type: 'DockerExecStartRequest'; payload: { container_id: string; shell: string } }
+  | { type: 'DockerExecStartResponse'; payload: { container_id: string; success: boolean; error: string | null } }
+  | { type: 'DockerExecStopRequest' };
 
 export type UiMessage =
   | { type: 'ListAgentsRequest' }

@@ -20,9 +20,11 @@ import {
   PlayIcon,
   SquareIcon,
   ScrollTextIcon,
+  TerminalIcon,
 } from 'lucide-react';
 import LogViewer from './LogViewer';
 import SwarmServiceDrawer from './SwarmServiceDrawer';
+import ContainerExecModal from './ContainerExecModal';
 import { useUi } from './providers/UiProvider';
 
 const REFRESH_MS = 10_000;
@@ -57,6 +59,7 @@ export default function Containers({ agentId }: { agentId: string }) {
   } | null>(null);
   const [logViewer, setLogViewer] = useState<{ id: string; name: string } | null>(null);
   const [serviceDrawer, setServiceDrawer] = useState<string | null>(null);
+  const [execModal, setExecModal] = useState<{ id: string; name: string; shell: string } | null>(null);
   const { confirm } = useUi();
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -198,6 +201,7 @@ export default function Containers({ agentId }: { agentId: string }) {
                   });
                 }}
                 onShowLogs={() => setLogViewer({ id: c.id, name: c.names || c.id.slice(0, 12) })}
+                onShowShell={() => setExecModal({ id: c.id, name: c.names || c.id.slice(0, 12), shell: 'sh' })}
               />
             ))}
           </ul>
@@ -239,6 +243,16 @@ export default function Containers({ agentId }: { agentId: string }) {
           agentId={agentId}
           serviceName={serviceDrawer}
           onClose={() => setServiceDrawer(null)}
+        />
+      )}
+
+      {execModal && (
+        <ContainerExecModal
+          agentId={agentId}
+          containerId={execModal.id}
+          containerName={execModal.name}
+          shell={execModal.shell}
+          onClose={() => setExecModal(null)}
         />
       )}
 
@@ -503,12 +517,14 @@ function ContainerRow({
   disabled,
   onAction,
   onShowLogs,
+  onShowShell,
 }: {
   container: DockerContainer;
   pending: DockerContainerAction | null;
   disabled: boolean;
   onAction: (action: DockerContainerAction) => void;
   onShowLogs: () => void;
+  onShowShell: () => void;
 }) {
   const isRunning = container.state === 'running';
   const stateClasses = isRunning
@@ -551,6 +567,12 @@ function ContainerRow({
             icon={<ScrollTextIcon className="w-3.5 h-3.5" />}
             onClick={onShowLogs}
             disabled={disabled}
+          />
+          <ContainerActionButton
+            label="Shell"
+            icon={<TerminalIcon className="w-3.5 h-3.5" />}
+            onClick={onShowShell}
+            disabled={disabled || !isRunning}
           />
           <ContainerActionButton
             label={isRunning ? 'Stop' : 'Start'}

@@ -6,7 +6,18 @@ import { Terminal as XTerm } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 
-export default function Terminal({ agentId }: { agentId: string }) {
+type TerminalProps = {
+  agentId: string;
+  /** When set, opens `docker exec -it <container_id> <shell>` instead
+   * of the host shell. The agent routes TerminalData/TerminalResize
+   * to the active exec session if one exists. */
+  containerId?: string;
+  shell?: string;
+  /** Optional title rendered above the xterm canvas. */
+  title?: string;
+};
+
+export default function Terminal({ agentId, containerId, shell, title }: TerminalProps) {
   const { sendToAgent, onAgentMessage } = useWebSocket();
   const terminalRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<XTerm | null>(null);
@@ -49,7 +60,14 @@ export default function Terminal({ agentId }: { agentId: string }) {
     };
     window.addEventListener('resize', handleResize);
 
-    sendToAgent(agentId, { type: 'StartTerminalRequest' });
+    if (containerId) {
+      sendToAgent(agentId, {
+        type: 'DockerExecStartRequest',
+        payload: { container_id: containerId, shell: shell ?? 'sh' },
+      });
+    } else {
+      sendToAgent(agentId, { type: 'StartTerminalRequest' });
+    }
     setTimeout(() => handleResize(), 100);
 
     // Subscribe directly so every TerminalData chunk is delivered. The
@@ -65,14 +83,20 @@ export default function Terminal({ agentId }: { agentId: string }) {
     return () => {
       unsubscribe();
       window.removeEventListener('resize', handleResize);
+      // Tell the agent to drop the exec session when the modal closes.
+      // Host terminal sessions stay open across re-mounts so we don't
+      // emit a stop for those.
+      if (containerId) {
+        sendToAgent(agentId, { type: 'DockerExecStopRequest' });
+      }
       term.dispose();
     };
-  }, [agentId, sendToAgent, onAgentMessage]);
+  }, [agentId, sendToAgent, onAgentMessage, containerId, shell]);
 
   return (
     <div className="h-full w-full p-2 flex flex-col">
       <div className="flex justify-between items-center mb-2 px-2">
-        <h3 className="text-slate-300 font-medium">Terminal</h3>
+        <h3 className="text-slate-300 font-medium">{title ?? 'Terminal'}</h3>
       </div>
       <div ref={terminalRef} className="flex-1 overflow-hidden" />
     </div>
