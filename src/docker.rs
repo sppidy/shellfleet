@@ -1039,6 +1039,262 @@ pub async fn stack_tasks(name: &str) -> Result<Vec<shared::SwarmTask>, String> {
     Ok(out)
 }
 
+// ---------- system prune (v13) ----------
+
+#[derive(Default, Debug)]
+pub struct PruneOutcome {
+    pub success: bool,
+    pub reclaimed_bytes: u64,
+    pub containers_removed: Vec<String>,
+    pub images_removed: Vec<String>,
+    pub networks_removed: Vec<String>,
+    pub volumes_removed: Vec<String>,
+    pub log: String,
+    pub error: Option<String>,
+}
+
+/// Dry-run preview — uses `docker system df -v` to enumerate dangling
+/// resources without removing them. The numbers are an upper bound on
+/// what `docker system prune -a` would reclaim.
+pub async fn system_prune_preview(prune_volumes: bool) -> PruneOutcome {
+    let output = match Command::new("docker")
+        .args(["system", "df", "-v", "--format", "{{json .}}"])
+        .output()
+        .await
+    {
+        Ok(o) => o,
+        Err(e) => {
+            return PruneOutcome {
+                error: Some(format!("spawn: {e}")),
+                ..Default::default()
+            };
+        }
+    };
+    if !output.status.success() {
+        return PruneOutcome {
+            error: Some(String::from_utf8_lossy(&output.stderr).trim().to_string()),
+            ..Default::default()
+        };
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    // df -v emits a single JSON object; parse defensively.
+    #[derive(serde::Deserialize, Default)]
+    struct Df {
+        #[serde(rename = "Images", default)]
+        images: Vec<DfImage>,
+        #[serde(rename = "Containers", default)]
+        containers: Vec<DfContainer>,
+        #[serde(rename = "Volumes", default)]
+        volumes: Vec<DfVolume>,
+    }
+    #[derive(serde::Deserialize, Default)]
+    struct DfImage {
+        #[serde(rename = "ID", default)]
+        id: String,
+        #[serde(rename = "Containers", default)]
+        containers: i64,
+        #[serde(rename = "Size", default)]
+        size: String,
+    }
+    #[derive(serde::Deserialize, Default)]
+    struct DfContainer {
+        #[serde(rename = "ID", default)]
+        id: String,
+        #[serde(rename = "State", default)]
+        state: String,
+        #[serde(rename = "Size", default)]
+        size: String,
+    }
+    #[derive(serde::Deserialize, Default)]
+    struct DfVolume {
+        #[serde(rename = "Name", default)]
+        name: String,
+        #[serde(rename = "Links", default)]
+        links: i64,
+        #[serde(rename = "Size", default)]
+        size: String,
+    }
+    let parsed: Df = serde_json::from_str(&stdout).unwrap_or_default();
+    let mut out = PruneOutcome::default();
+    out.success = true;
+    let mut reclaimed: u64 = 0;
+    for img in parsed.images {
+        if img.containers == 0 {
+            out.images_removed.push(img.id.clone());
+            reclaimed += parse_docker_size(&img.size);
+        }
+    }
+    for c in parsed.containers {
+        if c.state == "exited" || c.state == "created" || c.state == "dead" {
+            out.containers_removed.push(c.id.clone());
+            reclaimed += parse_docker_size(&c.size);
+        }
+    }
+    if prune_volumes {
+        for v in parsed.volumes {
+            if v.links == 0 {
+                out.volumes_removed.push(v.name.clone());
+                reclaimed += parse_docker_size(&v.size);
+            }
+        }
+    }
+    out.reclaimed_bytes = reclaimed;
+    out.log = format!(
+        "preview: {} container(s), {} image(s), {} volume(s) — ~{} bytes\n",
+        out.containers_removed.len(),
+        out.images_removed.len(),
+        out.volumes_removed.len(),
+        out.reclaimed_bytes
+    );
+    out
+}
+
+/// Actually run `docker system prune -af [--volumes]`. The agent does not
+/// schedule this — it only fires in response to a UI request.
+pub async fn system_prune_apply(prune_volumes: bool) -> PruneOutcome {
+    let mut cmd = Command::new("docker");
+    cmd.args(["system", "prune", "-af"]);
+    if prune_volumes {
+        cmd.arg("--volumes");
+    }
+    let output = match cmd.output().await {
+        Ok(o) => o,
+        Err(e) => {
+            return PruneOutcome {
+                error: Some(format!("spawn: {e}")),
+                ..Default::default()
+            };
+        }
+    };
+    let log = combine_stdout_stderr(&output);
+    let success = output.status.success();
+    let mut out = PruneOutcome {
+        success,
+        log: log.clone(),
+        error: if success {
+            None
+        } else {
+            Some(format!("docker system prune exit {:?}", output.status.code()))
+        },
+        ..Default::default()
+    };
+    // Parse the textual prune output for removed names + reclaimed bytes.
+    let mut current_section: Option<&str> = None;
+    for line in log.lines() {
+        let l = line.trim();
+        match l {
+            "Deleted Containers:" => {
+                current_section = Some("containers");
+                continue;
+            }
+            "Deleted Images:" => {
+                current_section = Some("images");
+                continue;
+            }
+            "Deleted Networks:" => {
+                current_section = Some("networks");
+                continue;
+            }
+            "Deleted Volumes:" => {
+                current_section = Some("volumes");
+                continue;
+            }
+            _ => {}
+        }
+        if l.starts_with("Total reclaimed space:") {
+            let value = l.trim_start_matches("Total reclaimed space:").trim();
+            out.reclaimed_bytes = parse_docker_size(value);
+            current_section = None;
+            continue;
+        }
+        if l.is_empty() {
+            current_section = None;
+            continue;
+        }
+        match current_section {
+            Some("containers") => out.containers_removed.push(l.to_string()),
+            Some("images") => out.images_removed.push(l.to_string()),
+            Some("networks") => out.networks_removed.push(l.to_string()),
+            Some("volumes") => out.volumes_removed.push(l.to_string()),
+            _ => {}
+        }
+    }
+    out
+}
+
+// ---------- container stats snapshot (v13) ----------
+
+pub async fn container_stats() -> Result<Vec<shared::DockerContainerStats>, String> {
+    let output = match Command::new("docker")
+        .args(["stats", "--no-stream", "--format", "{{json .}}"])
+        .output()
+        .await
+    {
+        Ok(o) => o,
+        Err(e) => return Err(format!("spawn: {e}")),
+    };
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    #[derive(serde::Deserialize)]
+    struct Row {
+        #[serde(rename = "ID", default)]
+        id: String,
+        #[serde(rename = "Name", default)]
+        name: String,
+        #[serde(rename = "CPUPerc", default)]
+        cpu_perc: String,
+        #[serde(rename = "MemUsage", default)]
+        mem_usage: String,
+        #[serde(rename = "NetIO", default)]
+        net_io: String,
+        #[serde(rename = "BlockIO", default)]
+        block_io: String,
+        #[serde(rename = "PIDs", default)]
+        pids: String,
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut out = Vec::new();
+    for line in stdout.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let Ok(row) = serde_json::from_str::<Row>(line) else { continue };
+        // CPU % comes as "12.34%". Mem usage as "123.4MiB / 1.234GiB".
+        let cpu_percent = row
+            .cpu_perc
+            .trim_end_matches('%')
+            .trim()
+            .parse::<f32>()
+            .unwrap_or(0.0);
+        let (mem_bytes, mem_limit_bytes) = parse_pair(&row.mem_usage);
+        let (net_rx_bytes, net_tx_bytes) = parse_pair(&row.net_io);
+        let (blk_read_bytes, blk_write_bytes) = parse_pair(&row.block_io);
+        let pids = row.pids.parse::<u32>().unwrap_or(0);
+        out.push(shared::DockerContainerStats {
+            id: row.id,
+            name: row.name,
+            cpu_percent,
+            mem_bytes,
+            mem_limit_bytes,
+            net_rx_bytes,
+            net_tx_bytes,
+            blk_read_bytes,
+            blk_write_bytes,
+            pids,
+        });
+    }
+    Ok(out)
+}
+
+/// Parse "123.4MB / 1.234GB" or "1.2kB / 3.4kB" → (lhs_bytes, rhs_bytes).
+fn parse_pair(s: &str) -> (u64, u64) {
+    let parts: Vec<&str> = s.split('/').map(str::trim).collect();
+    let lhs = parts.first().map(|x| parse_docker_size(x)).unwrap_or(0);
+    let rhs = parts.get(1).map(|x| parse_docker_size(x)).unwrap_or(0);
+    (lhs, rhs)
+}
+
 pub async fn remove_stack(name: &str) -> (bool, String, Option<String>) {
     let output = match Command::new("docker")
         .args(["stack", "rm", name])

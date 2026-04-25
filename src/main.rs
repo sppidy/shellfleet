@@ -146,6 +146,7 @@ async fn main() {
     }
 
     let mut term_session: Option<terminal::TerminalSession> = None;
+    let mut exec_session: Option<terminal::TerminalSession> = None;
     let log_streams = logs::LogStreams::default();
     let journal_streams = journal::JournalStreams::default();
     let health_probes = health::HealthProbes::default();
@@ -733,14 +734,86 @@ async fn main() {
                                 }
                             }
                             Message::TerminalData { data } => {
-                                if let Some(session) = &term_session {
+                                // Route to exec session if active; fall back to host terminal.
+                                if let Some(session) = &exec_session {
+                                    let _ = session.tx_input.send(data);
+                                } else if let Some(session) = &term_session {
                                     let _ = session.tx_input.send(data);
                                 }
                             }
                             Message::TerminalResize { cols, rows } => {
-                                if let Some(session) = &term_session {
+                                if let Some(session) = &exec_session {
+                                    let _ = session.tx_resize.send((cols, rows));
+                                } else if let Some(session) = &term_session {
                                     let _ = session.tx_resize.send((cols, rows));
                                 }
+                            }
+                            Message::DockerExecStartRequest { container_id, shell } => {
+                                let tx_clone = tx.clone();
+                                // One exec session at a time — replace any existing.
+                                if let Some(prev) = exec_session.take() {
+                                    drop(prev);
+                                }
+                                let cid = container_id.clone();
+                                let shell_arg = shell.clone();
+                                match terminal::spawn_docker_exec(&cid, &shell_arg, tx.clone()) {
+                                    Ok(s) => {
+                                        exec_session = Some(s);
+                                        let _ = tx_clone.send(Message::DockerExecStartResponse {
+                                            container_id: cid,
+                                            success: true,
+                                            error: None,
+                                        });
+                                    }
+                                    Err(e) => {
+                                        let _ = tx_clone.send(Message::DockerExecStartResponse {
+                                            container_id: cid,
+                                            success: false,
+                                            error: Some(e),
+                                        });
+                                    }
+                                }
+                            }
+                            Message::DockerExecStopRequest => {
+                                // Drop the session — the writer thread exits when
+                                // tx_input is dropped, the read thread exits on EOF,
+                                // and the docker exec child reaps.
+                                exec_session = None;
+                            }
+                            Message::DockerSystemPruneRequest { dry_run, prune_volumes } => {
+                                let tx_clone = tx.clone();
+                                tokio::spawn(async move {
+                                    let outcome = if dry_run {
+                                        docker::system_prune_preview(prune_volumes).await
+                                    } else {
+                                        docker::system_prune_apply(prune_volumes).await
+                                    };
+                                    let _ = tx_clone.send(Message::DockerSystemPruneResponse {
+                                        dry_run,
+                                        success: outcome.success,
+                                        reclaimed_bytes: outcome.reclaimed_bytes,
+                                        containers_removed: outcome.containers_removed,
+                                        images_removed: outcome.images_removed,
+                                        networks_removed: outcome.networks_removed,
+                                        volumes_removed: outcome.volumes_removed,
+                                        log: outcome.log,
+                                        error: outcome.error,
+                                    });
+                                });
+                            }
+                            Message::DockerStatsRequest => {
+                                let tx_clone = tx.clone();
+                                tokio::spawn(async move {
+                                    let (available, snapshots, error) = match docker::container_stats().await {
+                                        Ok(v) => (true, v, None),
+                                        Err(e) => (false, Vec::new(), Some(e)),
+                                    };
+                                    let _ = tx_clone.send(Message::DockerStatsResponse {
+                                        available,
+                                        snapshots,
+                                        error,
+                                    });
+                                });
                             }
                             Message::ReadConfigRequest { path } => {
                                 let content = std::fs::read_to_string(&path);
