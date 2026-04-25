@@ -12,6 +12,9 @@ import ConfigEditor from '@/components/ConfigEditor';
 import SystemStats from '@/components/SystemStats';
 import Containers from '@/components/Containers';
 import ContainerImages from '@/components/ContainerImages';
+import ContainerNetworks from '@/components/ContainerNetworks';
+import ContainerVolumes from '@/components/ContainerVolumes';
+import SwarmStacks from '@/components/SwarmStacks';
 import AptManager from '@/components/AptManager';
 import FleetOverview from '@/components/FleetOverview';
 import Deploy from '@/components/Deploy';
@@ -37,11 +40,14 @@ import {
   MenuIcon,
   XIcon,
   ImageIcon,
+  NetworkIcon,
+  HardDriveIcon,
+  LayersIcon,
 } from 'lucide-react';
 
-type Tab = 'dashboard' | 'containers' | 'images' | 'deploy' | 'updates' | 'health' | 'backups' | 'config';
+type Tab = 'dashboard' | 'containers' | 'images' | 'networks' | 'volumes' | 'stacks' | 'deploy' | 'updates' | 'health' | 'backups' | 'config';
 
-const TABS: Tab[] = ['dashboard', 'containers', 'images', 'deploy', 'updates', 'health', 'backups', 'config'];
+const TABS: Tab[] = ['dashboard', 'containers', 'images', 'networks', 'volumes', 'stacks', 'deploy', 'updates', 'health', 'backups', 'config'];
 
 export default function Home() {
   return (
@@ -384,6 +390,24 @@ function HomeBody() {
                   label="Images"
                 />
                 <TabButton
+                  active={activeTab === 'networks'}
+                  onClick={() => setActiveTab('networks')}
+                  icon={<NetworkIcon className="w-4 h-4 mr-2" />}
+                  label="Networks"
+                />
+                <TabButton
+                  active={activeTab === 'volumes'}
+                  onClick={() => setActiveTab('volumes')}
+                  icon={<HardDriveIcon className="w-4 h-4 mr-2" />}
+                  label="Volumes"
+                />
+                <TabButton
+                  active={activeTab === 'stacks'}
+                  onClick={() => setActiveTab('stacks')}
+                  icon={<LayersIcon className="w-4 h-4 mr-2" />}
+                  label="Stacks"
+                />
+                <TabButton
                   active={activeTab === 'deploy'}
                   onClick={() => setActiveTab('deploy')}
                   icon={<RocketIcon className="w-4 h-4 mr-2" />}
@@ -440,6 +464,18 @@ function HomeBody() {
               ) : activeTab === 'images' ? (
                 <div className="flex-1 overflow-y-auto p-6 max-w-5xl mx-auto w-full">
                   <ContainerImages agentId={selectedAgent} />
+                </div>
+              ) : activeTab === 'networks' ? (
+                <div className="flex-1 overflow-y-auto p-6 max-w-5xl mx-auto w-full">
+                  <ContainerNetworks agentId={selectedAgent} />
+                </div>
+              ) : activeTab === 'volumes' ? (
+                <div className="flex-1 overflow-y-auto p-6 max-w-5xl mx-auto w-full">
+                  <ContainerVolumes agentId={selectedAgent} />
+                </div>
+              ) : activeTab === 'stacks' ? (
+                <div className="flex-1 overflow-y-auto p-6 max-w-5xl mx-auto w-full">
+                  <SwarmStacks agentId={selectedAgent} />
                 </div>
               ) : activeTab === 'deploy' ? (
                 <div className="flex-1 overflow-y-auto p-6">

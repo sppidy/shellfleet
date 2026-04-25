@@ -324,6 +324,32 @@ export type DockerImage = {
   created: string;
 };
 
+export type DockerNetwork = {
+  id: string;
+  name: string;
+  driver: string;
+  scope: string;
+  created: string;
+  ipv6: boolean;
+  internal: boolean;
+  attachable: boolean;
+};
+
+export type DockerVolume = {
+  name: string;
+  driver: string;
+  mountpoint: string;
+  size_bytes: number;
+  created: string;
+  labels: string;
+};
+
+export type SwarmStackRow = {
+  name: string;
+  services: number;
+  orchestrator: string;
+};
+
 export type HealthSnapshotRow = {
   agent_id: string;
   total: number;
@@ -408,7 +434,29 @@ export type AgentMessagePayload =
   | { type: 'DockerImageRemoveRequest'; payload: { id: string; force: boolean } }
   | { type: 'DockerImageRemoveResponse'; payload: { id: string; success: boolean; log: string; error: string | null } }
   | { type: 'DockerImagePullRequest'; payload: { reference: string } }
-  | { type: 'DockerImagePullResponse'; payload: { reference: string; success: boolean; log: string; error: string | null } };
+  | { type: 'DockerImagePullResponse'; payload: { reference: string; success: boolean; log: string; error: string | null } }
+  | { type: 'DockerNetworkListRequest' }
+  | { type: 'DockerNetworkListResponse'; payload: { available: boolean; networks: DockerNetwork[]; error: string | null } }
+  | { type: 'DockerNetworkInspectRequest'; payload: { id: string } }
+  | { type: 'DockerNetworkInspectResponse'; payload: { id: string; success: boolean; json: string; error: string | null } }
+  | { type: 'DockerNetworkCreateRequest'; payload: { name: string; driver: string; subnet?: string | null; attachable?: boolean; internal?: boolean } }
+  | { type: 'DockerNetworkCreateResponse'; payload: { name: string; success: boolean; id: string | null; log: string; error: string | null } }
+  | { type: 'DockerNetworkRemoveRequest'; payload: { id: string } }
+  | { type: 'DockerNetworkRemoveResponse'; payload: { id: string; success: boolean; log: string; error: string | null } }
+  | { type: 'DockerVolumeListRequest' }
+  | { type: 'DockerVolumeListResponse'; payload: { available: boolean; volumes: DockerVolume[]; error: string | null } }
+  | { type: 'DockerVolumeInspectRequest'; payload: { name: string } }
+  | { type: 'DockerVolumeInspectResponse'; payload: { name: string; success: boolean; json: string; error: string | null } }
+  | { type: 'DockerVolumeRemoveRequest'; payload: { name: string; force: boolean } }
+  | { type: 'DockerVolumeRemoveResponse'; payload: { name: string; success: boolean; log: string; error: string | null } }
+  | { type: 'DockerVolumePruneRequest' }
+  | { type: 'DockerVolumePruneResponse'; payload: { success: boolean; removed: string[]; space_reclaimed_bytes: number; log: string; error: string | null } }
+  | { type: 'SwarmStackListRequest' }
+  | { type: 'SwarmStackListResponse'; payload: { available: boolean; is_manager: boolean; stacks: SwarmStackRow[]; error: string | null } }
+  | { type: 'SwarmStackInspectRequest'; payload: { name: string } }
+  | { type: 'SwarmStackInspectResponse'; payload: { name: string; success: boolean; services: SwarmService[]; tasks: SwarmTask[]; log: string; error: string | null } }
+  | { type: 'SwarmStackRemoveRequest'; payload: { name: string } }
+  | { type: 'SwarmStackRemoveResponse'; payload: { name: string; success: boolean; log: string; error: string | null } };
 
 export type UiMessage =
   | { type: 'ListAgentsRequest' }
