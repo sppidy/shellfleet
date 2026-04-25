@@ -4,10 +4,48 @@ use serde::{Deserialize, Serialize};
 /// the wire format changes in a way the server needs to reject older agents
 /// for. Value `0` means "legacy agent that predates this field" — those
 /// still connect, just without the version-aware fast paths.
-pub const PROTOCOL_VERSION: u32 = 2;
+pub const PROTOCOL_VERSION: u32 = 3;
 
 fn default_protocol_version() -> u32 {
     0
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum SwarmRole {
+    NotInSwarm,
+    Worker,
+    Manager,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct DockerContainer {
+    pub id: String,
+    pub names: String,
+    pub image: String,
+    pub state: String,
+    pub status: String,
+    pub ports: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct SwarmService {
+    pub id: String,
+    pub name: String,
+    pub mode: String,
+    pub replicas: String,
+    pub image: String,
+    pub ports: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct SwarmNode {
+    pub id: String,
+    pub hostname: String,
+    pub status: String,
+    pub availability: String,
+    pub manager_status: String,
+    pub engine_version: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -94,6 +132,33 @@ pub enum Message {
         swap_free_kb: u64,
         root_disk_total_kb: u64,
         root_disk_used_kb: u64,
+    },
+
+    /// Request a list of Docker containers + the agent's swarm role.
+    /// Introduced in protocol_version 3.
+    DockerListRequest,
+
+    /// Container list (running + stopped) for the agent's local engine.
+    /// `available = false` when the agent can't reach `docker`.
+    DockerListResponse {
+        available: bool,
+        swarm_role: SwarmRole,
+        containers: Vec<DockerContainer>,
+        error: Option<String>,
+    },
+
+    /// Request swarm-wide info. Only meaningful on a manager node.
+    /// Introduced in protocol_version 3.
+    SwarmListRequest,
+
+    /// Swarm-wide services + node list. Empty (with `available=false` /
+    /// `is_manager=false`) if the agent isn't a manager.
+    SwarmListResponse {
+        available: bool,
+        is_manager: bool,
+        services: Vec<SwarmService>,
+        nodes: Vec<SwarmNode>,
+        error: Option<String>,
     },
 }
 
