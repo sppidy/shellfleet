@@ -198,6 +198,14 @@ async fn probe_exec(
     }
     let mut cmd = Command::new(&path);
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+    // Per-probe env (`KEY=VALUE`). Anything malformed is silently
+    // skipped — operators see the bad pair in the spec, not a
+    // mid-script failure.
+    for kv in &spec.env {
+        if let Some((k, v)) = kv.split_once('=') {
+            cmd.env(k, v);
+        }
+    }
     let child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => return (HealthProbeState::Red, format!("spawn: {e}")),

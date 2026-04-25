@@ -492,3 +492,162 @@ pub async fn list_swarm_nodes() -> Result<Vec<SwarmNode>, String> {
     Ok(out)
 }
 
+
+// ---------- images (v11) ----------
+
+pub async fn list_images() -> Result<Vec<shared::DockerImage>, String> {
+    // `docker images --format "{{json .}}"` emits one JSON object per
+    // image, ndjson-style. We parse defensively and skip rows that
+    // don't deserialise.
+    let output = match Command::new("docker")
+        .args([
+            "images",
+            "--no-trunc",
+            "--format",
+            "{{json .}}",
+        ])
+        .output()
+        .await
+    {
+        Ok(o) => o,
+        Err(e) => return Err(format!("spawn: {e}")),
+    };
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    #[derive(serde::Deserialize)]
+    struct Row {
+        #[serde(rename = "ID", default)]
+        id: String,
+        #[serde(rename = "Repository", default)]
+        repository: String,
+        #[serde(rename = "Tag", default)]
+        tag: String,
+        #[serde(rename = "Size", default)]
+        size: String,
+        #[serde(rename = "CreatedSince", default)]
+        created_since: String,
+        #[serde(rename = "CreatedAt", default)]
+        created_at: String,
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut out: Vec<shared::DockerImage> = Vec::new();
+    for line in stdout.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let Ok(row) = serde_json::from_str::<Row>(trimmed) else {
+            continue;
+        };
+        // Strip "sha256:" prefix from the id (cargo bin format leaves
+        // it; --no-trunc keeps it).
+        let id = row
+            .id
+            .strip_prefix("sha256:")
+            .unwrap_or(&row.id)
+            .to_string();
+        out.push(shared::DockerImage {
+            id,
+            repository: row.repository,
+            tag: row.tag,
+            size_bytes: parse_docker_size(&row.size),
+            created: if row.created_since.is_empty() {
+                row.created_at
+            } else {
+                row.created_since
+            },
+        });
+    }
+    Ok(out)
+}
+
+/// Parses docker's human-friendly size string ("12.3MB", "1.4GB", "894kB")
+/// into bytes. Returns 0 on parse failure rather than refusing the row.
+fn parse_docker_size(s: &str) -> u64 {
+    let s = s.trim();
+    if s.is_empty() {
+        return 0;
+    }
+    // Find where digits/decimal end.
+    let split = s
+        .find(|c: char| !(c.is_ascii_digit() || c == '.'))
+        .unwrap_or(s.len());
+    let (num, unit) = s.split_at(split);
+    let value: f64 = match num.parse() {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    let multiplier: f64 = match unit.trim().to_ascii_uppercase().as_str() {
+        "" | "B" => 1.0,
+        "KB" => 1_000.0,
+        "MB" => 1_000_000.0,
+        "GB" => 1_000_000_000.0,
+        "TB" => 1_000_000_000_000.0,
+        "KIB" => 1_024.0,
+        "MIB" => 1_024.0 * 1_024.0,
+        "GIB" => 1_024.0 * 1_024.0 * 1_024.0,
+        _ => return 0,
+    };
+    (value * multiplier) as u64
+}
+
+pub async fn remove_image(id: &str, force: bool) -> (bool, String, Option<String>) {
+    let mut cmd = Command::new("docker");
+    cmd.arg("rmi");
+    if force {
+        cmd.arg("--force");
+    }
+    cmd.arg(id);
+    let output = match cmd.output().await {
+        Ok(o) => o,
+        Err(e) => return (false, String::new(), Some(format!("spawn: {e}"))),
+    };
+    let log = combine_stdout_stderr(&output);
+    let success = output.status.success();
+    let err = if success {
+        None
+    } else {
+        Some(format!("docker rmi exit {:?}", output.status.code()))
+    };
+    (success, log, err)
+}
+
+pub async fn pull_image(reference: &str) -> (bool, String, Option<String>) {
+    let output = match Command::new("docker")
+        .args(["pull", reference])
+        .output()
+        .await
+    {
+        Ok(o) => o,
+        Err(e) => return (false, String::new(), Some(format!("spawn: {e}"))),
+    };
+    let log = combine_stdout_stderr(&output);
+    let success = output.status.success();
+    let err = if success {
+        None
+    } else {
+        Some(format!("docker pull exit {:?}", output.status.code()))
+    };
+    (success, log, err)
+}
+
+fn combine_stdout_stderr(output: &std::process::Output) -> String {
+    let mut s = String::new();
+    if !output.stdout.is_empty() {
+        s.push_str(&String::from_utf8_lossy(&output.stdout));
+    }
+    if !output.stderr.is_empty() {
+        if !s.is_empty() {
+            s.push_str("\n--- stderr ---\n");
+        }
+        s.push_str(&String::from_utf8_lossy(&output.stderr));
+    }
+    if s.len() > 8_000 {
+        let cut = s.len() - 8_000;
+        let head = format!("…[{cut} bytes truncated]…\n");
+        s.drain(..cut);
+        s.insert_str(0, &head);
+    }
+    s
+}

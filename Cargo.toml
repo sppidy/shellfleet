@@ -41,6 +41,20 @@ depends = "$auto, systemd"
 assets = [
     ["target/release/sys-manager-agent", "usr/bin/sys-manager-agent", "755"],
     ["debian/env.example", "etc/sys-manager/env.example", "644"],
+    # Stock probe library. Ships under /usr/share so apt owns the
+    # files; postinst symlinks them into /etc/sys-manager/probes.d/
+    # so the operator can `rm` individual entries to disable them
+    # without losing them on package upgrade.
+    ["debian/probes.d/apt-pending-count.sh",  "usr/share/sys-manager/probes.d/apt-pending-count.sh",  "755"],
+    ["debian/probes.d/disk-usage.sh",         "usr/share/sys-manager/probes.d/disk-usage.sh",         "755"],
+    ["debian/probes.d/failed-services.sh",    "usr/share/sys-manager/probes.d/failed-services.sh",    "755"],
+    ["debian/probes.d/swap-pressure.sh",      "usr/share/sys-manager/probes.d/swap-pressure.sh",      "755"],
+    ["debian/probes.d/load-average.sh",       "usr/share/sys-manager/probes.d/load-average.sh",       "755"],
+    ["debian/probes.d/docker-running.sh",     "usr/share/sys-manager/probes.d/docker-running.sh",     "755"],
+    ["debian/probes.d/swarm-pending.sh",      "usr/share/sys-manager/probes.d/swarm-pending.sh",      "755"],
+    ["debian/probes.d/cert-expiry-days.sh",   "usr/share/sys-manager/probes.d/cert-expiry-days.sh",   "755"],
+    ["debian/probes.d/journal-errors.sh",     "usr/share/sys-manager/probes.d/journal-errors.sh",     "755"],
+    ["debian/probes.d/ntp-drift.sh",          "usr/share/sys-manager/probes.d/ntp-drift.sh",          "755"],
 ]
 maintainer-scripts = "debian"
 

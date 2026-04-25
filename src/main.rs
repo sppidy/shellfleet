@@ -198,6 +198,45 @@ async fn main() {
                                     let _ = tx_clone.send(stats::snapshot().await);
                                 });
                             }
+                            Message::DockerImageListRequest => {
+                                let tx_clone = tx.clone();
+                                tokio::spawn(async move {
+                                    let (available, images, error) = match docker::list_images().await {
+                                        Ok(v) => (true, v, None),
+                                        Err(e) => (false, Vec::new(), Some(e)),
+                                    };
+                                    let _ = tx_clone.send(Message::DockerImageListResponse {
+                                        available,
+                                        images,
+                                        error,
+                                    });
+                                });
+                            }
+                            Message::DockerImageRemoveRequest { id, force } => {
+                                let tx_clone = tx.clone();
+                                tokio::spawn(async move {
+                                    let (success, log, error) =
+                                        docker::remove_image(&id, force).await;
+                                    let _ = tx_clone.send(Message::DockerImageRemoveResponse {
+                                        id,
+                                        success,
+                                        log,
+                                        error,
+                                    });
+                                });
+                            }
+                            Message::DockerImagePullRequest { reference } => {
+                                let tx_clone = tx.clone();
+                                tokio::spawn(async move {
+                                    let (success, log, error) = docker::pull_image(&reference).await;
+                                    let _ = tx_clone.send(Message::DockerImagePullResponse {
+                                        reference,
+                                        success,
+                                        log,
+                                        error,
+                                    });
+                                });
+                            }
                             Message::DockerListRequest => {
                                 let tx_clone = tx.clone();
                                 tokio::spawn(async move {
