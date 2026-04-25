@@ -33,6 +33,8 @@ import {
   ActivitySquareIcon,
   BellIcon,
   ArchiveIcon,
+  MenuIcon,
+  XIcon,
 } from 'lucide-react';
 
 type Tab = 'dashboard' | 'containers' | 'deploy' | 'updates' | 'health' | 'backups' | 'config';
@@ -72,6 +74,12 @@ function HomeBody() {
   const [selectedAgent, setSelectedAgent] = useState<string | null>(initialAgent);
   const [activeTab, setActiveTab] = useState<Tab>(initialTab);
   const [unreadCount, setUnreadCount] = useState<number>(0);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  // Auto-close mobile drawer when the user picks an agent / tab.
+  useEffect(() => {
+    setSidebarOpen(false);
+  }, [selectedAgent, activeTab]);
 
   useEffect(() => {
     let cancelled = false;
@@ -152,26 +160,77 @@ function HomeBody() {
   const agentLabel = selectedAgent?.replace(/-id$/, '');
 
   return (
-    <div className="flex h-screen overflow-hidden bg-slate-950 text-slate-100">
-      <aside className="w-72 bg-slate-900 border-r border-slate-800 flex flex-col z-10">
+    <div className="flex h-screen overflow-hidden bg-slate-950 text-slate-100 relative">
+      {/* Mobile-only top bar with hamburger. Hidden at md+. */}
+      <div className="md:hidden absolute top-0 left-0 right-0 h-12 bg-slate-900 border-b border-slate-800 flex items-center justify-between px-3 z-20">
+        <button
+          type="button"
+          onClick={() => setSidebarOpen(true)}
+          aria-label="Open menu"
+          className="p-1.5 rounded-md text-slate-300 hover:bg-slate-800"
+        >
+          <MenuIcon className="w-5 h-5" />
+        </button>
+        <h1 className="text-sm font-semibold text-slate-100 truncate">
+          {selectedAgent ? agentLabel : 'Sys Manager'}
+        </h1>
+        <span
+          className={`inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full border ${
+            isConnected
+              ? 'border-emerald-500/30 text-emerald-400 bg-emerald-500/5'
+              : 'border-red-500/30 text-red-400 bg-red-500/5'
+          }`}
+        >
+          <span
+            className={`w-1.5 h-1.5 rounded-full ${
+              isConnected ? 'bg-emerald-400' : 'bg-red-400'
+            }`}
+          />
+          {isConnected ? 'Live' : 'Offline'}
+        </span>
+      </div>
+
+      {/* Drawer backdrop for mobile. */}
+      {sidebarOpen && (
+        <div
+          className="md:hidden fixed inset-0 bg-slate-950/70 backdrop-blur-sm z-30"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
+
+      <aside
+        className={`fixed md:static inset-y-0 left-0 w-72 bg-slate-900 border-r border-slate-800 flex flex-col z-40 transform transition-transform md:transform-none ${
+          sidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'
+        }`}
+      >
         <div className="p-4 border-b border-slate-800">
           <div className="flex items-center justify-between">
             <h1 className="text-lg font-semibold">Sys Manager</h1>
-            <span
-              className={`inline-flex items-center gap-1.5 text-xs px-2 py-0.5 rounded-full border ${
-                isConnected
-                  ? 'border-emerald-500/30 text-emerald-400 bg-emerald-500/5'
-                  : 'border-red-500/30 text-red-400 bg-red-500/5'
-              }`}
-              title={isConnected ? 'WebSocket connected' : 'WebSocket disconnected'}
-            >
+            <div className="flex items-center gap-2">
               <span
-                className={`w-1.5 h-1.5 rounded-full ${
-                  isConnected ? 'bg-emerald-400' : 'bg-red-400'
+                className={`inline-flex items-center gap-1.5 text-xs px-2 py-0.5 rounded-full border ${
+                  isConnected
+                    ? 'border-emerald-500/30 text-emerald-400 bg-emerald-500/5'
+                    : 'border-red-500/30 text-red-400 bg-red-500/5'
                 }`}
-              />
-              {isConnected ? 'Live' : 'Offline'}
-            </span>
+                title={isConnected ? 'WebSocket connected' : 'WebSocket disconnected'}
+              >
+                <span
+                  className={`w-1.5 h-1.5 rounded-full ${
+                    isConnected ? 'bg-emerald-400' : 'bg-red-400'
+                  }`}
+                />
+                {isConnected ? 'Live' : 'Offline'}
+              </span>
+              <button
+                type="button"
+                onClick={() => setSidebarOpen(false)}
+                aria-label="Close menu"
+                className="md:hidden p-1 rounded-md text-slate-400 hover:bg-slate-800"
+              >
+                <XIcon className="w-4 h-4" />
+              </button>
+            </div>
           </div>
           <button
             type="button"
@@ -260,7 +319,7 @@ function HomeBody() {
         </div>
       </aside>
 
-      <main className="flex-1 flex flex-col overflow-hidden">
+      <main className="flex-1 flex flex-col overflow-hidden pt-12 md:pt-0">
         {selectedAgent ? (
           <div className="flex-1 flex flex-col h-full overflow-hidden">
             <div className="border-b border-slate-800 bg-slate-900 flex flex-col">
@@ -275,7 +334,7 @@ function HomeBody() {
                   Connected
                 </span>
               </div>
-              <div className="flex px-4 space-x-2 border-t border-slate-800">
+              <div className="flex px-4 space-x-2 border-t border-slate-800 overflow-x-auto">
                 <TabButton
                   active={activeTab === 'dashboard'}
                   onClick={() => setActiveTab('dashboard')}
@@ -323,8 +382,8 @@ function HomeBody() {
 
             <div className="flex-1 overflow-hidden flex flex-col bg-slate-950">
               {activeTab === 'dashboard' ? (
-                <div className="flex-1 flex overflow-hidden">
-                  <div className="w-1/2 flex flex-col border-r border-slate-800 overflow-hidden">
+                <div className="flex-1 flex flex-col md:flex-row overflow-hidden">
+                  <div className="w-full md:w-1/2 flex flex-col md:border-r border-slate-800 overflow-hidden">
                     <div className="p-4 border-b border-slate-800">
                       <SystemStats agentId={selectedAgent} />
                     </div>
@@ -332,7 +391,7 @@ function HomeBody() {
                       <ServiceList agentId={selectedAgent} />
                     </div>
                   </div>
-                  <div className="w-1/2 bg-slate-950">
+                  <div className="w-full md:w-1/2 bg-slate-950 min-h-[18rem]">
                     <Terminal agentId={selectedAgent} />
                   </div>
                 </div>

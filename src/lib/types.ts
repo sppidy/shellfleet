@@ -230,6 +230,7 @@ export type BackupJob = {
   dest: string;
   cron_expr: string | null;
   enabled: boolean;
+  mode: string;
   last_run_at: number;
   last_status: string | null;
   last_archive_path: string | null;
@@ -237,6 +238,19 @@ export type BackupJob = {
   last_log: string | null;
   updated_at: number;
   next_run_at: number | null;
+};
+
+export type BackupArchive = {
+  name: string;
+  uri: string;
+  bytes: number;
+  mtime: number;
+};
+
+export type BackupRestoreResponse = {
+  success: boolean;
+  log: string;
+  error: string | null;
 };
 
 export type LabelsResponse = {

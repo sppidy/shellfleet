@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { apiFetch } from '@/lib/api';
 import { useUi } from './providers/UiProvider';
-import type { BackupJob } from '@/lib/types';
+import type { BackupJob, BackupArchive, BackupRestoreResponse } from '@/lib/types';
 import {
   ArchiveIcon,
   PlusIcon,
@@ -14,6 +14,8 @@ import {
   AlertCircleIcon,
   CircleDashedIcon,
   ClockIcon,
+  FolderDownIcon,
+  RotateCcwIcon,
 } from 'lucide-react';
 
 const PRESETS: { label: string; expr: string }[] = [
@@ -119,10 +121,14 @@ export default function Backups({ agentId }: { agentId: string }) {
       </div>
 
       <p className="text-xs text-slate-500">
-        v1 supports local destinations on the agent host (e.g.{' '}
-        <code className="text-slate-400">/var/backups/sys-manager</code>) — S3-compatible
-        targets are reserved for v2. The agent runs <code>tar -czf</code> over the
-        listed paths.
+        Destinations: a local path on the agent host (e.g.{' '}
+        <code className="text-slate-400">/var/backups/sys-manager</code>) or
+        an <code className="text-slate-400">s3://bucket/prefix</code> URI.
+        S3 uploads use the agent host's <code>aws</code> CLI — install it
+        and configure credentials (env vars,{' '}
+        <code className="text-slate-400">~/.aws/credentials</code>, or{' '}
+        <code className="text-slate-400">AWS_ENDPOINT_URL</code> for
+        S3-compatible backends).
       </p>
 
       {creating && (
@@ -206,6 +212,7 @@ export default function Backups({ agentId }: { agentId: string }) {
                       </pre>
                     </details>
                   )}
+                  <ArchivesPanel job={j} />
                 </div>
                 <div className="flex items-center gap-1 shrink-0">
                   <button
@@ -268,6 +275,7 @@ function BackupForm({
   const [dest, setDest] = useState('/var/backups/sys-manager');
   const [cronExpr, setCronExpr] = useState('');
   const [enabled, setEnabled] = useState(true);
+  const [mode, setMode] = useState<'tar' | 'restic'>('tar');
   const [submitting, setSubmitting] = useState(false);
 
   const submit = async (e: React.FormEvent) => {
@@ -293,6 +301,7 @@ function BackupForm({
           dest,
           cron_expr: cronExpr.trim() || null,
           enabled,
+          mode,
         }),
       });
       if (!res.ok) {
@@ -326,17 +335,28 @@ function BackupForm({
           />
         </label>
         <label className="text-xs text-slate-400 flex flex-col gap-1">
-          Destination (local path on the agent)
+          Destination
           <input
             type="text"
             value={dest}
             onChange={(e) => setDest(e.target.value)}
-            placeholder="/var/backups/sys-manager"
+            placeholder="/var/backups/sys-manager  or  s3://bucket/prefix"
             className="bg-slate-950 border border-slate-700 rounded-md px-2 py-1.5 font-mono text-sm text-slate-100"
             required
           />
         </label>
       </div>
+      <label className="text-xs text-slate-400 flex flex-col gap-1 max-w-xs">
+        Mode
+        <select
+          value={mode}
+          onChange={(e) => setMode(e.target.value as 'tar' | 'restic')}
+          className="bg-slate-950 border border-slate-700 rounded-md px-2 py-1.5 text-sm text-slate-100"
+        >
+          <option value="tar">tar (gzip)</option>
+          <option value="restic">restic — not yet implemented</option>
+        </select>
+      </label>
       <label className="text-xs text-slate-400 flex flex-col gap-1">
         Paths to back up (one per line)
         <textarea
@@ -399,5 +419,227 @@ function BackupForm({
         </button>
       </div>
     </form>
+  );
+}
+
+function ArchivesPanel({ job }: { job: BackupJob }) {
+  const ui = useUi();
+  const [open, setOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [archives, setArchives] = useState<BackupArchive[] | null>(null);
+  const [restoreFor, setRestoreFor] = useState<BackupArchive | null>(null);
+
+  const load = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await apiFetch(`/api/backups/${job.id}/archives`, { method: 'POST' });
+      if (!res.ok) {
+        const t = await res.text();
+        throw new Error(t || `HTTP ${res.status}`);
+      }
+      const data: BackupArchive[] = await res.json();
+      setArchives(data);
+    } catch (e) {
+      setError((e as Error).message);
+      ui.toast('error', `List failed: ${(e as Error).message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const toggle = async () => {
+    const next = !open;
+    setOpen(next);
+    if (next && archives === null) {
+      await load();
+    }
+  };
+
+  return (
+    <details
+      open={open}
+      onToggle={(e) => {
+        const wasOpen = open;
+        const nowOpen = (e.currentTarget as HTMLDetailsElement).open;
+        if (nowOpen !== wasOpen) {
+          if (nowOpen && archives === null) void load();
+          setOpen(nowOpen);
+        }
+      }}
+      className="mt-2 rounded border border-slate-800 bg-slate-950"
+    >
+      <summary
+        className="cursor-pointer px-2 py-1 text-xs text-slate-400 hover:text-slate-200 flex items-center gap-2"
+        onClick={(e) => {
+          // We let the <details> toggle naturally; only log the request.
+          if (!archives && !loading) {
+            // First open will trigger load via onToggle.
+          }
+          // also call our state toggle for consistency
+        }}
+      >
+        <FolderDownIcon className="w-3.5 h-3.5" />
+        Archives
+        {archives && <span className="text-slate-500">· {archives.length}</span>}
+        {loading && <Loader2Icon className="w-3 h-3 animate-spin" />}
+      </summary>
+      <div className="border-t border-slate-800 p-2 space-y-1">
+        {error ? (
+          <div className="text-xs text-red-300">{error}</div>
+        ) : !archives ? (
+          <div className="text-xs text-slate-500">Loading…</div>
+        ) : archives.length === 0 ? (
+          <div className="text-xs text-slate-500 italic">No archives at this destination yet.</div>
+        ) : (
+          <ul className="space-y-1">
+            {archives.map((a) => (
+              <li
+                key={a.uri}
+                className="flex items-center justify-between gap-2 text-[11px] bg-slate-900 rounded px-2 py-1"
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="text-slate-200 truncate" title={a.name}>{a.name}</div>
+                  <div className="text-slate-500 truncate" title={a.uri}>
+                    {fmtBytes(a.bytes)} · {fmtTs(a.mtime)}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setRestoreFor(a)}
+                  className="text-xs flex items-center gap-1 px-2 py-1 rounded border border-slate-700 text-slate-300 hover:bg-slate-800"
+                >
+                  <RotateCcwIcon className="w-3 h-3" />
+                  Restore
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+        <div className="flex justify-end pt-1">
+          <button
+            type="button"
+            onClick={() => void load()}
+            disabled={loading}
+            className="text-[11px] px-2 py-0.5 text-slate-400 hover:text-slate-100 disabled:opacity-50"
+          >
+            ↻ refresh
+          </button>
+        </div>
+      </div>
+      {restoreFor && (
+        <RestoreModal
+          job={job}
+          archive={restoreFor}
+          onClose={() => setRestoreFor(null)}
+        />
+      )}
+    </details>
+  );
+}
+
+function RestoreModal({
+  job,
+  archive,
+  onClose,
+}: {
+  job: BackupJob;
+  archive: BackupArchive;
+  onClose: () => void;
+}) {
+  const ui = useUi();
+  const [destRoot, setDestRoot] = useState('/tmp/sys-manager-restore');
+  const [submitting, setSubmitting] = useState(false);
+  const [result, setResult] = useState<BackupRestoreResponse | null>(null);
+
+  const submit = async () => {
+    if (!destRoot.trim()) return;
+    setSubmitting(true);
+    setResult(null);
+    try {
+      const res = await apiFetch(`/api/backups/${job.id}/restore`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ archive_uri: archive.uri, dest_root: destRoot }),
+      });
+      if (!res.ok) {
+        const t = await res.text();
+        throw new Error(t || `HTTP ${res.status}`);
+      }
+      const data: BackupRestoreResponse = await res.json();
+      setResult(data);
+      if (data.success) {
+        ui.toast('success', `Restored into ${destRoot}`);
+      } else {
+        ui.toast('error', data.error || 'Restore failed');
+      }
+    } catch (e) {
+      ui.toast('error', `Restore failed: ${(e as Error).message}`);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-sm flex items-center justify-center p-4"
+      onClick={onClose}
+    >
+      <div
+        className="bg-slate-900 border border-slate-800 rounded-lg shadow-2xl max-w-lg w-full"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="p-4 space-y-3">
+          <div>
+            <h3 className="text-base font-semibold text-slate-100">Restore archive</h3>
+            <p className="text-xs text-slate-400 mt-1 font-mono break-all">{archive.uri}</p>
+          </div>
+          <label className="text-xs text-slate-400 flex flex-col gap-1">
+            Destination root on agent (the agent <code>tar -xzf</code>s into this dir; nothing is overwritten in place by default)
+            <input
+              type="text"
+              value={destRoot}
+              onChange={(e) => setDestRoot(e.target.value)}
+              className="bg-slate-950 border border-slate-700 rounded-md px-2 py-1.5 font-mono text-sm text-slate-100"
+            />
+          </label>
+          {result && (
+            <div
+              className={`text-xs rounded-md border px-3 py-2 ${
+                result.success
+                  ? 'border-emerald-500/30 bg-emerald-500/5 text-emerald-200'
+                  : 'border-red-500/30 bg-red-500/5 text-red-200'
+              }`}
+            >
+              {result.success ? 'Restore succeeded.' : `Restore failed: ${result.error ?? 'unknown'}`}
+              {result.log && (
+                <pre className="mt-2 whitespace-pre-wrap break-words max-h-48 overflow-auto text-slate-300 bg-slate-950/50 px-2 py-1 rounded">
+                  {result.log}
+                </pre>
+              )}
+            </div>
+          )}
+        </div>
+        <div className="flex justify-end gap-2 px-4 py-3 border-t border-slate-800 bg-slate-900/50">
+          <button
+            type="button"
+            onClick={onClose}
+            className="px-3 py-1.5 rounded-md text-sm border border-slate-700 text-slate-300 hover:bg-slate-800"
+          >
+            Close
+          </button>
+          <button
+            type="button"
+            onClick={submit}
+            disabled={submitting}
+            className="px-3 py-1.5 rounded-md text-sm font-medium bg-blue-600 hover:bg-blue-500 disabled:bg-slate-700 text-white"
+          >
+            {submitting && <Loader2Icon className="w-3.5 h-3.5 animate-spin inline mr-1" />}
+            Restore
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
