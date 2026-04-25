@@ -21,10 +21,16 @@ concurrency:
 
 jobs:
   build:
-    name: Build .deb (amd64)
-    runs-on: ubuntu-latest
-    outputs:
-      deb-name: ${{ steps.build.outputs.name }}
+    name: Build .deb (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
     steps:
       - name: Checkout main repo
         uses: actions/checkout@v4
@@ -64,6 +70,7 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
         with:
+          key: ${{ matrix.arch }}
           workspaces: |
             .
             agent
@@ -84,19 +91,20 @@ jobs:
           fi
 
       - name: Build agent + .deb
-        id: build
         shell: bash
         run: |
           set -euo pipefail
+          # cargo-deb infers Architecture from the host triple when no
+          # --target is given. Each runner is native to its arch, so a
+          # plain build produces a correct .deb for that arch.
           cargo deb --no-strip -p agent --deb-revision "${{ steps.rev.outputs.rev }}"
           deb=$(ls target/debian/sys-manager-agent_*.deb | head -n1)
           echo "deb path: $deb"
-          echo "name=$(basename "$deb")" >> "$GITHUB_OUTPUT"
 
       - name: Upload .deb artifact
         uses: actions/upload-artifact@v4
         with:
-          name: sys-manager-agent-deb
+          name: sys-manager-agent-deb-${{ matrix.arch }}
           path: target/debian/*.deb
           if-no-files-found: error
 
@@ -146,7 +154,7 @@ jobs:
           <title>sys-manager apt repo</title>
           <style>body{font:14px/1.5 system-ui,sans-serif;max-width:720px;margin:3rem auto;padding:0 1rem;color:#222}code,pre{font:13px/1.5 ui-monospace,monospace;background:#f4f4f5;padding:0.1rem 0.3rem;border-radius:3px}pre{padding:1rem;overflow-x:auto}</style>
           <h1>sys-manager apt repo</h1>
-          <p>Add to your apt sources:</p>
+          <p>Add to your apt sources (auto-detected per arch — amd64 + arm64 both published):</p>
           <pre>echo "deb [trusted=yes] https://sys-mgr-repo.sppidy.in stable main" \
             | sudo tee /etc/apt/sources.list.d/sys-manager.list
           sudo apt update
@@ -154,11 +162,17 @@ jobs:
           <p>See <a href="https://github.com/sppidy/sys-manager/blob/main/INSTALL.md">INSTALL.md</a> for full setup.</p>
           HTML
 
-      - name: Download .deb artifact
+      - name: Download amd64 artifact
         uses: actions/download-artifact@v4
         with:
-          name: sys-manager-agent-deb
-          path: incoming
+          name: sys-manager-agent-deb-amd64
+          path: incoming-amd64
+
+      - name: Download arm64 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: sys-manager-agent-deb-arm64
+          path: incoming-arm64
 
       - name: Refresh apt repo
         shell: bash
@@ -167,31 +181,40 @@ jobs:
           REPO=pages
           DIST=stable
           COMP=main
-          ARCH=amd64
-          mkdir -p "$REPO/pool/$COMP" "$REPO/dists/$DIST/$COMP/binary-$ARCH"
-          cp incoming/*.deb "$REPO/pool/$COMP/"
+          mkdir -p "$REPO/pool/$COMP"
+          mkdir -p "$REPO/dists/$DIST/$COMP/binary-amd64"
+          mkdir -p "$REPO/dists/$DIST/$COMP/binary-arm64"
+          cp incoming-amd64/*.deb "$REPO/pool/$COMP/"
+          cp incoming-arm64/*.deb "$REPO/pool/$COMP/"
 
-          # Trim old revisions: keep only the highest version for each package
-          # so the pool doesn't grow unbounded across CI runs.
+          # Trim old revisions per arch — keep the highest 5 per arch so
+          # the pool doesn't grow unbounded across CI runs.
           (
             cd "$REPO/pool/$COMP"
-            ls -1 sys-manager-agent_*_${ARCH}.deb 2>/dev/null \
-              | sort -V \
-              | head -n -5 \
-              | xargs -r rm -f
+            for arch in amd64 arm64; do
+              ls -1 sys-manager-agent_*_${arch}.deb 2>/dev/null \
+                | sort -V \
+                | head -n -5 \
+                | xargs -r rm -f
+            done
           )
 
           (
             cd "$REPO"
-            apt-ftparchive packages "pool/$COMP" > "dists/$DIST/$COMP/binary-$ARCH/Packages"
-            gzip -kf9 "dists/$DIST/$COMP/binary-$ARCH/Packages"
+            for arch in amd64 arm64; do
+              # apt-ftparchive's --arch filter restricts the Packages file
+              # to .debs of the matching architecture.
+              apt-ftparchive --arch "$arch" packages "pool/$COMP" \
+                > "dists/$DIST/$COMP/binary-$arch/Packages"
+              gzip -kf9 "dists/$DIST/$COMP/binary-$arch/Packages"
+            done
             cat > /tmp/apt-ftparchive.conf <<'EOF'
           APT::FTPArchive::Release::Origin "sys-manager";
           APT::FTPArchive::Release::Label "sys-manager";
           APT::FTPArchive::Release::Suite "stable";
           APT::FTPArchive::Release::Codename "stable";
           APT::FTPArchive::Release::Components "main";
-          APT::FTPArchive::Release::Architectures "amd64";
+          APT::FTPArchive::Release::Architectures "amd64 arm64";
           EOF
             apt-ftparchive -c /tmp/apt-ftparchive.conf release "dists/$DIST" > "dists/$DIST/Release"
           )
