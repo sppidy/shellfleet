@@ -1,3 +1,4 @@
+mod stats;
 mod systemd;
 mod terminal;
 
@@ -134,9 +135,21 @@ async fn main() {
                             Message::ListServicesRequest => {
                                 let tx_clone = tx.clone();
                                 tokio::spawn(async move {
-                                    if let Ok(services) = systemd::list_services().await {
-                                        let _ = tx_clone.send(Message::ListServicesResponse { services });
+                                    match systemd::list_services().await {
+                                        Ok(services) => {
+                                            let _ = tx_clone.send(Message::ListServicesResponse { services });
+                                        }
+                                        Err(e) => {
+                                            eprintln!("list_services failed: {e}");
+                                            let _ = tx_clone.send(Message::ListServicesResponse { services: Vec::new() });
+                                        }
                                     }
+                                });
+                            }
+                            Message::SystemStatsRequest => {
+                                let tx_clone = tx.clone();
+                                tokio::spawn(async move {
+                                    let _ = tx_clone.send(stats::snapshot().await);
                                 });
                             }
                             Message::ControlServiceRequest { name, action } => {
