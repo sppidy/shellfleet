@@ -211,6 +211,17 @@ export type SwarmStackDeployResponse = {
   error: string | null;
 };
 
+export type Notification = {
+  id: number;
+  kind: string;
+  agent_id: string | null;
+  level: 'info' | 'warn' | 'error' | string;
+  title: string;
+  body: string | null;
+  created_at: number;
+  read_at: number | null;
+};
+
 export type FanOutKind = 'apt-status' | 'apt-upgrade' | 'docker-list';
 
 export type FanOutRun = {

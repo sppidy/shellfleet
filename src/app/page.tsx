@@ -1,6 +1,7 @@
 'use client';
 
 import { Suspense, useEffect, useState } from 'react';
+import { apiFetch } from '@/lib/api';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useWebSocket } from '@/components/providers/WebSocketProvider';
 import { useSession } from '@/components/providers/SessionProvider';
@@ -28,6 +29,7 @@ import {
   RocketIcon,
   ActivityIcon,
   ActivitySquareIcon,
+  BellIcon,
 } from 'lucide-react';
 
 type Tab = 'dashboard' | 'containers' | 'deploy' | 'updates' | 'health' | 'config';
@@ -66,6 +68,27 @@ function HomeBody() {
 
   const [selectedAgent, setSelectedAgent] = useState<string | null>(initialAgent);
   const [activeTab, setActiveTab] = useState<Tab>(initialTab);
+  const [unreadCount, setUnreadCount] = useState<number>(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const res = await apiFetch('/api/notifications/unread-count');
+        if (!res.ok) return;
+        const j: { unread: number } = await res.json();
+        if (!cancelled) setUnreadCount(j.unread);
+      } catch {
+        /* ignore */
+      }
+    };
+    void load();
+    const t = setInterval(load, 10_000);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+    };
+  }, []);
 
   // When URL params change (e.g. via browser back), pull them into state.
   useEffect(() => {
@@ -182,6 +205,19 @@ function HomeBody() {
           >
             <ActivityIcon className="w-3.5 h-3.5" />
             Activity
+          </button>
+          <button
+            type="button"
+            onClick={() => router.push('/notifications')}
+            className="mt-2 w-full relative inline-flex items-center justify-center gap-1.5 text-xs font-medium py-1.5 px-3 rounded-md border border-slate-700 text-slate-300 hover:bg-slate-800 transition-colors"
+          >
+            <BellIcon className="w-3.5 h-3.5" />
+            Notifications
+            {unreadCount > 0 && (
+              <span className="absolute right-2 top-1/2 -translate-y-1/2 inline-flex items-center justify-center min-w-[1.25rem] h-5 px-1.5 text-[10px] font-semibold rounded-full bg-blue-600 text-white">
+                {unreadCount > 99 ? '99+' : unreadCount}
+              </span>
+            )}
           </button>
           <button
             type="button"
