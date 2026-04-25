@@ -1,4 +1,5 @@
 mod apt;
+mod deploy;
 mod docker;
 mod stats;
 mod systemd;
@@ -236,6 +237,40 @@ async fn main() {
                                     let (success, log, error) = apt::refresh().await;
                                     let _ = tx_clone.send(Message::AptRefreshResponse {
                                         success,
+                                        log,
+                                        error,
+                                    });
+                                });
+                            }
+                            Message::DockerCreateContainerRequest { spec } => {
+                                let tx_clone = tx.clone();
+                                tokio::spawn(async move {
+                                    let (success, container_id, log, error) = deploy::create_container(&spec).await;
+                                    let _ = tx_clone.send(Message::DockerCreateContainerResponse {
+                                        success,
+                                        container_id,
+                                        log,
+                                        error,
+                                    });
+                                });
+                            }
+                            Message::SwarmCreateServiceRequest { spec } => {
+                                let tx_clone = tx.clone();
+                                tokio::spawn(async move {
+                                    let role = docker::swarm_role().await;
+                                    if role != shared::SwarmRole::Manager {
+                                        let _ = tx_clone.send(Message::SwarmCreateServiceResponse {
+                                            success: false,
+                                            service_id: None,
+                                            log: String::new(),
+                                            error: Some("not a swarm manager".to_string()),
+                                        });
+                                        return;
+                                    }
+                                    let (success, service_id, log, error) = deploy::create_service(&spec).await;
+                                    let _ = tx_clone.send(Message::SwarmCreateServiceResponse {
+                                        success,
+                                        service_id,
                                         log,
                                         error,
                                     });
