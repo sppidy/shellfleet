@@ -49,10 +49,27 @@ sudo apt update && sudo apt install --only-upgrade sys-manager-agent
 unit restarts automatically on upgrade (`restart-after-upgrade` in the
 package's metadata).
 
-## Bootstrap GitHub Pages (one-time, repo owner)
+## Bootstrap (one-time, repo owner)
 
-1. Push to `main` once so the workflow runs and creates the `gh-pages` branch.
-2. In repo settings → Pages, set source to **Deploy from a branch** →
-   `gh-pages` / `/ (root)`.
-3. Subsequent pushes refresh `dists/stable/main/binary-amd64/Packages.gz` and
+The submodule repos (`sys-mngr-agent`, `sys-mngr-shared`, …) are private,
+so the runner needs a Personal Access Token with read access to them.
+
+1. Create a [fine-grained PAT](https://github.com/settings/personal-access-tokens/new)
+   - Resource owner: **sppidy**
+   - Repository access: **Only select repositories** → pick `sys-manager`,
+     `sys-mngr-agent`, `sys-mngr-shared`.
+   - Permissions → **Repository → Contents → Read-only**.
+2. On this repo (`sys-manager`), Settings → Secrets and variables → Actions
+   → New repository secret. Name: `SUBMODULES_PAT`. Value: the PAT.
+3. Push to `main` once so the workflow runs and creates the `gh-pages` branch.
+4. Repo Settings → Pages → Source = **Deploy from a branch** → `gh-pages` /
+   `/ (root)`.
+5. Subsequent pushes refresh `dists/stable/main/binary-amd64/Packages.gz` and
    the pool. Tagged releases also attach the `.deb` to the GitHub Release.
+
+Optional, for a signed apt repo:
+
+- Add `APT_GPG_PRIVATE_KEY` (ASCII-armored secret key) and (if encrypted)
+  `APT_GPG_PASSPHRASE`. The workflow then signs `dists/stable/Release` and
+  publishes the public key at `/sys-manager.gpg`. Drop `[trusted=yes]`
+  from the apt source line and `apt-key add` the published key instead.

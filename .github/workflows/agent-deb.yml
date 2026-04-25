@@ -31,6 +31,10 @@ jobs:
         with:
           submodules: recursive
           fetch-depth: 0
+          # Fine-grained PAT with read access to sys-mngr-agent and
+          # sys-mngr-shared (the only submodules this build needs).
+          # Required because those submodule repos are private.
+          token: ${{ secrets.SUBMODULES_PAT || secrets.GITHUB_TOKEN }}
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
