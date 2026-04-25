@@ -237,6 +237,196 @@ async fn main() {
                                     });
                                 });
                             }
+                            // ----- networks (v12) -----
+                            Message::DockerNetworkListRequest => {
+                                let tx_clone = tx.clone();
+                                tokio::spawn(async move {
+                                    let (available, networks, error) = match docker::list_networks().await {
+                                        Ok(v) => (true, v, None),
+                                        Err(e) => (false, Vec::new(), Some(e)),
+                                    };
+                                    let _ = tx_clone.send(Message::DockerNetworkListResponse {
+                                        available,
+                                        networks,
+                                        error,
+                                    });
+                                });
+                            }
+                            Message::DockerNetworkInspectRequest { id } => {
+                                let tx_clone = tx.clone();
+                                tokio::spawn(async move {
+                                    let (success, json, error) = docker::inspect_network(&id).await;
+                                    let _ = tx_clone.send(Message::DockerNetworkInspectResponse {
+                                        id,
+                                        success,
+                                        json,
+                                        error,
+                                    });
+                                });
+                            }
+                            Message::DockerNetworkCreateRequest { name, driver, subnet, attachable, internal } => {
+                                let tx_clone = tx.clone();
+                                tokio::spawn(async move {
+                                    let (success, id, log, error) = docker::create_network(
+                                        &name,
+                                        &driver,
+                                        subnet.as_deref(),
+                                        attachable,
+                                        internal,
+                                    ).await;
+                                    let _ = tx_clone.send(Message::DockerNetworkCreateResponse {
+                                        name,
+                                        success,
+                                        id,
+                                        log,
+                                        error,
+                                    });
+                                });
+                            }
+                            Message::DockerNetworkRemoveRequest { id } => {
+                                let tx_clone = tx.clone();
+                                tokio::spawn(async move {
+                                    let (success, log, error) = docker::remove_network(&id).await;
+                                    let _ = tx_clone.send(Message::DockerNetworkRemoveResponse {
+                                        id,
+                                        success,
+                                        log,
+                                        error,
+                                    });
+                                });
+                            }
+                            // ----- volumes (v12) -----
+                            Message::DockerVolumeListRequest => {
+                                let tx_clone = tx.clone();
+                                tokio::spawn(async move {
+                                    let (available, volumes, error) = match docker::list_volumes().await {
+                                        Ok(v) => (true, v, None),
+                                        Err(e) => (false, Vec::new(), Some(e)),
+                                    };
+                                    let _ = tx_clone.send(Message::DockerVolumeListResponse {
+                                        available,
+                                        volumes,
+                                        error,
+                                    });
+                                });
+                            }
+                            Message::DockerVolumeInspectRequest { name } => {
+                                let tx_clone = tx.clone();
+                                tokio::spawn(async move {
+                                    let (success, json, error) = docker::inspect_volume(&name).await;
+                                    let _ = tx_clone.send(Message::DockerVolumeInspectResponse {
+                                        name,
+                                        success,
+                                        json,
+                                        error,
+                                    });
+                                });
+                            }
+                            Message::DockerVolumeRemoveRequest { name, force } => {
+                                let tx_clone = tx.clone();
+                                tokio::spawn(async move {
+                                    let (success, log, error) = docker::remove_volume(&name, force).await;
+                                    let _ = tx_clone.send(Message::DockerVolumeRemoveResponse {
+                                        name,
+                                        success,
+                                        log,
+                                        error,
+                                    });
+                                });
+                            }
+                            Message::DockerVolumePruneRequest => {
+                                let tx_clone = tx.clone();
+                                tokio::spawn(async move {
+                                    let (success, removed, space_reclaimed_bytes, log, error) =
+                                        docker::prune_volumes().await;
+                                    let _ = tx_clone.send(Message::DockerVolumePruneResponse {
+                                        success,
+                                        removed,
+                                        space_reclaimed_bytes,
+                                        log,
+                                        error,
+                                    });
+                                });
+                            }
+                            // ----- swarm stacks (v12, manager-only) -----
+                            Message::SwarmStackListRequest => {
+                                let tx_clone = tx.clone();
+                                tokio::spawn(async move {
+                                    let role = docker::swarm_role().await;
+                                    let is_manager = role == shared::SwarmRole::Manager;
+                                    if !is_manager {
+                                        let _ = tx_clone.send(Message::SwarmStackListResponse {
+                                            available: false,
+                                            is_manager: false,
+                                            stacks: Vec::new(),
+                                            error: None,
+                                        });
+                                        return;
+                                    }
+                                    let (stacks, err) = match docker::list_stacks().await {
+                                        Ok(s) => (s, None),
+                                        Err(e) => (Vec::new(), Some(e)),
+                                    };
+                                    let _ = tx_clone.send(Message::SwarmStackListResponse {
+                                        available: err.is_none(),
+                                        is_manager: true,
+                                        stacks,
+                                        error: err,
+                                    });
+                                });
+                            }
+                            Message::SwarmStackInspectRequest { name } => {
+                                let tx_clone = tx.clone();
+                                tokio::spawn(async move {
+                                    let role = docker::swarm_role().await;
+                                    if role != shared::SwarmRole::Manager {
+                                        let _ = tx_clone.send(Message::SwarmStackInspectResponse {
+                                            name,
+                                            success: false,
+                                            services: Vec::new(),
+                                            tasks: Vec::new(),
+                                            log: String::new(),
+                                            error: Some("not a swarm manager".to_string()),
+                                        });
+                                        return;
+                                    }
+                                    let services = docker::stack_services(&name).await.unwrap_or_default();
+                                    let (tasks, err) = match docker::stack_tasks(&name).await {
+                                        Ok(t) => (t, None),
+                                        Err(e) => (Vec::new(), Some(e)),
+                                    };
+                                    let _ = tx_clone.send(Message::SwarmStackInspectResponse {
+                                        name,
+                                        success: err.is_none(),
+                                        services,
+                                        tasks,
+                                        log: String::new(),
+                                        error: err,
+                                    });
+                                });
+                            }
+                            Message::SwarmStackRemoveRequest { name } => {
+                                let tx_clone = tx.clone();
+                                tokio::spawn(async move {
+                                    let role = docker::swarm_role().await;
+                                    if role != shared::SwarmRole::Manager {
+                                        let _ = tx_clone.send(Message::SwarmStackRemoveResponse {
+                                            name,
+                                            success: false,
+                                            log: String::new(),
+                                            error: Some("not a swarm manager".to_string()),
+                                        });
+                                        return;
+                                    }
+                                    let (success, log, error) = docker::remove_stack(&name).await;
+                                    let _ = tx_clone.send(Message::SwarmStackRemoveResponse {
+                                        name,
+                                        success,
+                                        log,
+                                        error,
+                                    });
+                                });
+                            }
                             Message::DockerListRequest => {
                                 let tx_clone = tx.clone();
                                 tokio::spawn(async move {

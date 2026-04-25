@@ -651,3 +651,409 @@ fn combine_stdout_stderr(output: &std::process::Output) -> String {
     }
     s
 }
+
+// ---------- networks (v12) ----------
+
+pub async fn list_networks() -> Result<Vec<shared::DockerNetwork>, String> {
+    let output = match Command::new("docker")
+        .args(["network", "ls", "--no-trunc", "--format", "{{json .}}"])
+        .output()
+        .await
+    {
+        Ok(o) => o,
+        Err(e) => return Err(format!("spawn: {e}")),
+    };
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    #[derive(serde::Deserialize)]
+    struct Row {
+        #[serde(rename = "ID", default)]
+        id: String,
+        #[serde(rename = "Name", default)]
+        name: String,
+        #[serde(rename = "Driver", default)]
+        driver: String,
+        #[serde(rename = "Scope", default)]
+        scope: String,
+        #[serde(rename = "CreatedAt", default)]
+        created_at: String,
+        #[serde(rename = "IPv6", default)]
+        ipv6: String,
+        #[serde(rename = "Internal", default)]
+        internal: String,
+        #[serde(rename = "Attachable", default)]
+        attachable: String,
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut out = Vec::new();
+    for line in stdout.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let Ok(row) = serde_json::from_str::<Row>(line) else { continue };
+        out.push(shared::DockerNetwork {
+            id: row.id,
+            name: row.name,
+            driver: row.driver,
+            scope: row.scope,
+            created: row.created_at,
+            ipv6: matches!(row.ipv6.as_str(), "true" | "True" | "1"),
+            internal: matches!(row.internal.as_str(), "true" | "True" | "1"),
+            attachable: matches!(row.attachable.as_str(), "true" | "True" | "1"),
+        });
+    }
+    Ok(out)
+}
+
+pub async fn inspect_network(id: &str) -> (bool, String, Option<String>) {
+    let output = match Command::new("docker")
+        .args(["network", "inspect", id])
+        .output()
+        .await
+    {
+        Ok(o) => o,
+        Err(e) => return (false, String::new(), Some(format!("spawn: {e}"))),
+    };
+    let success = output.status.success();
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    if success {
+        (true, stdout, None)
+    } else {
+        (false, stdout, Some(stderr))
+    }
+}
+
+pub async fn create_network(
+    name: &str,
+    driver: &str,
+    subnet: Option<&str>,
+    attachable: bool,
+    internal: bool,
+) -> (bool, Option<String>, String, Option<String>) {
+    let mut cmd = Command::new("docker");
+    cmd.args(["network", "create", "--driver", driver]);
+    if let Some(s) = subnet {
+        if !s.is_empty() {
+            cmd.args(["--subnet", s]);
+        }
+    }
+    if attachable {
+        cmd.arg("--attachable");
+    }
+    if internal {
+        cmd.arg("--internal");
+    }
+    cmd.arg(name);
+    let output = match cmd.output().await {
+        Ok(o) => o,
+        Err(e) => return (false, None, String::new(), Some(format!("spawn: {e}"))),
+    };
+    let log = combine_stdout_stderr(&output);
+    if output.status.success() {
+        let id = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        (true, Some(id), log, None)
+    } else {
+        (false, None, log, Some(format!("docker network create exit {:?}", output.status.code())))
+    }
+}
+
+pub async fn remove_network(id: &str) -> (bool, String, Option<String>) {
+    let output = match Command::new("docker")
+        .args(["network", "rm", id])
+        .output()
+        .await
+    {
+        Ok(o) => o,
+        Err(e) => return (false, String::new(), Some(format!("spawn: {e}"))),
+    };
+    let log = combine_stdout_stderr(&output);
+    let success = output.status.success();
+    let err = if success {
+        None
+    } else {
+        Some(format!("docker network rm exit {:?}", output.status.code()))
+    };
+    (success, log, err)
+}
+
+// ---------- volumes (v12) ----------
+
+pub async fn list_volumes() -> Result<Vec<shared::DockerVolume>, String> {
+    let output = match Command::new("docker")
+        .args(["volume", "ls", "--format", "{{json .}}"])
+        .output()
+        .await
+    {
+        Ok(o) => o,
+        Err(e) => return Err(format!("spawn: {e}")),
+    };
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    #[derive(serde::Deserialize)]
+    struct Row {
+        #[serde(rename = "Name", default)]
+        name: String,
+        #[serde(rename = "Driver", default)]
+        driver: String,
+        #[serde(rename = "Mountpoint", default)]
+        mountpoint: String,
+        #[serde(rename = "Size", default)]
+        size: String,
+        #[serde(rename = "Labels", default)]
+        labels: String,
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut out = Vec::new();
+    for line in stdout.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let Ok(row) = serde_json::from_str::<Row>(line) else { continue };
+        out.push(shared::DockerVolume {
+            name: row.name,
+            driver: row.driver,
+            mountpoint: row.mountpoint,
+            size_bytes: parse_docker_size(&row.size),
+            created: String::new(),
+            labels: row.labels,
+        });
+    }
+    Ok(out)
+}
+
+pub async fn inspect_volume(name: &str) -> (bool, String, Option<String>) {
+    let output = match Command::new("docker")
+        .args(["volume", "inspect", name])
+        .output()
+        .await
+    {
+        Ok(o) => o,
+        Err(e) => return (false, String::new(), Some(format!("spawn: {e}"))),
+    };
+    let success = output.status.success();
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    if success {
+        (true, stdout, None)
+    } else {
+        (false, stdout, Some(stderr))
+    }
+}
+
+pub async fn remove_volume(name: &str, force: bool) -> (bool, String, Option<String>) {
+    let mut cmd = Command::new("docker");
+    cmd.args(["volume", "rm"]);
+    if force {
+        cmd.arg("--force");
+    }
+    cmd.arg(name);
+    let output = match cmd.output().await {
+        Ok(o) => o,
+        Err(e) => return (false, String::new(), Some(format!("spawn: {e}"))),
+    };
+    let log = combine_stdout_stderr(&output);
+    let success = output.status.success();
+    let err = if success {
+        None
+    } else {
+        Some(format!("docker volume rm exit {:?}", output.status.code()))
+    };
+    (success, log, err)
+}
+
+pub async fn prune_volumes() -> (bool, Vec<String>, u64, String, Option<String>) {
+    let output = match Command::new("docker")
+        .args(["volume", "prune", "--force"])
+        .output()
+        .await
+    {
+        Ok(o) => o,
+        Err(e) => return (false, Vec::new(), 0, String::new(), Some(format!("spawn: {e}"))),
+    };
+    let log = combine_stdout_stderr(&output);
+    if !output.status.success() {
+        return (
+            false,
+            Vec::new(),
+            0,
+            log,
+            Some(format!("docker volume prune exit {:?}", output.status.code())),
+        );
+    }
+    let mut removed = Vec::new();
+    let mut reclaimed_bytes: u64 = 0;
+    let mut in_deleted = false;
+    for line in log.lines() {
+        let l = line.trim();
+        if l.starts_with("Deleted Volumes") {
+            in_deleted = true;
+            continue;
+        }
+        if l.starts_with("Total reclaimed space:") {
+            in_deleted = false;
+            let value = l.trim_start_matches("Total reclaimed space:").trim();
+            reclaimed_bytes = parse_docker_size(value);
+            continue;
+        }
+        if in_deleted && !l.is_empty() {
+            removed.push(l.to_string());
+        }
+    }
+    (true, removed, reclaimed_bytes, log, None)
+}
+
+// ---------- swarm stacks (v12, manager-only) ----------
+
+pub async fn list_stacks() -> Result<Vec<shared::SwarmStack>, String> {
+    let output = match Command::new("docker")
+        .args(["stack", "ls", "--format", "{{json .}}"])
+        .output()
+        .await
+    {
+        Ok(o) => o,
+        Err(e) => return Err(format!("spawn: {e}")),
+    };
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    #[derive(serde::Deserialize)]
+    struct Row {
+        #[serde(rename = "Name", default)]
+        name: String,
+        #[serde(rename = "Services", default)]
+        services: String,
+        #[serde(rename = "Orchestrator", default)]
+        orchestrator: String,
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut out = Vec::new();
+    for line in stdout.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let Ok(row) = serde_json::from_str::<Row>(line) else { continue };
+        out.push(shared::SwarmStack {
+            name: row.name,
+            services: row.services.parse().unwrap_or(0),
+            orchestrator: row.orchestrator,
+        });
+    }
+    Ok(out)
+}
+
+pub async fn stack_services(name: &str) -> Result<Vec<shared::SwarmService>, String> {
+    let output = match Command::new("docker")
+        .args(["stack", "services", "--format", "{{json .}}", name])
+        .output()
+        .await
+    {
+        Ok(o) => o,
+        Err(e) => return Err(format!("spawn: {e}")),
+    };
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    #[derive(serde::Deserialize)]
+    struct Row {
+        #[serde(rename = "ID", default)]
+        id: String,
+        #[serde(rename = "Name", default)]
+        name: String,
+        #[serde(rename = "Mode", default)]
+        mode: String,
+        #[serde(rename = "Replicas", default)]
+        replicas: String,
+        #[serde(rename = "Image", default)]
+        image: String,
+        #[serde(rename = "Ports", default)]
+        ports: String,
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut out = Vec::new();
+    for line in stdout.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let Ok(row) = serde_json::from_str::<Row>(line) else { continue };
+        out.push(shared::SwarmService {
+            id: row.id,
+            name: row.name,
+            mode: row.mode,
+            replicas: row.replicas,
+            image: row.image,
+            ports: row.ports,
+        });
+    }
+    Ok(out)
+}
+
+pub async fn stack_tasks(name: &str) -> Result<Vec<shared::SwarmTask>, String> {
+    let output = match Command::new("docker")
+        .args(["stack", "ps", "--no-trunc", "--format", "{{json .}}", name])
+        .output()
+        .await
+    {
+        Ok(o) => o,
+        Err(e) => return Err(format!("spawn: {e}")),
+    };
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    #[derive(serde::Deserialize)]
+    struct Row {
+        #[serde(rename = "ID", default)]
+        id: String,
+        #[serde(rename = "Name", default)]
+        name: String,
+        #[serde(rename = "Node", default)]
+        node: String,
+        #[serde(rename = "DesiredState", default)]
+        desired_state: String,
+        #[serde(rename = "CurrentState", default)]
+        current_state: String,
+        #[serde(rename = "Error", default)]
+        error: String,
+        #[serde(rename = "Image", default)]
+        image: String,
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut out = Vec::new();
+    for line in stdout.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let Ok(row) = serde_json::from_str::<Row>(line) else { continue };
+        out.push(shared::SwarmTask {
+            id: row.id,
+            name: row.name,
+            node: row.node,
+            desired_state: row.desired_state,
+            current_state: row.current_state,
+            error: row.error,
+            image: row.image,
+        });
+    }
+    Ok(out)
+}
+
+pub async fn remove_stack(name: &str) -> (bool, String, Option<String>) {
+    let output = match Command::new("docker")
+        .args(["stack", "rm", name])
+        .output()
+        .await
+    {
+        Ok(o) => o,
+        Err(e) => return (false, String::new(), Some(format!("spawn: {e}"))),
+    };
+    let log = combine_stdout_stderr(&output);
+    let success = output.status.success();
+    let err = if success {
+        None
+    } else {
+        Some(format!("docker stack rm exit {:?}", output.status.code()))
+    };
+    (success, log, err)
+}
