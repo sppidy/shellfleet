@@ -1,10 +1,24 @@
 use serde::{Deserialize, Serialize};
 
+/// Protocol version sent by the agent in the Register handshake. Bump when
+/// the wire format changes in a way the server needs to reject older agents
+/// for. Value `0` means "legacy agent that predates this field" — those
+/// still connect, just without the version-aware fast paths.
+pub const PROTOCOL_VERSION: u32 = 1;
+
+fn default_protocol_version() -> u32 {
+    0
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(tag = "type", content = "payload")]
 pub enum Message {
     /// Agent registering with the server
-    Register { hostname: String },
+    Register {
+        hostname: String,
+        #[serde(default = "default_protocol_version")]
+        protocol_version: u32,
+    },
     
     /// Server acknowledging registration
     RegisterAck { agent_id: String },
