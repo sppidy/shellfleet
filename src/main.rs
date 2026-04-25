@@ -4,6 +4,7 @@ mod db;
 mod device_auth;
 mod fan_out;
 mod health;
+mod notifications;
 mod tokens;
 mod update_windows;
 mod webhook;
@@ -172,6 +173,7 @@ async fn main() {
         .nest("/update-windows", update_windows::routes())
         .nest("/health-probes", health::routes())
         .nest("/fan-out", fan_out::routes())
+        .nest("/notifications", notifications::routes())
         .route("/me", get(me_handler))
         .route("/healthz", get(healthz))
         .route("/audit", get(audit_handler))
@@ -396,6 +398,27 @@ async fn handle_agent_socket(socket: WebSocket, state: Arc<AppState>, token: Str
                                         Some(&format!("id={} {}", probe_id, r.detail)),
                                     )
                                     .await;
+                                    // Skip the noisy "first sample"
+                                    // notification — emit only on real
+                                    // transitions or when going red.
+                                    let real_transition = prev_str.is_some();
+                                    let going_red = state_str == "red";
+                                    if real_transition || going_red {
+                                        let level = if state_str == "red" { "error" } else { "info" };
+                                        let title = format!(
+                                            "health probe #{probe_id} on {} → {state_str}",
+                                            agent_id.trim_end_matches("-id"),
+                                        );
+                                        notifications::notify(
+                                            &state.db,
+                                            &format!("health_probe.{state_str}"),
+                                            Some(agent_id),
+                                            level,
+                                            &title,
+                                            Some(&r.detail),
+                                        )
+                                        .await;
+                                    }
                                 }
                             }
                         }
@@ -453,6 +476,34 @@ async fn handle_agent_socket(socket: WebSocket, state: Arc<AppState>, token: Str
                                     error.clone(),
                                     now_unix(),
                                 );
+                                let level = if *success { "info" } else { "error" };
+                                let title = format!(
+                                    "apt upgrade on {} → {}",
+                                    agent_id.trim_end_matches("-id"),
+                                    status
+                                );
+                                let body_snippet: String = log_combined
+                                    .lines()
+                                    .rev()
+                                    .take(8)
+                                    .collect::<Vec<_>>()
+                                    .into_iter()
+                                    .rev()
+                                    .collect::<Vec<_>>()
+                                    .join("\n");
+                                notifications::notify(
+                                    &state.db,
+                                    "update_window.result",
+                                    Some(agent_id),
+                                    level,
+                                    &title,
+                                    if body_snippet.is_empty() {
+                                        None
+                                    } else {
+                                        Some(&body_snippet)
+                                    },
+                                )
+                                .await;
                             }
                         }
                         let ui_msg = UiMessage::AgentMessage {

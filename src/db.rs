@@ -172,6 +172,29 @@ pub async fn init() -> Result<SqlitePool, sqlx::Error> {
         .execute(&pool)
         .await?;
 
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS notifications (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            kind TEXT NOT NULL,
+            agent_id TEXT,
+            level TEXT NOT NULL,
+            title TEXT NOT NULL,
+            body TEXT,
+            created_at INTEGER NOT NULL,
+            read_at INTEGER
+        );
+        "#,
+    )
+    .execute(&pool)
+    .await?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS notifications_created ON notifications(created_at DESC);")
+        .execute(&pool)
+        .await?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS notifications_unread ON notifications(read_at, created_at DESC);")
+        .execute(&pool)
+        .await?;
+
     migrate_legacy_tokens(&pool).await?;
 
     Ok(pool)
@@ -793,6 +816,99 @@ pub async fn pending_fan_out_for_agent(
     .bind(kind)
     .fetch_optional(pool)
     .await
+}
+
+#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize)]
+pub struct NotificationRow {
+    pub id: i64,
+    pub kind: String,
+    pub agent_id: Option<String>,
+    pub level: String,
+    pub title: String,
+    pub body: Option<String>,
+    pub created_at: i64,
+    pub read_at: Option<i64>,
+}
+
+pub async fn insert_notification(
+    pool: &SqlitePool,
+    kind: &str,
+    agent_id: Option<&str>,
+    level: &str,
+    title: &str,
+    body: Option<&str>,
+    created_at: i64,
+) -> Result<i64, sqlx::Error> {
+    let res = sqlx::query(
+        "INSERT INTO notifications (kind, agent_id, level, title, body, created_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+    )
+    .bind(kind)
+    .bind(agent_id)
+    .bind(level)
+    .bind(title)
+    .bind(body)
+    .bind(created_at)
+    .execute(pool)
+    .await?;
+    Ok(res.last_insert_rowid())
+}
+
+pub async fn list_notifications(
+    pool: &SqlitePool,
+    limit: i64,
+    only_unread: bool,
+) -> Result<Vec<NotificationRow>, sqlx::Error> {
+    let q = if only_unread {
+        "SELECT id, kind, agent_id, level, title, body, created_at, read_at \
+         FROM notifications WHERE read_at IS NULL \
+         ORDER BY created_at DESC, id DESC LIMIT ?"
+    } else {
+        "SELECT id, kind, agent_id, level, title, body, created_at, read_at \
+         FROM notifications ORDER BY created_at DESC, id DESC LIMIT ?"
+    };
+    sqlx::query_as::<_, NotificationRow>(q)
+        .bind(limit)
+        .fetch_all(pool)
+        .await
+}
+
+pub async fn unread_notification_count(pool: &SqlitePool) -> Result<i64, sqlx::Error> {
+    sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM notifications WHERE read_at IS NULL")
+        .fetch_one(pool)
+        .await
+}
+
+pub async fn mark_notification_read(
+    pool: &SqlitePool,
+    id: i64,
+    now: i64,
+) -> Result<bool, sqlx::Error> {
+    let res = sqlx::query("UPDATE notifications SET read_at = ?2 WHERE id = ?1 AND read_at IS NULL")
+        .bind(id)
+        .bind(now)
+        .execute(pool)
+        .await?;
+    Ok(res.rows_affected() > 0)
+}
+
+pub async fn mark_all_notifications_read(
+    pool: &SqlitePool,
+    now: i64,
+) -> Result<u64, sqlx::Error> {
+    let res = sqlx::query("UPDATE notifications SET read_at = ? WHERE read_at IS NULL")
+        .bind(now)
+        .execute(pool)
+        .await?;
+    Ok(res.rows_affected())
+}
+
+pub async fn delete_notification(pool: &SqlitePool, id: i64) -> Result<bool, sqlx::Error> {
+    let res = sqlx::query("DELETE FROM notifications WHERE id = ?")
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(res.rows_affected() > 0)
 }
 
 pub async fn recent_audit(pool: &SqlitePool, limit: i64) -> Result<Vec<AuditRow>, sqlx::Error> {
