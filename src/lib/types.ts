@@ -211,6 +211,35 @@ export type SwarmStackDeployResponse = {
   error: string | null;
 };
 
+export type HealthProbeKind = 'http' | 'tcp';
+export type HealthProbeState = 'green' | 'red';
+
+export type HealthProbe = {
+  id: number;
+  agent_id: string;
+  name: string;
+  kind: HealthProbeKind;
+  target: string;
+  interval_secs: number;
+  timeout_secs: number;
+  expect_status: number | null;
+  expect_body: string | null;
+  enabled: boolean;
+  last_run_at: number;
+  last_state: string | null;
+  last_latency_ms: number | null;
+  last_detail: string | null;
+  updated_at: number;
+};
+
+export type HealthSnapshotRow = {
+  agent_id: string;
+  total: number;
+  green: number;
+  red: number;
+  unknown: number;
+};
+
 export type UpdateWindow = {
   agent_id: string;
   cron_expr: string;
@@ -279,7 +308,9 @@ export type AgentMessagePayload =
   | { type: 'SwarmServiceInspectRequest'; payload: { name: string } }
   | { type: 'SwarmServiceInspectResponse'; payload: SwarmServiceInspectPayload }
   | { type: 'SwarmStackDeployRequest'; payload: { stack_name: string; compose_yaml: string; prune: boolean } }
-  | { type: 'SwarmStackDeployResponse'; payload: SwarmStackDeployResponse };
+  | { type: 'SwarmStackDeployResponse'; payload: SwarmStackDeployResponse }
+  | { type: 'HealthProbeSyncRequest'; payload: { probes: unknown[] } }
+  | { type: 'HealthProbeReport'; payload: { results: unknown[] } };
 
 export type UiMessage =
   | { type: 'ListAgentsRequest' }

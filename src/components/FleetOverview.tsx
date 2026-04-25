@@ -1,8 +1,9 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useWebSocket } from './providers/WebSocketProvider';
 import { useFleetSnapshots, AgentSnapshot } from './providers/FleetSnapshotsProvider';
+import type { HealthSnapshotRow } from '@/lib/types';
 import {
   ServerIcon,
   CpuIcon,
@@ -13,6 +14,7 @@ import {
   RefreshCwIcon,
   SearchIcon,
   XIcon,
+  ActivitySquareIcon,
 } from 'lucide-react';
 
 function formatBytes(kib: number): string {
@@ -45,6 +47,30 @@ export default function FleetOverview({
   const { agents } = useWebSocket();
   const { snapshots, refresh } = useFleetSnapshots();
   const [search, setSearch] = useState('');
+  const [healthByAgent, setHealthByAgent] = useState<Record<string, HealthSnapshotRow>>({});
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const res = await fetch('/api/health-probes/snapshot', { credentials: 'include' });
+        if (!res.ok) return;
+        const rows: HealthSnapshotRow[] = await res.json();
+        if (cancelled) return;
+        const map: Record<string, HealthSnapshotRow> = {};
+        for (const r of rows) map[r.agent_id] = r;
+        setHealthByAgent(map);
+      } catch {
+        /* ignore — chip just won't render */
+      }
+    };
+    void load();
+    const t = setInterval(load, 10_000);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+    };
+  }, []);
 
   const totals = useMemo(() => {
     let cpu = 0;
@@ -231,7 +257,10 @@ export default function FleetOverview({
                       onClick={() => onSelectAgent?.(agentId)}
                       className="w-full text-left bg-slate-900 border border-slate-800 hover:border-slate-700 rounded-md px-4 py-3 transition-colors"
                     >
-                      <HostRow snapshot={snap ?? { agentId, hostname: agentId.replace(/-id$/, '') }} />
+                      <HostRow
+                        snapshot={snap ?? { agentId, hostname: agentId.replace(/-id$/, '') }}
+                        health={healthByAgent[agentId]}
+                      />
                     </button>
                   </li>
                 );
@@ -359,7 +388,13 @@ function SmallStat({
   );
 }
 
-function HostRow({ snapshot }: { snapshot: AgentSnapshot }) {
+function HostRow({
+  snapshot,
+  health,
+}: {
+  snapshot: AgentSnapshot;
+  health?: HealthSnapshotRow;
+}) {
   const stats = snapshot.stats;
   const services = snapshot.services;
   const docker = snapshot.docker;
@@ -412,6 +447,21 @@ function HostRow({ snapshot }: { snapshot: AgentSnapshot }) {
         <span className="inline-flex items-center gap-1 text-xs text-red-300 bg-red-500/10 border border-red-500/30 rounded-full px-2 py-0.5">
           <AlertTriangleIcon className="w-3 h-3" />
           {failed} failed
+        </span>
+      )}
+      {health && health.total > 0 && (
+        <span
+          className={`inline-flex items-center gap-1 text-xs rounded-full px-2 py-0.5 border ${
+            health.red > 0
+              ? 'text-red-300 bg-red-500/10 border-red-500/30'
+              : health.unknown > 0
+                ? 'text-slate-300 bg-slate-700/30 border-slate-600/40'
+                : 'text-emerald-300 bg-emerald-500/10 border-emerald-500/30'
+          }`}
+          title={`${health.green} green / ${health.red} red / ${health.unknown} pending`}
+        >
+          <ActivitySquareIcon className="w-3 h-3" />
+          {health.green}/{health.total}
         </span>
       )}
       <Field

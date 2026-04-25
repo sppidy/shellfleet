@@ -13,6 +13,7 @@ import Containers from '@/components/Containers';
 import AptManager from '@/components/AptManager';
 import FleetOverview from '@/components/FleetOverview';
 import Deploy from '@/components/Deploy';
+import HealthProbes from '@/components/HealthProbes';
 import {
   LayoutDashboardIcon,
   FileCode2Icon,
@@ -26,11 +27,12 @@ import {
   PackageIcon,
   RocketIcon,
   ActivityIcon,
+  ActivitySquareIcon,
 } from 'lucide-react';
 
-type Tab = 'dashboard' | 'containers' | 'deploy' | 'updates' | 'config';
+type Tab = 'dashboard' | 'containers' | 'deploy' | 'updates' | 'health' | 'config';
 
-const TABS: Tab[] = ['dashboard', 'containers', 'deploy', 'updates', 'config'];
+const TABS: Tab[] = ['dashboard', 'containers', 'deploy', 'updates', 'health', 'config'];
 
 export default function Home() {
   return (
@@ -251,6 +253,12 @@ function HomeBody() {
                   label="Updates"
                 />
                 <TabButton
+                  active={activeTab === 'health'}
+                  onClick={() => setActiveTab('health')}
+                  icon={<ActivitySquareIcon className="w-4 h-4 mr-2" />}
+                  label="Health"
+                />
+                <TabButton
                   active={activeTab === 'config'}
                   onClick={() => setActiveTab('config')}
                   icon={<FileCode2Icon className="w-4 h-4 mr-2" />}
@@ -285,6 +293,10 @@ function HomeBody() {
               ) : activeTab === 'updates' ? (
                 <div className="flex-1 overflow-y-auto p-6 max-w-4xl mx-auto w-full">
                   <AptManager agentId={selectedAgent} />
+                </div>
+              ) : activeTab === 'health' ? (
+                <div className="flex-1 overflow-y-auto p-6 max-w-4xl mx-auto w-full">
+                  <HealthProbes agentId={selectedAgent} />
                 </div>
               ) : (
                 <div className="flex-1 overflow-hidden">
