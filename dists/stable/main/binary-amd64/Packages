@@ -44,3 +44,26 @@ Description: Agent for sys-manager: connects a host to a sys-manager server over
  server's device-auth flow; the resulting token is cached at
  /etc/sys-manager/agent-token.txt.
 
+Package: sys-manager-agent
+Architecture: amd64
+Version: 1.1.0-ci202604250503.gef58543
+Priority: optional
+Section: admin
+Maintainer: sppidy <sppidytg@gmail.com>
+Installed-Size: 4086
+Depends: libc6 (>= 2.39), libssl3t64 (>= 3.0.0), systemd
+Filename: pool/main/sys-manager-agent_1.1.0-ci202604250503.gef58543_amd64.deb
+Size: 1102948
+MD5sum: e7134886a6800872150d20fa844ec06f
+SHA1: 4dbec58c4888c34d72fcd6c370bfa3f06b7418bf
+SHA256: 8938252aebd8ce4d88076a6e30dd4ca0506286f91c073ef29d3358c4af7e584a
+SHA512: 36b831c6ea739532411db1f048f1b000c4281dd6bb86b3c0d2cb194b7de304d4ef5ebf249fad98bc60d5694d00b88942056aa0514eecae9d9471cc575f920b44
+Homepage: https://github.com/sppidy/sys-mngr-agent
+Description: Agent for sys-manager: connects a host to a sys-manager server over WebSocket
+ and exposes systemd service control, terminal, and config editing.
+ Agent for sys-manager. Connects a Linux host to a sys-manager server over a
+ TLS WebSocket and exposes systemd service control, an interactive terminal,
+ and remote read/write of configuration files. Pairing happens through the
+ server's device-auth flow; the resulting token is cached at
+ /etc/sys-manager/agent-token.txt.
+
