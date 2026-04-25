@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 /// the wire format changes in a way the server needs to reject older agents
 /// for. Value `0` means "legacy agent that predates this field" — those
 /// still connect, just without the version-aware fast paths.
-pub const PROTOCOL_VERSION: u32 = 5;
+pub const PROTOCOL_VERSION: u32 = 6;
 
 fn default_protocol_version() -> u32 {
     0
@@ -221,6 +221,58 @@ pub enum Message {
         log: String,
         error: Option<String>,
     },
+
+    /// Run a lifecycle action against a local docker container.
+    /// Introduced in protocol_version 6.
+    DockerContainerActionRequest {
+        id: String,
+        action: DockerContainerAction,
+    },
+    DockerContainerActionResponse {
+        id: String,
+        success: bool,
+        log: String,
+        error: Option<String>,
+    },
+
+    /// Subscribe to a container's stdout/stderr. The agent will keep
+    /// emitting `DockerLogsChunk` until the UI sends `DockerLogsStop`
+    /// for the same container_id, the container exits, or the
+    /// websocket drops. Introduced in protocol_version 6.
+    DockerLogsRequest {
+        container_id: String,
+        #[serde(default = "default_tail")]
+        tail: u32,
+        #[serde(default = "default_true")]
+        follow: bool,
+    },
+    DockerLogsChunk {
+        container_id: String,
+        data: String,
+    },
+    DockerLogsStop {
+        container_id: String,
+    },
+    /// Sent once at the end of a docker-logs stream. `error == None`
+    /// means the stream ended naturally (container stopped or operator
+    /// requested DockerLogsStop).
+    DockerLogsEnd {
+        container_id: String,
+        error: Option<String>,
+    },
+}
+
+fn default_tail() -> u32 {
+    200
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum DockerContainerAction {
+    Start,
+    Stop,
+    Restart,
+    Remove,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
