@@ -1,5 +1,5 @@
 use serde::Deserialize;
-use shared::{DockerContainer, SwarmNode, SwarmRole, SwarmService};
+use shared::{DockerContainer, SwarmAction, SwarmNode, SwarmRole, SwarmService};
 use tokio::process::Command;
 
 #[derive(Debug, Deserialize)]
@@ -169,6 +169,44 @@ struct NodeRow {
     manager_status: String,
     #[serde(rename = "EngineVersion")]
     engine_version: String,
+}
+
+/// Run a swarm management action against a service. Returns combined
+/// stdout/stderr so the dashboard can show the operator what docker
+/// said. Only valid on a manager — the caller should gate with
+/// swarm_role().
+pub async fn run_swarm_action(name: &str, action: &SwarmAction) -> (bool, String, Option<String>) {
+    let mut cmd = Command::new("docker");
+    match action {
+        SwarmAction::Scale(n) => {
+            cmd.args(["service", "scale", &format!("{name}={n}")]);
+        }
+        SwarmAction::ForceUpdate => {
+            cmd.args(["service", "update", "--force", name]);
+        }
+        SwarmAction::Remove => {
+            cmd.args(["service", "rm", name]);
+        }
+    }
+    let output = match cmd.output().await {
+        Ok(o) => o,
+        Err(e) => return (false, String::new(), Some(format!("docker spawn: {e}"))),
+    };
+    let success = output.status.success();
+    let mut log = String::from_utf8_lossy(&output.stdout).into_owned();
+    let err_text = String::from_utf8_lossy(&output.stderr);
+    if !err_text.is_empty() {
+        if !log.is_empty() {
+            log.push('\n');
+        }
+        log.push_str(&err_text);
+    }
+    let err = if success {
+        None
+    } else {
+        Some(format!("exit code {:?}", output.status.code()))
+    };
+    (success, log, err)
 }
 
 pub async fn list_swarm_nodes() -> Result<Vec<SwarmNode>, String> {

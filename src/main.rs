@@ -1,3 +1,4 @@
+mod apt;
 mod docker;
 mod stats;
 mod systemd;
@@ -165,6 +166,68 @@ async fn main() {
                                         available: error.is_none(),
                                         swarm_role: role,
                                         containers,
+                                        error,
+                                    });
+                                });
+                            }
+                            Message::SwarmServiceActionRequest { name, action } => {
+                                let tx_clone = tx.clone();
+                                tokio::spawn(async move {
+                                    let role = docker::swarm_role().await;
+                                    if role != shared::SwarmRole::Manager {
+                                        let _ = tx_clone.send(Message::SwarmServiceActionResponse {
+                                            name,
+                                            success: false,
+                                            log: String::new(),
+                                            error: Some("not a swarm manager".to_string()),
+                                        });
+                                        return;
+                                    }
+                                    let (success, log, error) = docker::run_swarm_action(&name, &action).await;
+                                    let _ = tx_clone.send(Message::SwarmServiceActionResponse {
+                                        name,
+                                        success,
+                                        log,
+                                        error,
+                                    });
+                                });
+                            }
+                            Message::AptStatusRequest => {
+                                let tx_clone = tx.clone();
+                                tokio::spawn(async move {
+                                    let last_update_secs = apt::last_apt_update_secs();
+                                    let (upgradable, error) = match apt::list_upgradable().await {
+                                        Ok(u) => (u, None),
+                                        Err(e) => (Vec::new(), Some(e)),
+                                    };
+                                    let _ = tx_clone.send(Message::AptStatusResponse {
+                                        available: error.is_none(),
+                                        upgradable,
+                                        last_update_secs,
+                                        error,
+                                    });
+                                });
+                            }
+                            Message::AptRefreshRequest => {
+                                let tx_clone = tx.clone();
+                                tokio::spawn(async move {
+                                    let (success, log, error) = apt::refresh().await;
+                                    let _ = tx_clone.send(Message::AptRefreshResponse {
+                                        success,
+                                        log,
+                                        error,
+                                    });
+                                });
+                            }
+                            Message::AptUpgradeRequest { package } => {
+                                let tx_clone = tx.clone();
+                                tokio::spawn(async move {
+                                    let pkg_for_resp = package.clone();
+                                    let (success, log, error) = apt::upgrade(package).await;
+                                    let _ = tx_clone.send(Message::AptUpgradeResponse {
+                                        package: pkg_for_resp,
+                                        success,
+                                        log,
                                         error,
                                     });
                                 });
