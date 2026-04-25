@@ -222,6 +222,28 @@ export type Notification = {
   read_at: number | null;
 };
 
+export type BackupJob = {
+  id: number;
+  agent_id: string;
+  name: string;
+  paths: string[];
+  dest: string;
+  cron_expr: string | null;
+  enabled: boolean;
+  last_run_at: number;
+  last_status: string | null;
+  last_archive_path: string | null;
+  last_bytes: number | null;
+  last_log: string | null;
+  updated_at: number;
+  next_run_at: number | null;
+};
+
+export type LabelsResponse = {
+  by_agent: Record<string, string[]>;
+  by_label: Record<string, string[]>;
+};
+
 export type FanOutKind = 'apt-status' | 'apt-upgrade' | 'docker-list';
 
 export type FanOutRun = {
@@ -245,7 +267,7 @@ export type FanOutRunDetail = {
   results: FanOutResult[];
 };
 
-export type HealthProbeKind = 'http' | 'tcp';
+export type HealthProbeKind = 'http' | 'tcp' | 'exec';
 export type HealthProbeState = 'green' | 'red';
 
 export type HealthProbe = {

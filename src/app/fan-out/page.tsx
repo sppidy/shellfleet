@@ -6,7 +6,7 @@ import { useSession } from '@/components/providers/SessionProvider';
 import { useWebSocket } from '@/components/providers/WebSocketProvider';
 import { useUi } from '@/components/providers/UiProvider';
 import { apiFetch } from '@/lib/api';
-import type { FanOutKind, FanOutRunDetail } from '@/lib/types';
+import type { FanOutKind, FanOutRunDetail, LabelsResponse } from '@/lib/types';
 import {
   ArrowLeftIcon,
   RefreshCwIcon,
@@ -35,10 +35,29 @@ export default function FanOutPage() {
   const { status } = useSession();
   const { agents } = useWebSocket();
   const [kind, setKind] = useState<FanOutKind>('docker-list');
+  const [targetMode, setTargetMode] = useState<'ids' | 'label'>('ids');
   const [selected, setSelected] = useState<Record<string, boolean>>({});
+  const [labelChoice, setLabelChoice] = useState<string>('');
+  const [labels, setLabels] = useState<string[]>([]);
   const [pkg, setPkg] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [run, setRun] = useState<FanOutRunDetail | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const res = await apiFetch('/api/agent-labels');
+        if (!res.ok) return;
+        const data: LabelsResponse = await res.json();
+        if (cancelled) return;
+        setLabels(Object.keys(data.by_label).sort());
+      } catch {
+        /* ignore */
+      }
+    };
+    void load();
+  }, []);
 
   useEffect(() => {
     if (status === 'guest') router.replace('/login');
@@ -80,13 +99,21 @@ export default function FanOutPage() {
 
   const submit = async () => {
     const ids = agents.filter((a) => selected[a]);
-    if (ids.length === 0) {
+    if (targetMode === 'ids' && ids.length === 0) {
       ui.toast('error', 'Pick at least one host');
       return;
     }
+    if (targetMode === 'label' && !labelChoice) {
+      ui.toast('error', 'Pick a label');
+      return;
+    }
     if (kind === 'apt-upgrade') {
+      const targetDesc =
+        targetMode === 'ids'
+          ? `${ids.length} host${ids.length === 1 ? '' : 's'}`
+          : `every host tagged "${labelChoice}"`;
       const ok = await ui.confirm({
-        title: `Run apt upgrade on ${ids.length} host${ids.length === 1 ? '' : 's'}?`,
+        title: `Run apt upgrade on ${targetDesc}?`,
         description: pkg
           ? `Package: ${pkg}`
           : 'This runs apt-get -y upgrade across every selected host.',
@@ -97,14 +124,19 @@ export default function FanOutPage() {
     }
     setSubmitting(true);
     try {
+      const body: Record<string, unknown> = {
+        kind,
+        package: kind === 'apt-upgrade' && pkg ? pkg : null,
+      };
+      if (targetMode === 'ids') {
+        body.agent_ids = ids;
+      } else {
+        body.label = labelChoice;
+      }
       const res = await apiFetch('/api/fan-out', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          kind,
-          agent_ids: ids,
-          package: kind === 'apt-upgrade' && pkg ? pkg : null,
-        }),
+        body: JSON.stringify(body),
       });
       if (!res.ok) {
         const txt = await res.text();
@@ -190,45 +222,94 @@ export default function FanOutPage() {
               )}
             </div>
 
-            <div>
-              <div className="flex items-center justify-between mb-1">
-                <span className="text-xs text-slate-400">Targets ({agents.length} online)</span>
-                <div className="flex gap-2 text-[11px]">
-                  <button
-                    type="button"
-                    onClick={() => toggleAll(true)}
-                    className="text-slate-400 hover:text-slate-100"
-                  >
-                    select all
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => toggleAll(false)}
-                    className="text-slate-400 hover:text-slate-100"
-                  >
-                    clear
-                  </button>
+            <div className="flex items-center gap-3 text-xs text-slate-400">
+              <label className="flex items-center gap-1.5">
+                <input
+                  type="radio"
+                  name="targetMode"
+                  checked={targetMode === 'ids'}
+                  onChange={() => setTargetMode('ids')}
+                  className="accent-blue-600"
+                />
+                By host
+              </label>
+              <label className="flex items-center gap-1.5">
+                <input
+                  type="radio"
+                  name="targetMode"
+                  checked={targetMode === 'label'}
+                  onChange={() => setTargetMode('label')}
+                  className="accent-blue-600"
+                />
+                By label
+              </label>
+            </div>
+
+            {targetMode === 'ids' ? (
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-xs text-slate-400">Targets ({agents.length} online)</span>
+                  <div className="flex gap-2 text-[11px]">
+                    <button
+                      type="button"
+                      onClick={() => toggleAll(true)}
+                      className="text-slate-400 hover:text-slate-100"
+                    >
+                      select all
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => toggleAll(false)}
+                      className="text-slate-400 hover:text-slate-100"
+                    >
+                      clear
+                    </button>
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-1">
+                  {agents.map((a) => (
+                    <label
+                      key={a}
+                      className="flex items-center gap-2 px-2 py-1 rounded text-sm bg-slate-950 border border-slate-800 hover:border-slate-700"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={!!selected[a]}
+                        onChange={(e) =>
+                          setSelected((prev) => ({ ...prev, [a]: e.target.checked }))
+                        }
+                        className="accent-blue-600"
+                      />
+                      <span className="truncate">{a.replace(/-id$/, '')}</span>
+                    </label>
+                  ))}
                 </div>
               </div>
-              <div className="grid grid-cols-2 md:grid-cols-3 gap-1">
-                {agents.map((a) => (
-                  <label
-                    key={a}
-                    className="flex items-center gap-2 px-2 py-1 rounded text-sm bg-slate-950 border border-slate-800 hover:border-slate-700"
-                  >
-                    <input
-                      type="checkbox"
-                      checked={!!selected[a]}
-                      onChange={(e) =>
-                        setSelected((prev) => ({ ...prev, [a]: e.target.checked }))
-                      }
-                      className="accent-blue-600"
-                    />
-                    <span className="truncate">{a.replace(/-id$/, '')}</span>
-                  </label>
-                ))}
+            ) : (
+              <div>
+                <label className="text-xs text-slate-400 flex flex-col gap-1">
+                  Label
+                  {labels.length === 0 ? (
+                    <span className="text-slate-500 text-xs italic">
+                      No labels defined yet — add some on each agent's overview tab.
+                    </span>
+                  ) : (
+                    <select
+                      value={labelChoice}
+                      onChange={(e) => setLabelChoice(e.target.value)}
+                      className="bg-slate-950 border border-slate-700 rounded-md px-2 py-1.5 text-sm text-slate-100"
+                    >
+                      <option value="">— pick a label —</option>
+                      {labels.map((l) => (
+                        <option key={l} value={l}>
+                          {l}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                </label>
               </div>
-            </div>
+            )}
 
             <div className="flex justify-end">
               <button

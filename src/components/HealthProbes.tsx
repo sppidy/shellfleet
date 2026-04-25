@@ -253,6 +253,7 @@ function ProbeForm({
           >
             <option value="http">http</option>
             <option value="tcp">tcp</option>
+            <option value="exec">exec</option>
           </select>
         </label>
       </div>
@@ -262,7 +263,13 @@ function ProbeForm({
           type="text"
           value={target}
           onChange={(e) => setTarget(e.target.value)}
-          placeholder={kind === 'http' ? 'https://example.com/healthz' : 'host:port'}
+          placeholder={
+            kind === 'http'
+              ? 'https://example.com/healthz'
+              : kind === 'tcp'
+                ? 'host:port'
+                : 'script-name.sh (in /etc/sys-manager/probes.d/)'
+          }
           className="bg-slate-950 border border-slate-700 rounded-md px-2 py-1.5 font-mono text-sm text-slate-100 focus:outline-none focus:ring-1 focus:ring-blue-500"
           required
         />

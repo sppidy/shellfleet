@@ -15,6 +15,8 @@ import AptManager from '@/components/AptManager';
 import FleetOverview from '@/components/FleetOverview';
 import Deploy from '@/components/Deploy';
 import HealthProbes from '@/components/HealthProbes';
+import Backups from '@/components/Backups';
+import AgentLabels from '@/components/AgentLabels';
 import {
   LayoutDashboardIcon,
   FileCode2Icon,
@@ -30,11 +32,12 @@ import {
   ActivityIcon,
   ActivitySquareIcon,
   BellIcon,
+  ArchiveIcon,
 } from 'lucide-react';
 
-type Tab = 'dashboard' | 'containers' | 'deploy' | 'updates' | 'health' | 'config';
+type Tab = 'dashboard' | 'containers' | 'deploy' | 'updates' | 'health' | 'backups' | 'config';
 
-const TABS: Tab[] = ['dashboard', 'containers', 'deploy', 'updates', 'health', 'config'];
+const TABS: Tab[] = ['dashboard', 'containers', 'deploy', 'updates', 'health', 'backups', 'config'];
 
 export default function Home() {
   return (
@@ -261,12 +264,13 @@ function HomeBody() {
         {selectedAgent ? (
           <div className="flex-1 flex flex-col h-full overflow-hidden">
             <div className="border-b border-slate-800 bg-slate-900 flex flex-col">
-              <div className="px-6 py-4 flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <ServerIcon className="w-5 h-5 text-slate-500" />
-                  <h2 className="text-xl font-semibold text-slate-100">{agentLabel}</h2>
+              <div className="px-6 py-4 flex items-center justify-between gap-4 flex-wrap">
+                <div className="flex items-center gap-3 min-w-0">
+                  <ServerIcon className="w-5 h-5 text-slate-500 shrink-0" />
+                  <h2 className="text-xl font-semibold text-slate-100 truncate">{agentLabel}</h2>
+                  <AgentLabels agentId={selectedAgent} />
                 </div>
-                <span className="inline-flex items-center gap-1.5 text-xs text-emerald-300 bg-emerald-500/10 border border-emerald-500/30 rounded-full px-2 py-0.5">
+                <span className="inline-flex items-center gap-1.5 text-xs text-emerald-300 bg-emerald-500/10 border border-emerald-500/30 rounded-full px-2 py-0.5 shrink-0">
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
                   Connected
                 </span>
@@ -301,6 +305,12 @@ function HomeBody() {
                   onClick={() => setActiveTab('health')}
                   icon={<ActivitySquareIcon className="w-4 h-4 mr-2" />}
                   label="Health"
+                />
+                <TabButton
+                  active={activeTab === 'backups'}
+                  onClick={() => setActiveTab('backups')}
+                  icon={<ArchiveIcon className="w-4 h-4 mr-2" />}
+                  label="Backups"
                 />
                 <TabButton
                   active={activeTab === 'config'}
@@ -341,6 +351,10 @@ function HomeBody() {
               ) : activeTab === 'health' ? (
                 <div className="flex-1 overflow-y-auto p-6 max-w-4xl mx-auto w-full">
                   <HealthProbes agentId={selectedAgent} />
+                </div>
+              ) : activeTab === 'backups' ? (
+                <div className="flex-1 overflow-y-auto p-6 max-w-4xl mx-auto w-full">
+                  <Backups agentId={selectedAgent} />
                 </div>
               ) : (
                 <div className="flex-1 overflow-hidden">
