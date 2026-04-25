@@ -29,6 +29,13 @@ services:
       # you have additional dashboards (e.g. dev tunnels) that need the
       # WS without becoming the canonical URL.
       - WS_ALLOWED_ORIGINS=${WS_ALLOWED_ORIGINS:-}
+      # In-tree backup machinery is OFF by default. Most operators back
+      # up at the hypervisor level (Proxmox snapshots etc.) and don't
+      # need a redundant in-VM tar. Set BACKUPS_ENABLED=true to expose
+      # the /api/backups routes, the scheduler, and the per-agent
+      # Backups tab in the UI. Existing backup_jobs rows are preserved
+      # across toggles.
+      - BACKUPS_ENABLED=${BACKUPS_ENABLED:-false}
     volumes:
       - server_data:/data
     healthcheck:
