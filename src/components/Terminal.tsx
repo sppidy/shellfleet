@@ -7,7 +7,7 @@ import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 
 export default function Terminal({ agentId }: { agentId: string }) {
-  const { sendToAgent, lastAgentMessage } = useWebSocket();
+  const { sendToAgent, onAgentMessage } = useWebSocket();
   const terminalRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<XTerm | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
@@ -15,15 +15,14 @@ export default function Terminal({ agentId }: { agentId: string }) {
   useEffect(() => {
     if (!terminalRef.current) return;
 
-    // Initialize xterm.js
     const term = new XTerm({
       cursorBlink: true,
       theme: {
-        background: '#020617', // slate-950
-        foreground: '#f8fafc', // slate-50
+        background: '#020617',
+        foreground: '#f8fafc',
       },
     });
-    
+
     const fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
     term.open(terminalRef.current);
@@ -32,48 +31,43 @@ export default function Terminal({ agentId }: { agentId: string }) {
     xtermRef.current = term;
     fitAddonRef.current = fitAddon;
 
-    // Handle user input
     term.onData((data) => {
       const encoder = new TextEncoder();
       const bytes = Array.from(encoder.encode(data));
       sendToAgent(agentId, {
         type: 'TerminalData',
-        payload: { data: bytes }
+        payload: { data: bytes },
       });
     });
 
-    // Handle resize
     const handleResize = () => {
       fitAddon.fit();
       sendToAgent(agentId, {
         type: 'TerminalResize',
-        payload: { cols: term.cols, rows: term.rows }
+        payload: { cols: term.cols, rows: term.rows },
       });
     };
     window.addEventListener('resize', handleResize);
-    
-    // Start terminal session
-    sendToAgent(agentId, { type: 'StartTerminalRequest' });
 
-    // Initial resize to inform backend
+    sendToAgent(agentId, { type: 'StartTerminalRequest' });
     setTimeout(() => handleResize(), 100);
 
+    // Subscribe directly so every TerminalData chunk is delivered. The
+    // earlier "lastAgentMessage" approach lost output when several chunks
+    // arrived in the same React tick.
+    const unsubscribe = onAgentMessage(agentId, (msg) => {
+      if (msg.type === 'TerminalData') {
+        const bytes = new Uint8Array(msg.payload.data);
+        xtermRef.current?.write(bytes);
+      }
+    });
+
     return () => {
+      unsubscribe();
       window.removeEventListener('resize', handleResize);
       term.dispose();
     };
-  }, [agentId, sendToAgent]);
-
-  // Listen for terminal data from the agent
-  useEffect(() => {
-    if (lastAgentMessage && lastAgentMessage.agentId === agentId) {
-      const { message } = lastAgentMessage;
-      if (message.type === 'TerminalData' && xtermRef.current) {
-        const bytes = new Uint8Array(message.payload.data);
-        xtermRef.current.write(bytes);
-      }
-    }
-  }, [lastAgentMessage, agentId]);
+  }, [agentId, sendToAgent, onAgentMessage]);
 
   return (
     <div className="h-full w-full p-2 flex flex-col">

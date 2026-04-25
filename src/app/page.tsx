@@ -8,6 +8,7 @@ import AgentList from '@/components/AgentList';
 import ServiceList from '@/components/ServiceList';
 import Terminal from '@/components/Terminal';
 import ConfigEditor from '@/components/ConfigEditor';
+import SystemStats from '@/components/SystemStats';
 import {
   LayoutDashboardIcon,
   FileCode2Icon,
@@ -150,8 +151,13 @@ export default function Home() {
             <div className="flex-1 overflow-hidden flex flex-col">
               {activeTab === 'dashboard' ? (
                 <div className="flex-1 flex overflow-hidden">
-                  <div className="w-1/2 p-4 overflow-y-auto border-r border-slate-200">
-                    <ServiceList agentId={selectedAgent} />
+                  <div className="w-1/2 flex flex-col border-r border-slate-200 overflow-hidden">
+                    <div className="p-4 border-b border-slate-200 bg-slate-50">
+                      <SystemStats agentId={selectedAgent} />
+                    </div>
+                    <div className="flex-1 p-4 overflow-y-auto relative">
+                      <ServiceList agentId={selectedAgent} />
+                    </div>
                   </div>
                   <div className="w-1/2 bg-slate-950">
                     <Terminal agentId={selectedAgent} />
