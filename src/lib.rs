@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 /// the wire format changes in a way the server needs to reject older agents
 /// for. Value `0` means "legacy agent that predates this field" — those
 /// still connect, just without the version-aware fast paths.
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 
 fn default_protocol_version() -> u32 {
     0
@@ -19,11 +19,12 @@ pub enum Message {
         #[serde(default = "default_protocol_version")]
         protocol_version: u32,
     },
-    
+
     /// Server acknowledging registration
     RegisterAck { agent_id: String },
 
-    /// Ping / Pong for heartbeat
+    /// Ping / Pong for heartbeat (application-level; the WebSocket Ping/Pong
+    /// frames are also used by the server to keep proxies from idling out).
     Ping,
     Pong,
 
@@ -37,14 +38,18 @@ pub enum Message {
     ControlServiceRequest { name: String, action: String },
 
     /// Response to control a service
-    ControlServiceResponse { name: String, success: bool, error: Option<String> },
+    ControlServiceResponse {
+        name: String,
+        success: bool,
+        error: Option<String>,
+    },
 
     /// Request to start a terminal session
     StartTerminalRequest,
 
     /// Terminal data
     TerminalData { data: Vec<u8> },
-    
+
     /// Request to resize terminal
     TerminalResize { cols: u16, rows: u16 },
 
@@ -52,20 +57,53 @@ pub enum Message {
     ReadConfigRequest { path: String },
 
     /// Response containing file content
-    ReadConfigResponse { path: String, content: String, error: Option<String> },
+    ReadConfigResponse {
+        path: String,
+        content: String,
+        error: Option<String>,
+    },
 
     /// Request to write a configuration file
     WriteConfigRequest { path: String, content: String },
 
     /// Response to write config
-    WriteConfigResponse { path: String, success: bool, error: Option<String> },
+    WriteConfigResponse {
+        path: String,
+        success: bool,
+        error: Option<String>,
+    },
+
+    /// Request a snapshot of system stats (uptime, load, memory, disk, …).
+    /// Introduced in protocol_version 2; older agents simply ignore it
+    /// because they don't recognise the variant when deserialising.
+    SystemStatsRequest,
+
+    /// Snapshot of system-wide resource usage. All sizes in kilobytes
+    /// (KiB, 1024 bytes) to match /proc/meminfo and `df -P`.
+    SystemStatsResponse {
+        hostname: String,
+        kernel: String,
+        uptime_secs: u64,
+        cpu_count: u32,
+        load_1: f32,
+        load_5: f32,
+        load_15: f32,
+        mem_total_kb: u64,
+        mem_available_kb: u64,
+        swap_total_kb: u64,
+        swap_free_kb: u64,
+        root_disk_total_kb: u64,
+        root_disk_used_kb: u64,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ServiceInfo {
     pub name: String,
     pub description: String,
+    /// SUB state from systemctl: running, exited, failed, dead, …
     pub status: String,
+    /// ACTIVE state from systemctl: active, inactive, failed, activating, …
     pub active_state: String,
 }
 
@@ -74,7 +112,7 @@ pub struct ServiceInfo {
 pub enum UiMessage {
     /// UI asking for online agents
     ListAgentsRequest,
-    
+
     /// Server telling UI about online agents
     ListAgentsResponse { agents: Vec<String> },
 
