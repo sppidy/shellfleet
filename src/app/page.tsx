@@ -12,6 +12,7 @@ import SystemStats from '@/components/SystemStats';
 import Containers from '@/components/Containers';
 import AptManager from '@/components/AptManager';
 import FleetOverview from '@/components/FleetOverview';
+import Deploy from '@/components/Deploy';
 import {
   LayoutDashboardIcon,
   FileCode2Icon,
@@ -23,9 +24,10 @@ import {
   BoxIcon,
   GaugeIcon,
   PackageIcon,
+  RocketIcon,
 } from 'lucide-react';
 
-type Tab = 'dashboard' | 'containers' | 'updates' | 'config';
+type Tab = 'dashboard' | 'containers' | 'deploy' | 'updates' | 'config';
 
 export default function Home() {
   const router = useRouter();
@@ -164,6 +166,12 @@ export default function Home() {
                   label="Containers"
                 />
                 <TabButton
+                  active={activeTab === 'deploy'}
+                  onClick={() => setActiveTab('deploy')}
+                  icon={<RocketIcon className="w-4 h-4 mr-2" />}
+                  label="Deploy"
+                />
+                <TabButton
                   active={activeTab === 'updates'}
                   onClick={() => setActiveTab('updates')}
                   icon={<PackageIcon className="w-4 h-4 mr-2" />}
@@ -196,6 +204,10 @@ export default function Home() {
               ) : activeTab === 'containers' ? (
                 <div className="flex-1 overflow-y-auto p-6">
                   <Containers agentId={selectedAgent} />
+                </div>
+              ) : activeTab === 'deploy' ? (
+                <div className="flex-1 overflow-y-auto p-6">
+                  <Deploy agentId={selectedAgent} />
                 </div>
               ) : activeTab === 'updates' ? (
                 <div className="flex-1 overflow-y-auto p-6 max-w-4xl mx-auto w-full">

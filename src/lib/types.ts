@@ -101,6 +101,47 @@ export type AptUpgradeResponsePayload = AptOpResponse & {
   package: string | null;
 };
 
+export type ContainerSpec = {
+  image: string;
+  name?: string | null;
+  ports?: string[];
+  env?: string[];
+  volumes?: string[];
+  restart_policy?: string | null;
+  command?: string | null;
+  network?: string | null;
+  detached?: boolean;
+  pull?: boolean;
+};
+
+export type ServiceSpec = {
+  image: string;
+  name: string;
+  replicas?: number | null;
+  mode?: string | null;
+  ports?: string[];
+  env?: string[];
+  mounts?: string[];
+  constraints?: string[];
+  command?: string | null;
+  networks?: string[];
+  restart_condition?: string | null;
+};
+
+export type CreateContainerResponse = {
+  success: boolean;
+  container_id: string | null;
+  log: string;
+  error: string | null;
+};
+
+export type CreateServiceResponse = {
+  success: boolean;
+  service_id: string | null;
+  log: string;
+  error: string | null;
+};
+
 export type AgentMessagePayload =
   | { type: 'Register'; payload: { hostname: string; protocol_version?: number } }
   | { type: 'RegisterAck'; payload: { agent_id: string } }
@@ -130,7 +171,11 @@ export type AgentMessagePayload =
   | { type: 'AptRefreshRequest' }
   | { type: 'AptRefreshResponse'; payload: AptOpResponse }
   | { type: 'AptUpgradeRequest'; payload: { package: string | null } }
-  | { type: 'AptUpgradeResponse'; payload: AptUpgradeResponsePayload };
+  | { type: 'AptUpgradeResponse'; payload: AptUpgradeResponsePayload }
+  | { type: 'DockerCreateContainerRequest'; payload: { spec: ContainerSpec } }
+  | { type: 'DockerCreateContainerResponse'; payload: CreateContainerResponse }
+  | { type: 'SwarmCreateServiceRequest'; payload: { spec: ServiceSpec } }
+  | { type: 'SwarmCreateServiceResponse'; payload: CreateServiceResponse };
 
 export type UiMessage =
   | { type: 'ListAgentsRequest' }
