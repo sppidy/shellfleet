@@ -7,7 +7,7 @@ edition = "2024"
 axum = { version = "0.8.9", features = ["ws", "macros"] }
 axum-extra = { version = "0.12.6", features = ["cookie"] }
 futures-util = "0.3.32"
-jsonwebtoken = "10.3.0"
+jsonwebtoken = { version = "10.3.0", features = ["rust_crypto"] }
 rand = "0.8"
 reqwest = { version = "0.13.2", default-features = false, features = ["form", "json", "native-tls"] }
 serde = { version = "1.0.228", features = ["derive"] }
