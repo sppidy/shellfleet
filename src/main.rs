@@ -1,6 +1,7 @@
 mod apt;
 mod deploy;
 mod docker;
+mod health;
 mod journal;
 mod logs;
 mod stats;
@@ -132,6 +133,7 @@ async fn main() {
     let mut term_session: Option<terminal::TerminalSession> = None;
     let log_streams = logs::LogStreams::default();
     let journal_streams = journal::JournalStreams::default();
+    let health_probes = health::HealthProbes::default();
 
     // Watchdog: if the WebSocket goes silent for 75s the connection is
     // probably dead at the TCP layer (Cloudflare or the kernel may drop
@@ -282,6 +284,13 @@ async fn main() {
                                 let streams = journal_streams.clone();
                                 tokio::spawn(async move {
                                     streams.stop(&unit).await;
+                                });
+                            }
+                            Message::HealthProbeSyncRequest { probes } => {
+                                let probes_mgr = health_probes.clone();
+                                let tx_clone = tx.clone();
+                                tokio::spawn(async move {
+                                    probes_mgr.sync(probes, tx_clone).await;
                                 });
                             }
                             Message::SwarmServiceInspectRequest { name } => {
