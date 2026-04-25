@@ -119,7 +119,8 @@ async fn main() {
     // Send a register message
     let hostname = hostname::get().unwrap_or_else(|_| "unknown-agent".into()).to_string_lossy().to_string();
     let _ = tx.send(Message::Register {
-        hostname: hostname,
+        hostname,
+        protocol_version: shared::PROTOCOL_VERSION,
     });
 
     let mut term_session: Option<terminal::TerminalSession> = None;
