@@ -4,11 +4,19 @@
 
 use shared::{HealthProbeKind, HealthProbeResult, HealthProbeSpec, HealthProbeState, Message};
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::process::Command;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
+
+/// Where exec-kind probes are required to live. Anything else is rejected.
+fn probes_dir() -> PathBuf {
+    PathBuf::from("/etc/sys-manager/probes.d")
+}
 
 #[derive(Default, Clone)]
 pub struct HealthProbes {
@@ -90,6 +98,7 @@ async fn run_probe(spec: HealthProbeSpec, tx: tokio::sync::mpsc::UnboundedSender
         let (state, detail) = match spec.kind {
             HealthProbeKind::Http => probe_http(&spec, timeout).await,
             HealthProbeKind::Tcp => probe_tcp(&spec, timeout).await,
+            HealthProbeKind::Exec => probe_exec(&spec, timeout).await,
         };
         let latency_ms = started.elapsed().as_millis().min(u32::MAX as u128) as u32;
         if last_state != Some(state) {
@@ -160,5 +169,75 @@ async fn probe_tcp(
             HealthProbeState::Red,
             format!("timeout after {}s", timeout.as_secs()),
         ),
+    }
+}
+
+async fn probe_exec(
+    spec: &HealthProbeSpec,
+    timeout: Duration,
+) -> (HealthProbeState, String) {
+    // Reject anything that looks like a path. Operator scripts must
+    // live in /etc/sys-manager/probes.d/<filename>.
+    let target = spec.target.trim();
+    if target.is_empty()
+        || target.contains('/')
+        || target.contains('\\')
+        || target.contains("..")
+    {
+        return (
+            HealthProbeState::Red,
+            format!("invalid exec target {target:?} (must be a filename in /etc/sys-manager/probes.d/)"),
+        );
+    }
+    let path = probes_dir().join(target);
+    if !Path::new(&path).is_file() {
+        return (
+            HealthProbeState::Red,
+            format!("script not found: {}", path.display()),
+        );
+    }
+    let mut cmd = Command::new(&path);
+    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => return (HealthProbeState::Red, format!("spawn: {e}")),
+    };
+    let output = match tokio::time::timeout(timeout, child.wait_with_output()).await {
+        Ok(Ok(o)) => o,
+        Ok(Err(e)) => return (HealthProbeState::Red, format!("wait: {e}")),
+        Err(_) => {
+            return (
+                HealthProbeState::Red,
+                format!("timeout after {}s", timeout.as_secs()),
+            );
+        }
+    };
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let first_line = stdout
+        .lines()
+        .find(|l| !l.trim().is_empty())
+        .unwrap_or("")
+        .chars()
+        .take(200)
+        .collect::<String>();
+    if output.status.success() {
+        let detail = if first_line.is_empty() {
+            "ok".to_string()
+        } else {
+            first_line
+        };
+        (HealthProbeState::Green, detail)
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let detail = format!(
+            "exit {} {}",
+            output.status.code().unwrap_or(-1),
+            if !first_line.is_empty() {
+                first_line
+            } else {
+                stderr.lines().next().unwrap_or("").chars().take(200).collect::<String>()
+            }
+        );
+        (HealthProbeState::Red, detail)
     }
 }

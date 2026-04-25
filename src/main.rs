@@ -1,4 +1,5 @@
 mod apt;
+mod backup;
 mod deploy;
 mod docker;
 mod health;
@@ -305,6 +306,22 @@ async fn main() {
                                 let tx_clone = tx.clone();
                                 tokio::spawn(async move {
                                     probes_mgr.sync(probes, tx_clone).await;
+                                });
+                            }
+                            Message::BackupRunRequest { id, name, paths, dest } => {
+                                let tx_clone = tx.clone();
+                                tokio::spawn(async move {
+                                    let (success, archive_path, bytes, log, error) =
+                                        backup::run_backup(&name, &paths, &dest).await;
+                                    let _ = tx_clone.send(Message::BackupRunResponse {
+                                        id,
+                                        name,
+                                        success,
+                                        archive_path,
+                                        bytes,
+                                        log,
+                                        error,
+                                    });
                                 });
                             }
                             Message::SwarmServiceInspectRequest { name } => {

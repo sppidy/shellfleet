@@ -5,6 +5,7 @@ CONF_DIR=/etc/sys-manager
 ENV_FILE="$CONF_DIR/env"
 ENV_EXAMPLE="$CONF_DIR/env.example"
 STATE_DIR=/var/lib/sys-manager
+PROBES_DIR="$CONF_DIR/probes.d"
 
 case "$1" in
     configure|reconfigure)
@@ -22,6 +23,16 @@ case "$1" in
             mkdir -p "$STATE_DIR"
             chown root:root "$STATE_DIR"
             chmod 0750 "$STATE_DIR"
+        fi
+
+        # Allow-list dir for exec-kind health probes. The agent will
+        # only run scripts that live here (basename match, no path
+        # traversal), so operators can drop scripts via configuration
+        # management without exposing arbitrary code paths.
+        if [ ! -d "$PROBES_DIR" ]; then
+            mkdir -p "$PROBES_DIR"
+            chown root:root "$PROBES_DIR"
+            chmod 0750 "$PROBES_DIR"
         fi
 
         # Seed /etc/sys-manager/env on first install. Never overwrite an
