@@ -72,11 +72,11 @@ export default function SystemStats({ agentId }: { agentId: string }) {
 
   if (unsupported && !stats) {
     return (
-      <div className="flex items-center gap-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
+      <div className="flex items-center gap-2 text-xs text-amber-300 bg-amber-500/10 border border-amber-500/30 rounded-md px-3 py-2">
         <AlertCircleIcon className="w-3.5 h-3.5 shrink-0" />
         <span>
           This agent doesn&apos;t expose system stats. Upgrade it via{' '}
-          <code className="bg-amber-100 px-1 py-0.5 rounded">apt install --only-upgrade sys-manager-agent</code>.
+          <code className="bg-amber-500/20 px-1 py-0.5 rounded">apt install --only-upgrade sys-manager-agent</code>.
         </span>
       </div>
     );
@@ -88,7 +88,7 @@ export default function SystemStats({ agentId }: { agentId: string }) {
         {[0, 1, 2, 3].map((i) => (
           <div
             key={i}
-            className="h-20 bg-slate-100 rounded-md animate-pulse"
+            className="h-20 bg-slate-900/50 rounded-md animate-pulse"
           />
         ))}
       </div>
@@ -159,26 +159,26 @@ function StatCard({
 }) {
   const tone =
     pct === undefined
-      ? 'bg-slate-100'
+      ? 'bg-slate-700'
       : pct >= 90
         ? 'bg-red-500'
         : pct >= 75
           ? 'bg-amber-500'
           : 'bg-emerald-500';
   return (
-    <div className="bg-white border border-slate-200 rounded-md p-3 flex flex-col">
+    <div className="bg-slate-900 border border-slate-800 rounded-md p-3 flex flex-col">
       <div className="flex items-center justify-between text-[11px] uppercase tracking-wide text-slate-500">
         <span className="flex items-center gap-1.5">
           <span className="text-slate-400">{icon}</span>
           {label}
         </span>
       </div>
-      <div className="text-xl font-semibold text-slate-900 mt-1">{value}</div>
+      <div className="text-xl font-semibold text-slate-100 mt-1">{value}</div>
       <div className="text-[11px] text-slate-500 truncate" title={sub}>
         {sub}
       </div>
       {pct !== undefined && (
-        <div className="mt-2 h-1 rounded-full bg-slate-100 overflow-hidden">
+        <div className="mt-2 h-1 rounded-full bg-slate-800 overflow-hidden">
           <div
             className={`h-full transition-all ${tone}`}
             style={{ width: `${Math.min(100, Math.max(0, pct))}%` }}

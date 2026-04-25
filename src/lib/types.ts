@@ -21,6 +21,50 @@ export type SystemStatsPayload = {
   root_disk_used_kb: number;
 };
 
+export type SwarmRole = 'notinswarm' | 'worker' | 'manager';
+
+export type DockerContainer = {
+  id: string;
+  names: string;
+  image: string;
+  state: string;
+  status: string;
+  ports: string;
+};
+
+export type DockerListPayload = {
+  available: boolean;
+  swarm_role: SwarmRole;
+  containers: DockerContainer[];
+  error: string | null;
+};
+
+export type SwarmService = {
+  id: string;
+  name: string;
+  mode: string;
+  replicas: string;
+  image: string;
+  ports: string;
+};
+
+export type SwarmNode = {
+  id: string;
+  hostname: string;
+  status: string;
+  availability: string;
+  manager_status: string;
+  engine_version: string;
+};
+
+export type SwarmListPayload = {
+  available: boolean;
+  is_manager: boolean;
+  services: SwarmService[];
+  nodes: SwarmNode[];
+  error: string | null;
+};
+
 export type AgentMessagePayload =
   | { type: 'Register'; payload: { hostname: string; protocol_version?: number } }
   | { type: 'RegisterAck'; payload: { agent_id: string } }
@@ -38,7 +82,11 @@ export type AgentMessagePayload =
   | { type: 'WriteConfigRequest'; payload: { path: string; content: string } }
   | { type: 'WriteConfigResponse'; payload: { path: string; success: boolean; error: string | null } }
   | { type: 'SystemStatsRequest' }
-  | { type: 'SystemStatsResponse'; payload: SystemStatsPayload };
+  | { type: 'SystemStatsResponse'; payload: SystemStatsPayload }
+  | { type: 'DockerListRequest' }
+  | { type: 'DockerListResponse'; payload: DockerListPayload }
+  | { type: 'SwarmListRequest' }
+  | { type: 'SwarmListResponse'; payload: SwarmListPayload };
 
 export type UiMessage =
   | { type: 'ListAgentsRequest' }
