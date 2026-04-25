@@ -59,18 +59,19 @@ fn read_hostname() -> String {
 }
 
 async fn read_root_disk() -> (u64, u64) {
-    let output = match Command::new("df")
-        .args(["-Pk", "--output=size,used", "/"])
-        .output()
-        .await
-    {
+    // POSIX mode forces a stable 6-column layout:
+    //   Filesystem  1024-blocks  Used  Available  Capacity  Mounted on
+    // We deliberately don't combine -P with --output= because GNU df treats
+    // them as conflicting: depending on the version the totals come back as
+    // 0 or the call errors silently.
+    let output = match Command::new("df").args(["-Pk", "/"]).output().await {
         Ok(o) if o.status.success() => o,
         _ => return (0, 0),
     };
     let stdout = String::from_utf8_lossy(&output.stdout);
-    // Lines: header + one data row.
     if let Some(row) = stdout.lines().nth(1) {
         let mut it = row.split_whitespace();
+        let _filesystem = it.next();
         let total = it.next().and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
         let used = it.next().and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
         return (total, used);
