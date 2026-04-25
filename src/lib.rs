@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 /// the wire format changes in a way the server needs to reject older agents
 /// for. Value `0` means "legacy agent that predates this field" — those
 /// still connect, just without the version-aware fast paths.
-pub const PROTOCOL_VERSION: u32 = 7;
+pub const PROTOCOL_VERSION: u32 = 8;
 
 fn default_protocol_version() -> u32 {
     0
@@ -310,6 +310,68 @@ pub enum Message {
         log: String,
         error: Option<String>,
     },
+
+    /// Server pushing the agent's full probe set. Replaces whatever the
+    /// agent had previously. Sent on agent register and on every
+    /// CRUD operation in `/api/health-probes`. Introduced in
+    /// protocol_version 8.
+    HealthProbeSyncRequest {
+        probes: Vec<HealthProbeSpec>,
+    },
+    /// Agent reporting probe state changes back to the server. The
+    /// agent batches results per probe whenever a probe transitions
+    /// state (or completes its first run after sync). Introduced in
+    /// protocol_version 8.
+    HealthProbeReport {
+        results: Vec<HealthProbeResult>,
+    },
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum HealthProbeKind {
+    Http,
+    Tcp,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct HealthProbeSpec {
+    /// Stable id within the agent — used as the dedup key on sync. The
+    /// server's row id stringified is fine.
+    pub id: String,
+    pub name: String,
+    pub kind: HealthProbeKind,
+    /// HTTP: full URL ("https://example.com/healthz").
+    /// TCP:  "host:port".
+    pub target: String,
+    pub interval_secs: u32,
+    pub timeout_secs: u32,
+    /// HTTP only: expected status code. `None` means "any 2xx".
+    #[serde(default)]
+    pub expect_status: Option<u16>,
+    /// HTTP only: substring that must appear in the body. `None` skips
+    /// body checking.
+    #[serde(default)]
+    pub expect_body: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum HealthProbeState {
+    Green,
+    Red,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct HealthProbeResult {
+    pub id: String,
+    pub state: HealthProbeState,
+    pub latency_ms: u32,
+    /// One-line summary for the operator: status code + reason, error
+    /// message, or "ok in <N>ms".
+    pub detail: String,
+    /// Unix seconds when the probe was sampled.
+    pub at: i64,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
