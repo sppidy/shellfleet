@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useUi } from './providers/UiProvider';
 import { apiFetch } from '@/lib/api';
-import type { HealthProbe, HealthProbeKind } from '@/lib/types';
+import type { HealthProbe, HealthProbeKind, ProbeLibraryEntry } from '@/lib/types';
 import {
   ActivitySquareIcon,
   PlusIcon,
@@ -183,6 +183,9 @@ function ProbeForm({
   onCreated: () => void;
 }) {
   const ui = useUi();
+  const [mode, setMode] = useState<'custom' | 'library'>('custom');
+  const [library, setLibrary] = useState<ProbeLibraryEntry[]>([]);
+  const [libraryPick, setLibraryPick] = useState<string>('');
   const [name, setName] = useState('');
   const [kind, setKind] = useState<HealthProbeKind>('http');
   const [target, setTarget] = useState('');
@@ -190,13 +193,45 @@ function ProbeForm({
   const [timeoutSecs, setTimeoutSecs] = useState(5);
   const [expectStatus, setExpectStatus] = useState<string>('');
   const [expectBody, setExpectBody] = useState('');
+  const [envPairs, setEnvPairs] = useState<{ key: string; value: string }[]>([]);
   const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const res = await apiFetch('/api/probe-library');
+        if (!res.ok) return;
+        const data: ProbeLibraryEntry[] = await res.json();
+        if (!cancelled) setLibrary(data);
+      } catch {
+        /* ignore — library tab just shows empty */
+      }
+    };
+    void load();
+  }, []);
+
+  const applyLibraryPick = (script: string) => {
+    setLibraryPick(script);
+    const entry = library.find((e) => e.script === script);
+    if (!entry) return;
+    setKind('exec');
+    setTarget(entry.script);
+    setIntervalSecs(entry.interval_secs);
+    setTimeoutSecs(entry.timeout_secs);
+    if (!name) setName(entry.script.replace(/\.sh$/, ''));
+    setEnvPairs(entry.default_env.map((e) => ({ key: e.key, value: e.value })));
+  };
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name || !target) return;
     setSubmitting(true);
     try {
+      const env = envPairs
+        .map((p) => ({ k: p.key.trim(), v: p.value }))
+        .filter((p) => p.k.length > 0)
+        .map((p) => `${p.k}=${p.v}`);
       const body = {
         agent_id: agentId,
         name,
@@ -208,6 +243,7 @@ function ProbeForm({
           kind === 'http' && expectStatus ? Number(expectStatus) : null,
         expect_body: kind === 'http' && expectBody ? expectBody : null,
         enabled: true,
+        env,
       };
       const res = await apiFetch('/api/health-probes', {
         method: 'POST',
@@ -232,6 +268,58 @@ function ProbeForm({
       onSubmit={submit}
       className="rounded-md border border-slate-800 bg-slate-900/40 p-3 space-y-3"
     >
+      <div className="flex items-center gap-3 text-xs text-slate-400 border-b border-slate-800 pb-2">
+        <label className="flex items-center gap-1.5">
+          <input
+            type="radio"
+            name="probeMode"
+            checked={mode === 'custom'}
+            onChange={() => setMode('custom')}
+            className="accent-blue-600"
+          />
+          Custom
+        </label>
+        <label className="flex items-center gap-1.5">
+          <input
+            type="radio"
+            name="probeMode"
+            checked={mode === 'library'}
+            onChange={() => setMode('library')}
+            className="accent-blue-600"
+          />
+          From library
+        </label>
+      </div>
+
+      {mode === 'library' && (
+        <div className="space-y-3">
+          <label className="text-xs text-slate-400 flex flex-col gap-1">
+            Stock probe
+            {library.length === 0 ? (
+              <span className="text-slate-500 italic">Loading library…</span>
+            ) : (
+              <select
+                value={libraryPick}
+                onChange={(e) => applyLibraryPick(e.target.value)}
+                className="bg-slate-950 border border-slate-700 rounded-md px-2 py-1.5 text-sm text-slate-100"
+              >
+                <option value="">— pick a probe —</option>
+                {library.map((e) => (
+                  <option key={e.script} value={e.script}>
+                    {e.title} ({e.script})
+                  </option>
+                ))}
+              </select>
+            )}
+          </label>
+          {libraryPick && (
+            <p className="text-[11px] text-slate-500">
+              {library.find((e) => e.script === libraryPick)?.description}
+            </p>
+          )}
+        </div>
+      )}
+
       <div className="grid grid-cols-2 gap-3">
         <label className="text-xs text-slate-400 flex flex-col gap-1">
           Name
@@ -296,6 +384,56 @@ function ProbeForm({
           />
         </label>
       </div>
+      {kind === 'exec' && (
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <span className="text-xs text-slate-400">Env (KEY=VALUE)</span>
+            <button
+              type="button"
+              onClick={() => setEnvPairs((p) => [...p, { key: '', value: '' }])}
+              className="text-[11px] text-slate-400 hover:text-slate-100"
+            >
+              + add
+            </button>
+          </div>
+          {envPairs.length === 0 ? (
+            <p className="text-[11px] text-slate-500 italic">
+              No env overrides. Click "add" to set things like THRESHOLD=85.
+            </p>
+          ) : (
+            envPairs.map((p, i) => (
+              <div key={i} className="grid grid-cols-[1fr_1fr_auto] gap-2">
+                <input
+                  type="text"
+                  value={p.key}
+                  onChange={(e) =>
+                    setEnvPairs((arr) => arr.map((x, j) => (j === i ? { ...x, key: e.target.value } : x)))
+                  }
+                  placeholder="KEY"
+                  className="bg-slate-950 border border-slate-700 rounded-md px-2 py-1 font-mono text-xs text-slate-100"
+                />
+                <input
+                  type="text"
+                  value={p.value}
+                  onChange={(e) =>
+                    setEnvPairs((arr) => arr.map((x, j) => (j === i ? { ...x, value: e.target.value } : x)))
+                  }
+                  placeholder="value"
+                  className="bg-slate-950 border border-slate-700 rounded-md px-2 py-1 font-mono text-xs text-slate-100"
+                />
+                <button
+                  type="button"
+                  onClick={() => setEnvPairs((arr) => arr.filter((_, j) => j !== i))}
+                  className="text-slate-500 hover:text-red-300 px-1"
+                  title="Remove"
+                >
+                  ×
+                </button>
+              </div>
+            ))
+          )}
+        </div>
+      )}
       {kind === 'http' && (
         <div className="grid grid-cols-2 gap-3">
           <label className="text-xs text-slate-400 flex flex-col gap-1">

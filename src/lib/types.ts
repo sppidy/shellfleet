@@ -304,6 +304,24 @@ export type HealthProbe = {
   last_latency_ms: number | null;
   last_detail: string | null;
   updated_at: number;
+  env: string[];
+};
+
+export type ProbeLibraryEntry = {
+  script: string;
+  title: string;
+  description: string;
+  default_env: { key: string; value: string; description: string }[];
+  interval_secs: number;
+  timeout_secs: number;
+};
+
+export type DockerImage = {
+  id: string;
+  repository: string;
+  tag: string;
+  size_bytes: number;
+  created: string;
 };
 
 export type HealthSnapshotRow = {
@@ -384,7 +402,13 @@ export type AgentMessagePayload =
   | { type: 'SwarmStackDeployRequest'; payload: { stack_name: string; compose_yaml: string; prune: boolean } }
   | { type: 'SwarmStackDeployResponse'; payload: SwarmStackDeployResponse }
   | { type: 'HealthProbeSyncRequest'; payload: { probes: unknown[] } }
-  | { type: 'HealthProbeReport'; payload: { results: unknown[] } };
+  | { type: 'HealthProbeReport'; payload: { results: unknown[] } }
+  | { type: 'DockerImageListRequest' }
+  | { type: 'DockerImageListResponse'; payload: { available: boolean; images: DockerImage[]; error: string | null } }
+  | { type: 'DockerImageRemoveRequest'; payload: { id: string; force: boolean } }
+  | { type: 'DockerImageRemoveResponse'; payload: { id: string; success: boolean; log: string; error: string | null } }
+  | { type: 'DockerImagePullRequest'; payload: { reference: string } }
+  | { type: 'DockerImagePullResponse'; payload: { reference: string; success: boolean; log: string; error: string | null } };
 
 export type UiMessage =
   | { type: 'ListAgentsRequest' }

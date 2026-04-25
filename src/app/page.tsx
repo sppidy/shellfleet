@@ -11,6 +11,7 @@ import Terminal from '@/components/Terminal';
 import ConfigEditor from '@/components/ConfigEditor';
 import SystemStats from '@/components/SystemStats';
 import Containers from '@/components/Containers';
+import ContainerImages from '@/components/ContainerImages';
 import AptManager from '@/components/AptManager';
 import FleetOverview from '@/components/FleetOverview';
 import Deploy from '@/components/Deploy';
@@ -35,11 +36,12 @@ import {
   ArchiveIcon,
   MenuIcon,
   XIcon,
+  ImageIcon,
 } from 'lucide-react';
 
-type Tab = 'dashboard' | 'containers' | 'deploy' | 'updates' | 'health' | 'backups' | 'config';
+type Tab = 'dashboard' | 'containers' | 'images' | 'deploy' | 'updates' | 'health' | 'backups' | 'config';
 
-const TABS: Tab[] = ['dashboard', 'containers', 'deploy', 'updates', 'health', 'backups', 'config'];
+const TABS: Tab[] = ['dashboard', 'containers', 'images', 'deploy', 'updates', 'health', 'backups', 'config'];
 
 export default function Home() {
   return (
@@ -376,6 +378,12 @@ function HomeBody() {
                   label="Containers"
                 />
                 <TabButton
+                  active={activeTab === 'images'}
+                  onClick={() => setActiveTab('images')}
+                  icon={<ImageIcon className="w-4 h-4 mr-2" />}
+                  label="Images"
+                />
+                <TabButton
                   active={activeTab === 'deploy'}
                   onClick={() => setActiveTab('deploy')}
                   icon={<RocketIcon className="w-4 h-4 mr-2" />}
@@ -428,6 +436,10 @@ function HomeBody() {
               ) : activeTab === 'containers' ? (
                 <div className="flex-1 overflow-y-auto p-6">
                   <Containers agentId={selectedAgent} />
+                </div>
+              ) : activeTab === 'images' ? (
+                <div className="flex-1 overflow-y-auto p-6 max-w-5xl mx-auto w-full">
+                  <ContainerImages agentId={selectedAgent} />
                 </div>
               ) : activeTab === 'deploy' ? (
                 <div className="flex-1 overflow-y-auto p-6">
