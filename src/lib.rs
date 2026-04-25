@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 /// the wire format changes in a way the server needs to reject older agents
 /// for. Value `0` means "legacy agent that predates this field" — those
 /// still connect, just without the version-aware fast paths.
-pub const PROTOCOL_VERSION: u32 = 11;
+pub const PROTOCOL_VERSION: u32 = 12;
 
 fn default_protocol_version() -> u32 {
     0
@@ -421,6 +421,147 @@ pub enum Message {
         log: String,
         error: Option<String>,
     },
+
+    // ----- Networks (v12) -----
+    DockerNetworkListRequest,
+    DockerNetworkListResponse {
+        available: bool,
+        networks: Vec<DockerNetwork>,
+        error: Option<String>,
+    },
+    DockerNetworkInspectRequest {
+        id: String,
+    },
+    DockerNetworkInspectResponse {
+        id: String,
+        success: bool,
+        /// Raw `docker network inspect <id>` output (single-element JSON array).
+        json: String,
+        error: Option<String>,
+    },
+    DockerNetworkCreateRequest {
+        name: String,
+        driver: String,
+        #[serde(default)]
+        subnet: Option<String>,
+        #[serde(default)]
+        attachable: bool,
+        #[serde(default)]
+        internal: bool,
+    },
+    DockerNetworkCreateResponse {
+        name: String,
+        success: bool,
+        id: Option<String>,
+        log: String,
+        error: Option<String>,
+    },
+    DockerNetworkRemoveRequest {
+        id: String,
+    },
+    DockerNetworkRemoveResponse {
+        id: String,
+        success: bool,
+        log: String,
+        error: Option<String>,
+    },
+
+    // ----- Volumes (v12) -----
+    DockerVolumeListRequest,
+    DockerVolumeListResponse {
+        available: bool,
+        volumes: Vec<DockerVolume>,
+        error: Option<String>,
+    },
+    DockerVolumeInspectRequest {
+        name: String,
+    },
+    DockerVolumeInspectResponse {
+        name: String,
+        success: bool,
+        json: String,
+        error: Option<String>,
+    },
+    DockerVolumeRemoveRequest {
+        name: String,
+        #[serde(default)]
+        force: bool,
+    },
+    DockerVolumeRemoveResponse {
+        name: String,
+        success: bool,
+        log: String,
+        error: Option<String>,
+    },
+    DockerVolumePruneRequest,
+    DockerVolumePruneResponse {
+        success: bool,
+        removed: Vec<String>,
+        space_reclaimed_bytes: u64,
+        log: String,
+        error: Option<String>,
+    },
+
+    // ----- Swarm stacks (v12, manager-only) -----
+    SwarmStackListRequest,
+    SwarmStackListResponse {
+        available: bool,
+        is_manager: bool,
+        stacks: Vec<SwarmStack>,
+        error: Option<String>,
+    },
+    SwarmStackInspectRequest {
+        name: String,
+    },
+    SwarmStackInspectResponse {
+        name: String,
+        success: bool,
+        services: Vec<SwarmService>,
+        tasks: Vec<SwarmTask>,
+        log: String,
+        error: Option<String>,
+    },
+    SwarmStackRemoveRequest {
+        name: String,
+    },
+    SwarmStackRemoveResponse {
+        name: String,
+        success: bool,
+        log: String,
+        error: Option<String>,
+    },
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct DockerNetwork {
+    pub id: String,
+    pub name: String,
+    pub driver: String,
+    /// "local" or "swarm".
+    pub scope: String,
+    pub created: String,
+    pub ipv6: bool,
+    pub internal: bool,
+    pub attachable: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct DockerVolume {
+    pub name: String,
+    pub driver: String,
+    pub mountpoint: String,
+    /// Bytes. `0` if docker doesn't report it (e.g. external drivers).
+    pub size_bytes: u64,
+    pub created: String,
+    /// "label1=v1,label2=v2" — opaque to the agent, raw from docker.
+    pub labels: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct SwarmStack {
+    pub name: String,
+    pub services: u32,
+    pub orchestrator: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
