@@ -32,21 +32,21 @@ services:
 
   # The Agent is usually deployed natively on target machines,
   # but we include it in docker-compose for local end-to-end testing.
-  agent:
-    build:
-      context: .
-      dockerfile: Dockerfile.agent
-    environment:
-      - SERVER_WS_URL=wss://dashboard.example.com/agent/ws
-    volumes:
-      # Mount the host's DBus socket to allow the containerized agent to control the host's systemd
-      - /var/run/dbus/system_bus_socket:/var/run/dbus/system_bus_socket
-      # Optionally mount host's /etc to allow the config editor to see it
-      # - /etc:/etc
-    networks:
-      - sys_manager_net
-    depends_on:
-      - server
+#  agent:
+#    build:
+#      context: .
+#      dockerfile: Dockerfile.agent
+#    environment:
+#      - SERVER_WS_URL=wss://dashboard.example.com/agent/ws
+#    volumes:
+#      # Mount the host's DBus socket to allow the containerized agent to control the host's systemd
+#      - /var/run/dbus/system_bus_socket:/var/run/dbus/system_bus_socket
+#      # Optionally mount host's /etc to allow the config editor to see it
+#      # - /etc:/etc
+#    networks:
+#      - sys_manager_net
+#    depends_on:
+#      - server
 
 networks:
   sys_manager_net:
