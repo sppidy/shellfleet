@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 /// the wire format changes in a way the server needs to reject older agents
 /// for. Value `0` means "legacy agent that predates this field" — those
 /// still connect, just without the version-aware fast paths.
-pub const PROTOCOL_VERSION: u32 = 9;
+pub const PROTOCOL_VERSION: u32 = 10;
 
 fn default_protocol_version() -> u32 {
     0
@@ -326,33 +326,88 @@ pub enum Message {
         results: Vec<HealthProbeResult>,
     },
 
-    /// Server requesting the agent run a backup. The agent tars the
-    /// listed paths into a single .tar.gz at `dest`. Introduced in
-    /// protocol_version 9.
+    /// Server requesting the agent run a backup. The agent archives
+    /// the listed paths and writes them to `dest`. Introduced in
+    /// protocol_version 9; `mode` added in protocol_version 10
+    /// (defaults to `tar` for older callers).
     BackupRunRequest {
         /// Server-side `backup_jobs.id` echoed back in the response so
         /// the server can attribute results to a specific job.
         id: String,
         name: String,
         paths: Vec<String>,
-        /// Destination URI. v1 only supports a local filesystem path
-        /// (no scheme, or `file:///...`). `s3://bucket/prefix` etc.
-        /// will be added later.
+        /// Destination URI. Supported schemes:
+        ///   - bare path or `file:///...` — local filesystem
+        ///   - `s3://bucket/prefix` — uploaded via the host's `aws` CLI
         dest: String,
+        #[serde(default)]
+        mode: BackupMode,
     },
     BackupRunResponse {
         id: String,
         name: String,
         success: bool,
-        /// Path to the produced archive on the agent host (when
-        /// dest was a local path). Empty for non-local destinations
-        /// or on failure.
+        /// URI of the produced archive (local path or s3://...).
+        /// Empty on failure.
         archive_path: String,
         /// Bytes written to the archive. 0 on failure.
         bytes: u64,
         log: String,
         error: Option<String>,
     },
+
+    /// Server asking the agent to enumerate existing archives at the
+    /// job's destination. Introduced in protocol_version 10.
+    BackupListArchivesRequest {
+        id: String,
+        name: String,
+        dest: String,
+    },
+    BackupListArchivesResponse {
+        id: String,
+        success: bool,
+        archives: Vec<BackupArchive>,
+        error: Option<String>,
+    },
+
+    /// Server requesting the agent restore a named archive to
+    /// `dest_root` (operator-supplied; the agent never auto-extracts
+    /// in place). Introduced in protocol_version 10.
+    BackupRestoreRequest {
+        id: String,
+        archive_uri: String,
+        dest_root: String,
+    },
+    BackupRestoreResponse {
+        id: String,
+        archive_uri: String,
+        dest_root: String,
+        success: bool,
+        log: String,
+        error: Option<String>,
+    },
+}
+
+/// How the agent should produce the archive. v1 only ships `tar`;
+/// `restic` is reserved for v3 and currently returns
+/// "not implemented" from the agent.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum BackupMode {
+    #[default]
+    Tar,
+    Restic,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct BackupArchive {
+    /// Just the basename (`etc-sysmanager-1777134782.tar.gz`).
+    pub name: String,
+    /// Full URI suitable for a follow-up `BackupRestoreRequest`.
+    pub uri: String,
+    pub bytes: u64,
+    /// Unix seconds.
+    pub mtime: i64,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
