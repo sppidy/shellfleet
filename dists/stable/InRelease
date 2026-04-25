@@ -1,3 +1,6 @@
+-----BEGIN PGP SIGNED MESSAGE-----
+Hash: SHA512
+
 Architectures: amd64 arm64
 Codename: stable
 Components: main
@@ -29,3 +32,10 @@ SHA512:
  f6e80dbb901eb41d9d78068afb50d699cbf9f92e084e59070ee874da573f391ed0c17fc902250cf322a3e7732524597ca19498cc449ecc1452e13d9f9122a5f7             1526 main/binary-amd64/Packages.gz
  08597091397b6227a174afbaae3f0eef9c2b9bbd17776ca07371b33cbc22615b4b7e6edba7a080f9c4ae1fb68ec7799095eb4f761def7d4c73781c614e10fbc0             3492 main/binary-arm64/Packages
  ee1f408026994781b09098acf278e4a2af52b9ac857ddb3d7854e7ab1805e54779b7896f2d89bc706f72fe38604e583c71818f64df6b404fe484d008ea2cf3ca             1102 main/binary-arm64/Packages.gz
+-----BEGIN PGP SIGNATURE-----
+
+iHUEARYKAB0WIQSRgR/Lq0W5lrQOrR7G4prCUsdK7gUCaezd6gAKCRDG4prCUsdK
+7rpeAQCjcTvyLyOMShcS4qw5HKl7Sat4krYCGv4nGIlzYS4g4QD/cEdCwMtRibBZ
+TWwPad0lYQvVLMK4N5IFTtqhCqhMCgI=
+=Ffn5
+-----END PGP SIGNATURE-----
