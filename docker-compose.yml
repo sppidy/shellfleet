@@ -24,6 +24,11 @@ services:
       # with both Slack incoming webhooks and Discord webhooks.
       - UPDATE_WEBHOOK_URL=${UPDATE_WEBHOOK_URL:-}
       - UPDATE_WEBHOOK_FORMAT=${UPDATE_WEBHOOK_FORMAT:-json}
+      # Comma-separated extra origins permitted to upgrade /ui/ws.
+      # The UI_URL origin is always allowed automatically. Use this if
+      # you have additional dashboards (e.g. dev tunnels) that need the
+      # WS without becoming the canonical URL.
+      - WS_ALLOWED_ORIGINS=${WS_ALLOWED_ORIGINS:-}
     volumes:
       - server_data:/data
     healthcheck:
