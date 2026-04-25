@@ -26,15 +26,23 @@ jobs:
     outputs:
       deb-name: ${{ steps.build.outputs.name }}
     steps:
-      - name: Checkout (with submodules)
+      - name: Checkout main repo
         uses: actions/checkout@v4
         with:
-          submodules: recursive
           fetch-depth: 0
-          # Fine-grained PAT with read access to sys-mngr-agent and
-          # sys-mngr-shared (the only submodules this build needs).
-          # Required because those submodule repos are private.
-          token: ${{ secrets.SUBMODULES_PAT || secrets.GITHUB_TOKEN }}
+
+      - name: Fetch submodules with PAT
+        env:
+          SUBMODULES_PAT: ${{ secrets.SUBMODULES_PAT }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -n "${SUBMODULES_PAT:-}" ]; then
+            git config --global \
+              url."https://x-access-token:${SUBMODULES_PAT}@github.com/".insteadOf \
+              "https://github.com/"
+          fi
+          git submodule update --init --recursive --depth 1 agent shared
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
