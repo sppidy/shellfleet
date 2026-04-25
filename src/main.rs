@@ -130,6 +130,20 @@ async fn main() {
         protocol_version: shared::PROTOCOL_VERSION,
     });
 
+    // If we exited mid-apt-run last time (e.g. libc/systemd self-upgrade
+    // killed us), synthesise the AptUpgradeResponse so the server-side
+    // scheduler doesn't sit on `last_status="running"` forever.
+    if let Some(pending) = apt::take_pending_run() {
+        let mut log = pending.log;
+        log.push_str("\n[agent restarted during upgrade; this run was interrupted]\n");
+        let _ = tx.send(Message::AptUpgradeResponse {
+            package: pending.package,
+            success: false,
+            log,
+            error: Some("agent restarted during upgrade".into()),
+        });
+    }
+
     let mut term_session: Option<terminal::TerminalSession> = None;
     let log_streams = logs::LogStreams::default();
     let journal_streams = journal::JournalStreams::default();

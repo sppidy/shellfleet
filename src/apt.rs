@@ -1,6 +1,62 @@
 use shared::AptUpgradable;
+use std::path::PathBuf;
+use std::process::Stdio;
 use std::time::{SystemTime, UNIX_EPOCH};
+use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
+
+/// Where the agent journals an in-flight apt run. If a libc/systemd
+/// self-upgrade kills the agent mid-run, this file lets the next agent
+/// process synthesise an `AptUpgradeResponse` instead of leaving the
+/// scheduler hanging on `last_status="running"` forever.
+fn apt_state_path() -> PathBuf {
+    PathBuf::from("/var/lib/sys-manager/apt-run.json")
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
+pub struct AptRunState {
+    pub package: Option<String>,
+    pub started_at: u64,
+    pub log: String,
+    /// Truncated to a sane limit on every flush.
+    pub bytes_written: usize,
+}
+
+const APT_LOG_CAP: usize = 16_000;
+
+fn truncate_inplace(s: &mut String, cap: usize) {
+    if s.len() > cap {
+        let cut = s.len() - cap;
+        let head = format!("…[{cut} bytes truncated]…\n");
+        s.drain(..cut);
+        s.insert_str(0, &head);
+    }
+}
+
+fn write_state(state: &AptRunState) {
+    if let Ok(json) = serde_json::to_string(state) {
+        let path = apt_state_path();
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = std::fs::write(&path, json);
+    }
+}
+
+fn clear_state() {
+    let _ = std::fs::remove_file(apt_state_path());
+}
+
+/// Read any persisted apt run state. The agent calls this once at
+/// startup; if a run was in flight when we exited, we synthesise an
+/// `AptUpgradeResponse` for it.
+pub fn take_pending_run() -> Option<AptRunState> {
+    let path = apt_state_path();
+    let data = std::fs::read_to_string(&path).ok()?;
+    let state: AptRunState = serde_json::from_str(&data).ok()?;
+    let _ = std::fs::remove_file(&path);
+    Some(state)
+}
 
 fn now_unix() -> u64 {
     SystemTime::now()
@@ -126,7 +182,9 @@ pub async fn upgrade(package: Option<String>) -> (bool, String, Option<String>) 
     let mut cmd = Command::new("apt-get");
     cmd.env("DEBIAN_FRONTEND", "noninteractive")
         .env("LC_ALL", "C")
-        .arg("-y");
+        .arg("-y")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
     match &package {
         Some(p) => {
             cmd.arg("install").arg("--only-upgrade").arg(p);
@@ -135,20 +193,81 @@ pub async fn upgrade(package: Option<String>) -> (bool, String, Option<String>) 
             cmd.arg("upgrade");
         }
     }
-    let output = match cmd.output().await {
-        Ok(o) => o,
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
         Err(e) => return (false, String::new(), Some(format!("spawn: {e}"))),
     };
-    let success = output.status.success();
-    let mut log = truncate_log(&output.stdout, 6000);
-    if !output.stderr.is_empty() {
-        log.push_str("\n--- stderr ---\n");
-        log.push_str(&truncate_log(&output.stderr, 4000));
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+
+    let started_at = now_unix();
+    let mut state = AptRunState {
+        package: package.clone(),
+        started_at,
+        log: String::new(),
+        bytes_written: 0,
+    };
+    write_state(&state);
+
+    let (line_tx, mut line_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    if let Some(out) = stdout {
+        let tx = line_tx.clone();
+        tokio::spawn(async move {
+            let mut reader = BufReader::new(out).lines();
+            while let Ok(Some(line)) = reader.next_line().await {
+                let _ = tx.send(line);
+            }
+        });
     }
+    if let Some(err) = stderr {
+        let tx = line_tx.clone();
+        tokio::spawn(async move {
+            let mut reader = BufReader::new(err).lines();
+            while let Ok(Some(line)) = reader.next_line().await {
+                let _ = tx.send(format!("[stderr] {line}"));
+            }
+        });
+    }
+    drop(line_tx); // close once children drop their senders
+
+    let mut last_flush = tokio::time::Instant::now();
+    let flush_every = std::time::Duration::from_secs(2);
+    loop {
+        tokio::select! {
+            line = line_rx.recv() => match line {
+                Some(l) => {
+                    state.log.push_str(&l);
+                    state.log.push('\n');
+                    state.bytes_written += l.len() + 1;
+                    truncate_inplace(&mut state.log, APT_LOG_CAP);
+                    if last_flush.elapsed() >= flush_every {
+                        write_state(&state);
+                        last_flush = tokio::time::Instant::now();
+                    }
+                }
+                None => break,
+            },
+            _ = tokio::time::sleep_until(last_flush + flush_every) => {
+                write_state(&state);
+                last_flush = tokio::time::Instant::now();
+            }
+        }
+    }
+
+    let status = match child.wait().await {
+        Ok(s) => s,
+        Err(e) => {
+            // Don't clear state — the next process may want to report
+            // the partial log.
+            return (false, state.log, Some(format!("wait: {e}")));
+        }
+    };
+    clear_state();
+    let success = status.success();
     let err = if success {
         None
     } else {
-        Some(format!("exit code {:?}", output.status.code()))
+        Some(format!("exit code {:?}", status.code()))
     };
-    (success, log, err)
+    (success, state.log, err)
 }

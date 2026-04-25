@@ -4,6 +4,7 @@ set -e
 CONF_DIR=/etc/sys-manager
 ENV_FILE="$CONF_DIR/env"
 ENV_EXAMPLE="$CONF_DIR/env.example"
+STATE_DIR=/var/lib/sys-manager
 
 case "$1" in
     configure|reconfigure)
@@ -12,6 +13,15 @@ case "$1" in
             mkdir -p "$CONF_DIR"
             chown root:root "$CONF_DIR"
             chmod 0750 "$CONF_DIR"
+        fi
+
+        # Persistent state dir for apt-run journaling — survives reboot
+        # so we can replay an apt run that was interrupted by libc /
+        # systemd self-upgrades.
+        if [ ! -d "$STATE_DIR" ]; then
+            mkdir -p "$STATE_DIR"
+            chown root:root "$STATE_DIR"
+            chmod 0750 "$STATE_DIR"
         fi
 
         # Seed /etc/sys-manager/env on first install. Never overwrite an
