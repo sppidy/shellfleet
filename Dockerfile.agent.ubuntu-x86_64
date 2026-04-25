@@ -1,4 +1,4 @@
-FROM rust:latest as builder
+FROM rust:latest AS builder
 WORKDIR /usr/src/app
 
 # Install cross-compilation toolchain and OpenSSL for x86_64

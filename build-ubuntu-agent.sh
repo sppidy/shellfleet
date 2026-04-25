@@ -1,19 +1,22 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
-echo "Building Agent for Ubuntu x86_64 using Docker Buildx..."
+# Cross-compile the agent for Ubuntu x86_64 using the cross-toolchain
+# inside Dockerfile.agent.ubuntu-x86_64. The Dockerfile runs natively on
+# whatever arch the build host is and emits an amd64 binary via
+# g++-x86-64-linux-gnu, so we deliberately do NOT pass --platform here:
+# QEMU emulation is not needed and just slows the build down.
 
-# 1. Build the Docker image targeting linux/amd64
-docker buildx build --platform linux/amd64 -t sys-manager-agent-x86_64 -f Dockerfile.agent.ubuntu-x86_64 .
+OUT_DIR="$(mktemp -d)"
+trap 'rm -rf "$OUT_DIR"' EXIT
 
-# 2. Create a temporary container to extract the compiled binary
-docker create --name temp-agent sys-manager-agent-x86_64
+echo "Building Agent for Ubuntu x86_64..."
+docker buildx build \
+  --output "type=local,dest=${OUT_DIR}" \
+  -f Dockerfile.agent.ubuntu-x86_64 \
+  .
 
-# 3. Copy the compiled binary out of the container to the host machine
-docker cp temp-agent:/app/agent ./agent-x86_64-linux
-
-# 4. Clean up the temporary container
-docker rm temp-agent
-
-echo "Success! The compiled binary is available at ./agent-x86_64-linux"
-echo "You can copy this file to your Ubuntu x86_64 servers."
+cp "${OUT_DIR}/agent-x86_64-linux" ./agent-x86_64-linux
+chmod +x ./agent-x86_64-linux
+echo "Success. Binary: ./agent-x86_64-linux"
+file ./agent-x86_64-linux
