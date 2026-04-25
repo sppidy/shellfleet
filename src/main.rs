@@ -71,7 +71,7 @@ async fn main() {
         .nest("/auth", auth::auth_routes())
         .nest("/api", api_routes);
 
-    let addr = SocketAddr::from(([127, 0, 0, 1], 8080));
+    let addr = SocketAddr::from(([0, 0, 0, 0], 8080));
     println!("Server listening on {}", addr);
     
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
