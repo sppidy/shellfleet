@@ -1,0 +1,198 @@
+name: Agent .deb
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "agent/**"
+      - "shared/**"
+      - ".github/workflows/agent-deb.yml"
+  workflow_dispatch:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+  pages: write
+
+concurrency:
+  group: agent-deb
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build .deb (amd64)
+    runs-on: ubuntu-latest
+    outputs:
+      deb-name: ${{ steps.build.outputs.name }}
+    steps:
+      - name: Checkout (with submodules)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            .
+            agent
+
+      - name: Install cargo-deb
+        run: cargo install --locked cargo-deb
+
+      - name: Compute deb revision
+        id: rev
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            echo "rev=1" >> "$GITHUB_OUTPUT"
+          else
+            short=$(echo "$GITHUB_SHA" | cut -c1-7)
+            echo "rev=ci$(date -u +%Y%m%d%H%M).g${short}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build agent + .deb
+        id: build
+        shell: bash
+        working-directory: agent
+        run: |
+          set -euo pipefail
+          cargo deb --no-strip --deb-revision "${{ steps.rev.outputs.rev }}"
+          deb=$(ls target/debian/sys-manager-agent_*.deb | head -n1)
+          echo "deb path: $deb"
+          echo "name=$(basename "$deb")" >> "$GITHUB_OUTPUT"
+
+      - name: Upload .deb artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sys-manager-agent-deb
+          path: agent/target/debian/*.deb
+          if-no-files-found: error
+
+      - name: Attach to GitHub Release (on tag/release)
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: agent/target/debian/*.deb
+
+  publish-repo:
+    name: Publish apt repo (gh-pages)
+    needs: build
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout gh-pages (init if missing)
+        uses: actions/checkout@v4
+        with:
+          ref: gh-pages
+          path: pages
+        continue-on-error: true
+
+      - name: Bootstrap gh-pages branch if absent
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -d pages/.git ]; then
+            mkdir -p pages
+            cd pages
+            git init -q -b gh-pages
+            git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+            cat > index.html <<'HTML'
+          <!doctype html>
+          <meta charset="utf-8">
+          <title>sys-manager apt repo</title>
+          <h1>sys-manager apt repo</h1>
+          <p>Add this repo to apt:</p>
+          <pre>echo "deb [trusted=yes] https://sppidy.github.io/sys-manager stable main" \
+            | sudo tee /etc/apt/sources.list.d/sys-manager.list
+          sudo apt update
+          sudo apt install sys-manager-agent</pre>
+          HTML
+            git add index.html
+            git -c user.name=ci -c user.email=ci@local commit -q -m "Initialize gh-pages"
+          fi
+
+      - name: Download .deb artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: sys-manager-agent-deb
+          path: incoming
+
+      - name: Refresh apt repo
+        shell: bash
+        run: |
+          set -euo pipefail
+          REPO=pages
+          DIST=stable
+          COMP=main
+          ARCH=amd64
+          mkdir -p "$REPO/pool/$COMP" "$REPO/dists/$DIST/$COMP/binary-$ARCH"
+          cp incoming/*.deb "$REPO/pool/$COMP/"
+
+          # Trim old revisions: keep only the highest version for each package
+          # so the pool doesn't grow unbounded across CI runs.
+          (
+            cd "$REPO/pool/$COMP"
+            ls -1 sys-manager-agent_*_${ARCH}.deb 2>/dev/null \
+              | sort -V \
+              | head -n -5 \
+              | xargs -r rm -f
+          )
+
+          (
+            cd "$REPO"
+            apt-ftparchive packages "pool/$COMP" > "dists/$DIST/$COMP/binary-$ARCH/Packages"
+            gzip -kf9 "dists/$DIST/$COMP/binary-$ARCH/Packages"
+            cat > /tmp/apt-ftparchive.conf <<'EOF'
+          APT::FTPArchive::Release::Origin "sys-manager";
+          APT::FTPArchive::Release::Label "sys-manager";
+          APT::FTPArchive::Release::Suite "stable";
+          APT::FTPArchive::Release::Codename "stable";
+          APT::FTPArchive::Release::Components "main";
+          APT::FTPArchive::Release::Architectures "amd64";
+          EOF
+            apt-ftparchive -c /tmp/apt-ftparchive.conf release "dists/$DIST" > "dists/$DIST/Release"
+          )
+
+      - name: Sign Release file (optional)
+        if: env.APT_GPG_PRIVATE_KEY != ''
+        env:
+          APT_GPG_PRIVATE_KEY: ${{ secrets.APT_GPG_PRIVATE_KEY }}
+          APT_GPG_PASSPHRASE: ${{ secrets.APT_GPG_PASSPHRASE }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "$APT_GPG_PRIVATE_KEY" | gpg --batch --import
+          KEYID=$(gpg --list-secret-keys --with-colons | awk -F: '/^sec:/{print $5; exit}')
+          gpg --batch --yes --pinentry-mode loopback \
+              ${APT_GPG_PASSPHRASE:+--passphrase "$APT_GPG_PASSPHRASE"} \
+              -u "$KEYID" --detach-sign --armor \
+              -o pages/dists/stable/Release.gpg pages/dists/stable/Release
+          gpg --batch --yes --pinentry-mode loopback \
+              ${APT_GPG_PASSPHRASE:+--passphrase "$APT_GPG_PASSPHRASE"} \
+              -u "$KEYID" --clearsign \
+              -o pages/dists/stable/InRelease pages/dists/stable/Release
+          gpg --armor --export "$KEYID" > pages/sys-manager.gpg
+
+      - name: Commit and push gh-pages
+        working-directory: pages
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git add -A
+          if git diff --staged --quiet; then
+            echo "No changes."
+            exit 0
+          fi
+          git commit -m "Update apt repo: ${GITHUB_SHA::7}"
+          git push "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:gh-pages

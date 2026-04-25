@@ -21,4 +21,4 @@ COPY . .
 RUN cargo build --release -p agent --target x86_64-unknown-linux-gnu
 
 FROM scratch
-COPY --from=builder /usr/src/app/target/x86_64-unknown-linux-gnu/release/agent /agent-x86_64-linux
+COPY --from=builder /usr/src/app/target/x86_64-unknown-linux-gnu/release/sys-manager-agent /agent-x86_64-linux
