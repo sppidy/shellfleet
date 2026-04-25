@@ -86,10 +86,9 @@ jobs:
       - name: Build agent + .deb
         id: build
         shell: bash
-        working-directory: agent
         run: |
           set -euo pipefail
-          cargo deb --no-strip --deb-revision "${{ steps.rev.outputs.rev }}"
+          cargo deb --no-strip -p agent --deb-revision "${{ steps.rev.outputs.rev }}"
           deb=$(ls target/debian/sys-manager-agent_*.deb | head -n1)
           echo "deb path: $deb"
           echo "name=$(basename "$deb")" >> "$GITHUB_OUTPUT"
@@ -98,14 +97,14 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: sys-manager-agent-deb
-          path: agent/target/debian/*.deb
+          path: target/debian/*.deb
           if-no-files-found: error
 
       - name: Attach to GitHub Release (on tag/release)
         if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'release'
         uses: softprops/action-gh-release@v2
         with:
-          files: agent/target/debian/*.deb
+          files: target/debian/*.deb
 
   publish-repo:
     name: Publish apt repo (gh-pages)
