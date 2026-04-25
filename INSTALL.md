@@ -7,7 +7,7 @@ release builds attached to the GitHub Release.
 ## Add the apt repo
 
 ```bash
-echo "deb [trusted=yes] https://sppidy.github.io/sys-manager stable main" \
+echo "deb [trusted=yes] https://sys-mgr-repo.sppidy.in stable main" \
   | sudo tee /etc/apt/sources.list.d/sys-manager.list
 sudo apt update
 sudo apt install sys-manager-agent
@@ -17,7 +17,7 @@ sudo apt install sys-manager-agent
 > set the `APT_GPG_PRIVATE_KEY` and `APT_GPG_PASSPHRASE` secrets on this
 > repository — the workflow already wires them up. Then drop the
 > `[trusted=yes]` flag and import the public key from
-> `https://sppidy.github.io/sys-manager/sys-manager.gpg`.
+> `https://sys-mgr-repo.sppidy.in/sys-manager.gpg`.
 
 ## Configure
 
@@ -48,6 +48,19 @@ sudo apt update && sudo apt install --only-upgrade sys-manager-agent
 `apt` will preserve `/etc/sys-manager/env` and the cached token. The systemd
 unit restarts automatically on upgrade (`restart-after-upgrade` in the
 package's metadata).
+
+## DNS
+
+The apt repo is served from GitHub Pages at the custom domain
+`sys-mgr-repo.sppidy.in`. You need a DNS record:
+
+```
+sys-mgr-repo.sppidy.in.  CNAME  sppidy.github.io.
+```
+
+(Or `A` records to GitHub's Pages IPs if your DNS provider can't CNAME at
+that level.) The workflow drops a `CNAME` file into the `gh-pages` branch
+and a `.nojekyll` marker so the apt repo files are served as-is.
 
 ## Bootstrap (one-time, repo owner)
 

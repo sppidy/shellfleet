@@ -128,20 +128,31 @@ jobs:
             cd pages
             git init -q -b gh-pages
             git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
-            cat > index.html <<'HTML'
+            git -c user.name=ci -c user.email=ci@local commit -q --allow-empty -m "Initialize gh-pages"
+          fi
+
+      - name: Pin custom domain + landing page
+        shell: bash
+        run: |
+          # Custom domain so the apt repo lives at sys-mgr-repo.sppidy.in
+          # instead of being shadowed by the user's sppidy.in portfolio.
+          echo 'sys-mgr-repo.sppidy.in' > pages/CNAME
+          # Bypass Jekyll on GH Pages — without this it would refuse to
+          # serve files under dists/ that contain leading dots etc.
+          touch pages/.nojekyll
+          cat > pages/index.html <<'HTML'
           <!doctype html>
           <meta charset="utf-8">
           <title>sys-manager apt repo</title>
+          <style>body{font:14px/1.5 system-ui,sans-serif;max-width:720px;margin:3rem auto;padding:0 1rem;color:#222}code,pre{font:13px/1.5 ui-monospace,monospace;background:#f4f4f5;padding:0.1rem 0.3rem;border-radius:3px}pre{padding:1rem;overflow-x:auto}</style>
           <h1>sys-manager apt repo</h1>
-          <p>Add this repo to apt:</p>
-          <pre>echo "deb [trusted=yes] https://sppidy.github.io/sys-manager stable main" \
+          <p>Add to your apt sources:</p>
+          <pre>echo "deb [trusted=yes] https://sys-mgr-repo.sppidy.in stable main" \
             | sudo tee /etc/apt/sources.list.d/sys-manager.list
           sudo apt update
           sudo apt install sys-manager-agent</pre>
+          <p>See <a href="https://github.com/sppidy/sys-manager/blob/main/INSTALL.md">INSTALL.md</a> for full setup.</p>
           HTML
-            git add index.html
-            git -c user.name=ci -c user.email=ci@local commit -q -m "Initialize gh-pages"
-          fi
 
       - name: Download .deb artifact
         uses: actions/download-artifact@v4
