@@ -3,7 +3,7 @@
 //! plus `audit`.
 
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
     routing::{delete, get, post},
@@ -172,10 +172,19 @@ async fn delete_handler(
     }
 }
 
+#[derive(Deserialize)]
+struct RunNowQuery {
+    /// Optional single package to upgrade (`apt-get install --only-upgrade`).
+    /// When omitted the agent runs `apt-get -y upgrade` (full window).
+    #[serde(default)]
+    package: Option<String>,
+}
+
 async fn run_now_handler(
     jar: CookieJar,
     State(state): State<Arc<AppState>>,
     Path(agent_id): Path<String>,
+    Query(q): Query<RunNowQuery>,
 ) -> impl IntoResponse {
     let Some(actor) = require_auth(&jar) else {
         return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
@@ -186,7 +195,11 @@ async fn run_now_handler(
     };
     drop(agents);
     state.scheduled_apt_runs.lock().await.insert(agent_id.clone());
-    if tx.send(Message::AptUpgradeRequest { package: None }).is_err() {
+    let pkg = q.package.clone();
+    if tx
+        .send(Message::AptUpgradeRequest { package: pkg.clone() })
+        .is_err()
+    {
         state.scheduled_apt_runs.lock().await.remove(&agent_id);
         return (StatusCode::INTERNAL_SERVER_ERROR, "send failed").into_response();
     }
@@ -197,7 +210,7 @@ async fn run_now_handler(
         Some(&agent_id),
         "update_window.run_now",
         true,
-        None,
+        pkg.as_deref(),
     )
     .await;
     (StatusCode::OK, "Triggered").into_response()
