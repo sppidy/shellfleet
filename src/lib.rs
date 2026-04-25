@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 /// the wire format changes in a way the server needs to reject older agents
 /// for. Value `0` means "legacy agent that predates this field" — those
 /// still connect, just without the version-aware fast paths.
-pub const PROTOCOL_VERSION: u32 = 10;
+pub const PROTOCOL_VERSION: u32 = 11;
 
 fn default_protocol_version() -> u32 {
     0
@@ -386,6 +386,55 @@ pub enum Message {
         log: String,
         error: Option<String>,
     },
+
+    /// Snapshot list of docker images on the agent's local engine.
+    /// Introduced in protocol_version 11.
+    DockerImageListRequest,
+    DockerImageListResponse {
+        available: bool,
+        images: Vec<DockerImage>,
+        error: Option<String>,
+    },
+    /// Remove a docker image. `force=true` adds `--force`.
+    /// Introduced in protocol_version 11.
+    DockerImageRemoveRequest {
+        id: String,
+        #[serde(default)]
+        force: bool,
+    },
+    DockerImageRemoveResponse {
+        id: String,
+        success: bool,
+        log: String,
+        error: Option<String>,
+    },
+    /// Pull a docker image by reference (e.g. `nginx:1.27` or
+    /// `ghcr.io/owner/image@sha256:…`). The agent runs `docker pull`
+    /// synchronously; the response carries the full pull log.
+    /// Introduced in protocol_version 11.
+    DockerImagePullRequest {
+        reference: String,
+    },
+    DockerImagePullResponse {
+        reference: String,
+        success: bool,
+        log: String,
+        error: Option<String>,
+    },
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct DockerImage {
+    /// Short image id (no `sha256:` prefix), e.g. `7d5c1f4d4`.
+    pub id: String,
+    /// `docker images --format json` returns the same Repository/Tag
+    /// fields as the columnar output. `<none>` for dangling layers.
+    pub repository: String,
+    pub tag: String,
+    /// Bytes. `0` if docker doesn't report it.
+    pub size_bytes: u64,
+    /// Human-friendly created-at string from docker.
+    pub created: String,
 }
 
 /// How the agent should produce the archive. v1 only ships `tar`;
@@ -439,6 +488,11 @@ pub struct HealthProbeSpec {
     /// body checking.
     #[serde(default)]
     pub expect_body: Option<String>,
+    /// Optional per-probe environment variables in `KEY=VALUE` form.
+    /// Mainly used by exec-kind probes (e.g. `THRESHOLD=85`); HTTP/TCP
+    /// probes ignore it. Introduced in protocol_version 11.
+    #[serde(default)]
+    pub env: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
