@@ -9,6 +9,7 @@ import {
   Loader2Icon,
   ArrowLeftIcon,
 } from 'lucide-react';
+import { apiFetch } from '@/lib/api';
 
 type AuthStatus = 'checking' | 'authed' | 'guest';
 type SubmitStatus = 'idle' | 'loading' | 'success' | 'error';
@@ -48,10 +49,9 @@ export default function DeviceAuthPage() {
     setMessage('');
 
     try {
-      const res = await fetch('/api/device/approve', {
+      const res = await apiFetch('/api/device/approve', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        credentials: 'same-origin',
         body: JSON.stringify({ user_code: trimmed }),
       });
 

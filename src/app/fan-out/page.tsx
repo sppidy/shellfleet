@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useSession } from '@/components/providers/SessionProvider';
 import { useWebSocket } from '@/components/providers/WebSocketProvider';
 import { useUi } from '@/components/providers/UiProvider';
+import { apiFetch } from '@/lib/api';
 import type { FanOutKind, FanOutRunDetail } from '@/lib/types';
 import {
   ArrowLeftIcon,
@@ -56,7 +57,7 @@ export default function FanOutPage() {
   const refresh = useCallback(async () => {
     if (!run) return;
     try {
-      const res = await fetch(`/api/fan-out/${run.run.id}`, { credentials: 'include' });
+      const res = await apiFetch(`/api/fan-out/${run.run.id}`);
       if (!res.ok) return;
       const data: FanOutRunDetail = await res.json();
       setRun(data);
@@ -96,9 +97,8 @@ export default function FanOutPage() {
     }
     setSubmitting(true);
     try {
-      const res = await fetch('/api/fan-out', {
+      const res = await apiFetch('/api/fan-out', {
         method: 'POST',
-        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           kind,

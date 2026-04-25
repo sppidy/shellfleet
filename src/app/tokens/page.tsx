@@ -11,6 +11,7 @@ import {
   ServerIcon,
   AlertCircleIcon,
 } from 'lucide-react';
+import { apiFetch } from '@/lib/api';
 
 type TokenRow = {
   token_preview: string;
@@ -37,7 +38,7 @@ export default function TokensPage() {
   const refresh = useCallback(async () => {
     setError(null);
     try {
-      const res = await fetch('/api/tokens', { credentials: 'same-origin' });
+      const res = await apiFetch('/api/tokens');
       if (res.status === 401) {
         window.location.href = '/auth/login';
         return;
@@ -77,10 +78,9 @@ export default function TokensPage() {
 
     setRevoking(row.token_preview);
     try {
-      const res = await fetch('/api/tokens/revoke', {
+      const res = await apiFetch('/api/tokens/revoke', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        credentials: 'same-origin',
         body: JSON.stringify(body),
       });
       if (!res.ok) {

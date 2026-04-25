@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { useUi } from './providers/UiProvider';
+import { apiFetch } from '@/lib/api';
 import type { UpdateWindow } from '@/lib/types';
 import {
   CalendarClockIcon,
@@ -38,7 +39,7 @@ export default function UpdateWindowPanel({ agentId }: { agentId: string }) {
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch('/api/update-windows', { credentials: 'include' });
+      const res = await apiFetch('/api/update-windows');
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const rows: UpdateWindow[] = await res.json();
       const mine = rows.find((r) => r.agent_id === agentId) ?? null;
@@ -61,9 +62,8 @@ export default function UpdateWindowPanel({ agentId }: { agentId: string }) {
   const save = async () => {
     setSaving(true);
     try {
-      const res = await fetch('/api/update-windows', {
+      const res = await apiFetch('/api/update-windows', {
         method: 'POST',
-        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ agent_id: agentId, cron_expr: cronExpr, enabled }),
       });
@@ -91,9 +91,8 @@ export default function UpdateWindowPanel({ agentId }: { agentId: string }) {
     if (!ok) return;
     setRemoving(true);
     try {
-      const res = await fetch(`/api/update-windows/${encodeURIComponent(agentId)}`, {
+      const res = await apiFetch(`/api/update-windows/${encodeURIComponent(agentId)}`, {
         method: 'DELETE',
-        credentials: 'include',
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       setExisting(null);
@@ -108,9 +107,9 @@ export default function UpdateWindowPanel({ agentId }: { agentId: string }) {
   const runNow = async () => {
     setRunning(true);
     try {
-      const res = await fetch(
+      const res = await apiFetch(
         `/api/update-windows/${encodeURIComponent(agentId)}/run`,
-        { method: 'POST', credentials: 'include' },
+        { method: 'POST' },
       );
       if (!res.ok) {
         const txt = await res.text();

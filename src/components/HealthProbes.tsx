@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { useUi } from './providers/UiProvider';
+import { apiFetch } from '@/lib/api';
 import type { HealthProbe, HealthProbeKind } from '@/lib/types';
 import {
   ActivitySquareIcon,
@@ -27,7 +28,7 @@ export default function HealthProbes({ agentId }: { agentId: string }) {
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch('/api/health-probes', { credentials: 'include' });
+      const res = await apiFetch('/api/health-probes');
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const rows: HealthProbe[] = await res.json();
       setProbes(rows.filter((r) => r.agent_id === agentId));
@@ -52,9 +53,8 @@ export default function HealthProbes({ agentId }: { agentId: string }) {
     });
     if (!ok) return;
     try {
-      const res = await fetch(`/api/health-probes/${id}`, {
+      const res = await apiFetch(`/api/health-probes/${id}`, {
         method: 'DELETE',
-        credentials: 'include',
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       ui.toast('success', `Probe "${name}" removed`);
@@ -209,9 +209,8 @@ function ProbeForm({
         expect_body: kind === 'http' && expectBody ? expectBody : null,
         enabled: true,
       };
-      const res = await fetch('/api/health-probes', {
+      const res = await apiFetch('/api/health-probes', {
         method: 'POST',
-        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       });
