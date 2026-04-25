@@ -15,6 +15,7 @@ import {
   LogOutIcon,
   Loader2Icon,
   ServerIcon,
+  KeyIcon,
 } from 'lucide-react';
 
 export default function Home() {
@@ -77,6 +78,14 @@ export default function Home() {
           >
             <PlusIcon className="w-3.5 h-3.5" />
             Connect agent
+          </button>
+          <button
+            type="button"
+            onClick={() => router.push('/tokens')}
+            className="mt-2 w-full inline-flex items-center justify-center gap-1.5 text-xs font-medium py-1.5 px-3 rounded-md border border-slate-700 text-slate-300 hover:bg-slate-800 transition-colors"
+          >
+            <KeyIcon className="w-3.5 h-3.5" />
+            Manage tokens
           </button>
         </div>
 
