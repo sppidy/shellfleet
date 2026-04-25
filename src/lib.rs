@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 /// the wire format changes in a way the server needs to reject older agents
 /// for. Value `0` means "legacy agent that predates this field" — those
 /// still connect, just without the version-aware fast paths.
-pub const PROTOCOL_VERSION: u32 = 4;
+pub const PROTOCOL_VERSION: u32 = 5;
 
 fn default_protocol_version() -> u32 {
     0
@@ -201,6 +201,93 @@ pub enum Message {
         log: String,
         error: Option<String>,
     },
+
+    /// Create a standalone Docker container on the agent's local engine.
+    /// Introduced in protocol_version 5.
+    DockerCreateContainerRequest { spec: ContainerSpec },
+    DockerCreateContainerResponse {
+        success: bool,
+        container_id: Option<String>,
+        log: String,
+        error: Option<String>,
+    },
+
+    /// Create a swarm service. Only valid on a manager. Introduced in
+    /// protocol_version 5.
+    SwarmCreateServiceRequest { spec: ServiceSpec },
+    SwarmCreateServiceResponse {
+        success: bool,
+        service_id: Option<String>,
+        log: String,
+        error: Option<String>,
+    },
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct ContainerSpec {
+    pub image: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    /// Each entry is "host:container" or "host:container/proto".
+    #[serde(default)]
+    pub ports: Vec<String>,
+    /// Each entry is "KEY=VALUE".
+    #[serde(default)]
+    pub env: Vec<String>,
+    /// Each entry is "host:container" or "named-volume:container[:ro]".
+    #[serde(default)]
+    pub volumes: Vec<String>,
+    /// One of "no" | "always" | "unless-stopped" | "on-failure".
+    #[serde(default)]
+    pub restart_policy: Option<String>,
+    /// Optional command override (shell-split on the agent).
+    #[serde(default)]
+    pub command: Option<String>,
+    #[serde(default)]
+    pub network: Option<String>,
+    /// Defaults to true so the container is detached from the agent's
+    /// stdin/stdout — matching `docker run -d`.
+    #[serde(default = "default_true")]
+    pub detached: bool,
+    /// `--pull always` if true.
+    #[serde(default)]
+    pub pull: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct ServiceSpec {
+    pub image: String,
+    pub name: String,
+    /// Only meaningful when mode is "replicated" (the default).
+    #[serde(default)]
+    pub replicas: Option<u32>,
+    /// "replicated" (default) or "global".
+    #[serde(default)]
+    pub mode: Option<String>,
+    /// Each entry is "published:target" or "published:target/proto".
+    #[serde(default)]
+    pub ports: Vec<String>,
+    #[serde(default)]
+    pub env: Vec<String>,
+    /// Each entry is a `--mount` arg ("type=bind,source=...,target=..."
+    /// or "src=...,dst=...").
+    #[serde(default)]
+    pub mounts: Vec<String>,
+    /// Each entry is a `--constraint` arg, e.g. "node.role==manager".
+    #[serde(default)]
+    pub constraints: Vec<String>,
+    #[serde(default)]
+    pub command: Option<String>,
+    /// Each entry is a network name to attach.
+    #[serde(default)]
+    pub networks: Vec<String>,
+    /// "any" | "on-failure" | "none".
+    #[serde(default)]
+    pub restart_condition: Option<String>,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
