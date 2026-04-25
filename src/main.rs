@@ -308,17 +308,45 @@ async fn main() {
                                     probes_mgr.sync(probes, tx_clone).await;
                                 });
                             }
-                            Message::BackupRunRequest { id, name, paths, dest } => {
+                            Message::BackupRunRequest { id, name, paths, dest, mode } => {
                                 let tx_clone = tx.clone();
                                 tokio::spawn(async move {
                                     let (success, archive_path, bytes, log, error) =
-                                        backup::run_backup(&name, &paths, &dest).await;
+                                        backup::run_backup(&name, &paths, &dest, mode).await;
                                     let _ = tx_clone.send(Message::BackupRunResponse {
                                         id,
                                         name,
                                         success,
                                         archive_path,
                                         bytes,
+                                        log,
+                                        error,
+                                    });
+                                });
+                            }
+                            Message::BackupListArchivesRequest { id, name: _, dest } => {
+                                let tx_clone = tx.clone();
+                                tokio::spawn(async move {
+                                    let (success, archives, error) =
+                                        backup::list_archives(&dest).await;
+                                    let _ = tx_clone.send(Message::BackupListArchivesResponse {
+                                        id,
+                                        success,
+                                        archives,
+                                        error,
+                                    });
+                                });
+                            }
+                            Message::BackupRestoreRequest { id, archive_uri, dest_root } => {
+                                let tx_clone = tx.clone();
+                                tokio::spawn(async move {
+                                    let (success, log, error) =
+                                        backup::restore(&archive_uri, &dest_root).await;
+                                    let _ = tx_clone.send(Message::BackupRestoreResponse {
+                                        id,
+                                        archive_uri,
+                                        dest_root,
+                                        success,
                                         log,
                                         error,
                                     });
