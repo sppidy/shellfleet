@@ -211,6 +211,17 @@ export type SwarmStackDeployResponse = {
   error: string | null;
 };
 
+export type UpdateWindow = {
+  agent_id: string;
+  cron_expr: string;
+  enabled: boolean;
+  last_run_at: number;
+  last_status: string | null;
+  last_log: string | null;
+  updated_at: number;
+  next_run_at: number | null;
+};
+
 export type AuditRow = {
   id: number;
   ts: number;

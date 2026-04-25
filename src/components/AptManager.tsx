@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useWebSocket } from './providers/WebSocketProvider';
+import UpdateWindowPanel from './UpdateWindowPanel';
 import { AptStatusPayload, AptUpgradable } from '@/lib/types';
 import {
   PackageIcon,
@@ -116,6 +117,7 @@ export default function AptManager({ agentId }: { agentId: string }) {
 
   return (
     <div className="space-y-4">
+      <UpdateWindowPanel agentId={agentId} />
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div>
           <div className="flex items-center gap-2">
