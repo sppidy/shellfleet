@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 /// the wire format changes in a way the server needs to reject older agents
 /// for. Value `0` means "legacy agent that predates this field" — those
 /// still connect, just without the version-aware fast paths.
-pub const PROTOCOL_VERSION: u32 = 6;
+pub const PROTOCOL_VERSION: u32 = 7;
 
 fn default_protocol_version() -> u32 {
     0
@@ -260,6 +260,82 @@ pub enum Message {
         container_id: String,
         error: Option<String>,
     },
+
+    /// Stream `journalctl -fu <unit>` lines back to the dashboard. Same
+    /// lifecycle as DockerLogs*. Introduced in protocol_version 7.
+    JournalLogsRequest {
+        unit: String,
+        #[serde(default = "default_tail")]
+        lines: u32,
+        #[serde(default = "default_true")]
+        follow: bool,
+    },
+    JournalLogsChunk {
+        unit: String,
+        data: String,
+    },
+    JournalLogsStop {
+        unit: String,
+    },
+    JournalLogsEnd {
+        unit: String,
+        error: Option<String>,
+    },
+
+    /// Inspect a swarm service: `docker service ps` (replicas + tasks) plus
+    /// `docker service inspect` (env, mounts, networks, image digest, etc.).
+    /// Manager-only. Introduced in protocol_version 7.
+    SwarmServiceInspectRequest {
+        name: String,
+    },
+    SwarmServiceInspectResponse {
+        name: String,
+        success: bool,
+        tasks: Vec<SwarmTask>,
+        spec: Option<SwarmServiceSpecSummary>,
+        log: String,
+        error: Option<String>,
+    },
+
+    /// Deploy a compose stack via `docker stack deploy --compose-file -`,
+    /// passing the YAML on stdin. Introduced in protocol_version 7.
+    SwarmStackDeployRequest {
+        stack_name: String,
+        compose_yaml: String,
+        prune: bool,
+    },
+    SwarmStackDeployResponse {
+        stack_name: String,
+        success: bool,
+        log: String,
+        error: Option<String>,
+    },
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct SwarmTask {
+    pub id: String,
+    pub name: String,
+    pub node: String,
+    pub desired_state: String,
+    pub current_state: String,
+    pub error: String,
+    pub image: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct SwarmServiceSpecSummary {
+    pub image: String,
+    pub image_digest: String,
+    pub mode: String,
+    pub replicas: Option<u32>,
+    pub created_at: String,
+    pub updated_at: String,
+    pub env: Vec<String>,
+    pub mounts: Vec<String>,
+    pub networks: Vec<String>,
+    pub constraints: Vec<String>,
+    pub published_ports: Vec<String>,
 }
 
 fn default_tail() -> u32 {
