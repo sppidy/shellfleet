@@ -1,3 +1,4 @@
+mod docker;
 mod stats;
 mod systemd;
 mod terminal;
@@ -150,6 +151,54 @@ async fn main() {
                                 let tx_clone = tx.clone();
                                 tokio::spawn(async move {
                                     let _ = tx_clone.send(stats::snapshot().await);
+                                });
+                            }
+                            Message::DockerListRequest => {
+                                let tx_clone = tx.clone();
+                                tokio::spawn(async move {
+                                    let role = docker::swarm_role().await;
+                                    let (containers, error) = match docker::list_containers().await {
+                                        Ok(c) => (c, None),
+                                        Err(e) => (Vec::new(), Some(e)),
+                                    };
+                                    let _ = tx_clone.send(Message::DockerListResponse {
+                                        available: error.is_none(),
+                                        swarm_role: role,
+                                        containers,
+                                        error,
+                                    });
+                                });
+                            }
+                            Message::SwarmListRequest => {
+                                let tx_clone = tx.clone();
+                                tokio::spawn(async move {
+                                    let role = docker::swarm_role().await;
+                                    let is_manager = role == shared::SwarmRole::Manager;
+                                    if !is_manager {
+                                        let _ = tx_clone.send(Message::SwarmListResponse {
+                                            available: false,
+                                            is_manager: false,
+                                            services: Vec::new(),
+                                            nodes: Vec::new(),
+                                            error: None,
+                                        });
+                                        return;
+                                    }
+                                    let (services, svc_err) = match docker::list_swarm_services().await {
+                                        Ok(s) => (s, None),
+                                        Err(e) => (Vec::new(), Some(e)),
+                                    };
+                                    let (nodes, node_err) = match docker::list_swarm_nodes().await {
+                                        Ok(n) => (n, None),
+                                        Err(e) => (Vec::new(), Some(e)),
+                                    };
+                                    let _ = tx_clone.send(Message::SwarmListResponse {
+                                        available: true,
+                                        is_manager: true,
+                                        services,
+                                        nodes,
+                                        error: svc_err.or(node_err),
+                                    });
                                 });
                             }
                             Message::ControlServiceRequest { name, action } => {
