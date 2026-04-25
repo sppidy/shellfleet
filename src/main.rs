@@ -128,10 +128,32 @@ async fn main() {
 
     let mut term_session: Option<terminal::TerminalSession> = None;
 
-    loop {
+    // Watchdog: if the WebSocket goes silent for 75s the connection is
+    // probably dead at the TCP layer (Cloudflare or the kernel may drop
+    // it without delivering an error). Exit so systemd restarts us; the
+    // server uses the same window to reap stale agents.
+    let idle_timeout = Duration::from_secs(75);
+    let mut last_read = tokio::time::Instant::now();
+    let mut watchdog = tokio::time::interval(Duration::from_secs(15));
+    watchdog.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    watchdog.tick().await;
+
+    'main_loop: loop {
         tokio::select! {
-            Some(msg) = read.next() => {
-                if let Ok(WsMessage::Text(text)) = msg {
+            maybe_msg = read.next() => {
+                let msg = match maybe_msg {
+                    Some(Ok(m)) => m,
+                    Some(Err(e)) => {
+                        eprintln!("agent ws read error: {e}");
+                        break 'main_loop;
+                    }
+                    None => {
+                        eprintln!("server closed the websocket");
+                        break 'main_loop;
+                    }
+                };
+                last_read = tokio::time::Instant::now();
+                if let WsMessage::Text(text) = msg {
                     if let Ok(parsed_msg) = serde_json::from_str::<Message>(&text) {
                         match parsed_msg {
                             Message::ListServicesRequest => {
@@ -334,15 +356,28 @@ async fn main() {
             Some(msg) = rx.recv() => {
                 if let Ok(text) = serde_json::to_string(&msg) {
                     if write.send(WsMessage::Text(text.into())).await.is_err() {
-                        break;
+                        eprintln!("agent ws write failed, exiting");
+                        break 'main_loop;
                     }
                 }
             }
+            _ = watchdog.tick() => {
+                if last_read.elapsed() > idle_timeout {
+                    eprintln!(
+                        "agent ws idle for {}s, exiting so systemd reconnects",
+                        last_read.elapsed().as_secs()
+                    );
+                    break 'main_loop;
+                }
+            }
             else => {
-                break;
+                break 'main_loop;
             }
         }
     }
-    
+
     println!("Connection closed.");
+    // Exiting non-zero makes systemd re-run with a fresh connection sooner
+    // than waiting for an unresponsive websocket loop.
+    std::process::exit(1);
 }
