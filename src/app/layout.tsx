@@ -19,6 +19,7 @@ export const metadata: Metadata = {
 
 import { WebSocketProvider } from "@/components/providers/WebSocketProvider";
 import { SessionProvider } from "@/components/providers/SessionProvider";
+import { FleetSnapshotsProvider } from "@/components/providers/FleetSnapshotsProvider";
 
 export default function RootLayout({
   children,
@@ -32,7 +33,9 @@ export default function RootLayout({
     >
       <body className="min-h-full flex flex-col bg-slate-950 text-slate-100">
         <SessionProvider>
-          <WebSocketProvider>{children}</WebSocketProvider>
+          <WebSocketProvider>
+            <FleetSnapshotsProvider>{children}</FleetSnapshotsProvider>
+          </WebSocketProvider>
         </SessionProvider>
       </body>
     </html>

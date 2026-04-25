@@ -1,7 +1,8 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useWebSocket } from './providers/WebSocketProvider';
+import { useFleetSnapshots, AgentSnapshot } from './providers/FleetSnapshotsProvider';
 import {
   ServerIcon,
   CpuIcon,
@@ -10,22 +11,9 @@ import {
   AlertTriangleIcon,
   BoxIcon,
   RefreshCwIcon,
+  SearchIcon,
+  XIcon,
 } from 'lucide-react';
-import {
-  DockerListPayload,
-  ServiceInfo,
-  SystemStatsPayload,
-} from '@/lib/types';
-
-type AgentSnapshot = {
-  agentId: string;
-  hostname: string;
-  stats?: SystemStatsPayload;
-  services?: ServiceInfo[];
-  docker?: DockerListPayload;
-};
-
-const POLL_MS = 5_000;
 
 function formatBytes(kib: number): string {
   const bytes = kib * 1024;
@@ -54,68 +42,9 @@ export default function FleetOverview({
 }: {
   onSelectAgent?: (agentId: string) => void;
 }) {
-  const { agents, sendToAgent, onAgentMessage } = useWebSocket();
-  const [snapshots, setSnapshots] = useState<Record<string, AgentSnapshot>>({});
-
-  const agentsKey = agents.join(',');
-
-  useEffect(() => {
-    const unsubs: Array<() => void> = [];
-    const seedSnap = (agentId: string): AgentSnapshot => ({
-      agentId,
-      hostname: agentId.replace(/-id$/, ''),
-    });
-
-    setSnapshots((prev) => {
-      const next: Record<string, AgentSnapshot> = {};
-      for (const a of agents) next[a] = prev[a] ?? seedSnap(a);
-      return next;
-    });
-
-    for (const agentId of agents) {
-      const unsub = onAgentMessage(agentId, (msg) => {
-        if (msg.type === 'SystemStatsResponse') {
-          setSnapshots((prev) => ({
-            ...prev,
-            [agentId]: { ...(prev[agentId] ?? seedSnap(agentId)), stats: msg.payload },
-          }));
-        } else if (msg.type === 'ListServicesResponse') {
-          setSnapshots((prev) => ({
-            ...prev,
-            [agentId]: {
-              ...(prev[agentId] ?? seedSnap(agentId)),
-              services: msg.payload.services,
-            },
-          }));
-        } else if (msg.type === 'DockerListResponse') {
-          setSnapshots((prev) => ({
-            ...prev,
-            [agentId]: {
-              ...(prev[agentId] ?? seedSnap(agentId)),
-              docker: msg.payload,
-            },
-          }));
-        }
-      });
-      unsubs.push(unsub);
-    }
-
-    const poll = () => {
-      for (const agentId of agents) {
-        sendToAgent(agentId, { type: 'SystemStatsRequest' });
-        sendToAgent(agentId, { type: 'ListServicesRequest' });
-        sendToAgent(agentId, { type: 'DockerListRequest' });
-      }
-    };
-    poll();
-    const interval = setInterval(poll, POLL_MS);
-
-    return () => {
-      clearInterval(interval);
-      for (const u of unsubs) u();
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [agentsKey]);
+  const { agents } = useWebSocket();
+  const { snapshots, refresh } = useFleetSnapshots();
+  const [search, setSearch] = useState('');
 
   const totals = useMemo(() => {
     let cpu = 0;
@@ -157,13 +86,61 @@ export default function FleetOverview({
     };
   }, [snapshots]);
 
-  const refreshNow = () => {
-    for (const agentId of agents) {
-      sendToAgent(agentId, { type: 'SystemStatsRequest' });
-      sendToAgent(agentId, { type: 'ListServicesRequest' });
-      sendToAgent(agentId, { type: 'DockerListRequest' });
+  // Cross-host search: match against systemd unit names + descriptions and
+  // container names + images. Returns up to 50 hits per host so the page
+  // doesn't blow up on broad queries.
+  const searchHits = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return null;
+    const out: Array<{
+      agentId: string;
+      hostname: string;
+      kind: 'service' | 'container';
+      name: string;
+      detail: string;
+      state: string;
+    }> = [];
+    for (const s of Object.values(snapshots)) {
+      if (s.services) {
+        for (const svc of s.services) {
+          if (
+            svc.name.toLowerCase().includes(q) ||
+            svc.description.toLowerCase().includes(q)
+          ) {
+            out.push({
+              agentId: s.agentId,
+              hostname: s.hostname,
+              kind: 'service',
+              name: svc.name,
+              detail: svc.description,
+              state: svc.active_state,
+            });
+            if (out.length >= 200) break;
+          }
+        }
+      }
+      if (s.docker?.available) {
+        for (const c of s.docker.containers) {
+          if (
+            (c.names && c.names.toLowerCase().includes(q)) ||
+            (c.image && c.image.toLowerCase().includes(q))
+          ) {
+            out.push({
+              agentId: s.agentId,
+              hostname: s.hostname,
+              kind: 'container',
+              name: c.names || c.id.slice(0, 12),
+              detail: c.image,
+              state: c.state,
+            });
+            if (out.length >= 200) break;
+          }
+        }
+      }
+      if (out.length >= 200) break;
     }
-  };
+    return out;
+  }, [snapshots, search]);
 
   return (
     <div className="px-6 py-6 max-w-6xl mx-auto w-full">
@@ -171,71 +148,164 @@ export default function FleetOverview({
         <h1 className="text-2xl font-semibold">Fleet overview</h1>
         <button
           type="button"
-          onClick={refreshNow}
+          onClick={refresh}
           className="inline-flex items-center gap-1.5 text-xs font-medium py-1 px-2.5 rounded-md border border-slate-700 text-slate-300 hover:bg-slate-800 transition-colors"
         >
           <RefreshCwIcon className="w-3.5 h-3.5" />
           Refresh
         </button>
       </div>
-      <p className="text-sm text-slate-500 mb-6">
+      <p className="text-sm text-slate-500 mb-4">
         Aggregated stats across {agents.length} {agents.length === 1 ? 'agent' : 'agents'}, polled every 5 s.
       </p>
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-6">
-        <Big icon={<CpuIcon className="w-4 h-4" />} label="CPUs" value={totals.cpu.toString()} />
-        <Big
-          icon={<MemoryStickIcon className="w-4 h-4" />}
-          label="Memory used"
-          value={`${formatBytes(totals.memUsed)} / ${formatBytes(totals.memTotal)}`}
-          pct={totals.memTotal > 0 ? (totals.memUsed / totals.memTotal) * 100 : 0}
+      <div className="relative mb-6 max-w-xl">
+        <SearchIcon className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
+        <input
+          type="text"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search services + containers across the fleet…"
+          className="w-full pl-8 pr-7 py-1.5 text-sm bg-slate-900 border border-slate-700 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 text-slate-100 placeholder:text-slate-500"
         />
-        <Big
-          icon={<HardDriveIcon className="w-4 h-4" />}
-          label="Disk /"
-          value={`${formatBytes(totals.diskUsed)} / ${formatBytes(totals.diskTotal)}`}
-          pct={totals.diskTotal > 0 ? (totals.diskUsed / totals.diskTotal) * 100 : 0}
-        />
-        <Big
-          icon={<BoxIcon className="w-4 h-4" />}
-          label="Containers running"
-          value={`${totals.containersRunning} / ${totals.containers}`}
-        />
+        {search && (
+          <button
+            type="button"
+            onClick={() => setSearch('')}
+            className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-200"
+            aria-label="Clear"
+          >
+            <XIcon className="w-4 h-4" />
+          </button>
+        )}
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-2 mb-6">
-        <SmallStat label="Services tracked" value={totals.svcTotal.toString()} />
-        <SmallStat
-          label="Failed services"
-          value={totals.svcFailed.toString()}
-          tone={totals.svcFailed > 0 ? 'red' : 'neutral'}
-        />
-        <SmallStat label="Agents online" value={agents.length.toString()} />
-      </div>
-
-      <h2 className="text-sm uppercase tracking-wide text-slate-500 mb-2">Hosts</h2>
-      {agents.length === 0 ? (
-        <div className="border border-dashed border-slate-800 rounded-md p-8 text-center text-slate-500 text-sm">
-          No agents connected.
-        </div>
+      {searchHits ? (
+        <SearchResults hits={searchHits} onSelectAgent={onSelectAgent} />
       ) : (
-        <ul className="space-y-2">
-          {agents.map((agentId) => {
-            const snap = snapshots[agentId];
-            return (
-              <li key={agentId}>
-                <button
-                  type="button"
-                  onClick={() => onSelectAgent?.(agentId)}
-                  className="w-full text-left bg-slate-900 border border-slate-800 hover:border-slate-700 rounded-md px-4 py-3 transition-colors"
-                >
-                  <HostRow snapshot={snap ?? { agentId, hostname: agentId.replace(/-id$/, '') }} />
-                </button>
-              </li>
-            );
-          })}
-        </ul>
+        <>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-6">
+            <Big icon={<CpuIcon className="w-4 h-4" />} label="CPUs" value={totals.cpu.toString()} />
+            <Big
+              icon={<MemoryStickIcon className="w-4 h-4" />}
+              label="Memory used"
+              value={`${formatBytes(totals.memUsed)} / ${formatBytes(totals.memTotal)}`}
+              pct={totals.memTotal > 0 ? (totals.memUsed / totals.memTotal) * 100 : 0}
+            />
+            <Big
+              icon={<HardDriveIcon className="w-4 h-4" />}
+              label="Disk /"
+              value={`${formatBytes(totals.diskUsed)} / ${formatBytes(totals.diskTotal)}`}
+              pct={totals.diskTotal > 0 ? (totals.diskUsed / totals.diskTotal) * 100 : 0}
+            />
+            <Big
+              icon={<BoxIcon className="w-4 h-4" />}
+              label="Containers running"
+              value={`${totals.containersRunning} / ${totals.containers}`}
+            />
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-2 mb-6">
+            <SmallStat label="Services tracked" value={totals.svcTotal.toString()} />
+            <SmallStat
+              label="Failed services"
+              value={totals.svcFailed.toString()}
+              tone={totals.svcFailed > 0 ? 'red' : 'neutral'}
+            />
+            <SmallStat label="Agents online" value={agents.length.toString()} />
+          </div>
+
+          <h2 className="text-sm uppercase tracking-wide text-slate-500 mb-2">Hosts</h2>
+          {agents.length === 0 ? (
+            <div className="border border-dashed border-slate-800 rounded-md p-8 text-center text-slate-500 text-sm">
+              No agents connected.
+            </div>
+          ) : (
+            <ul className="space-y-2">
+              {agents.map((agentId) => {
+                const snap = snapshots[agentId];
+                return (
+                  <li key={agentId}>
+                    <button
+                      type="button"
+                      onClick={() => onSelectAgent?.(agentId)}
+                      className="w-full text-left bg-slate-900 border border-slate-800 hover:border-slate-700 rounded-md px-4 py-3 transition-colors"
+                    >
+                      <HostRow snapshot={snap ?? { agentId, hostname: agentId.replace(/-id$/, '') }} />
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </>
       )}
+    </div>
+  );
+}
+
+function SearchResults({
+  hits,
+  onSelectAgent,
+}: {
+  hits: Array<{
+    agentId: string;
+    hostname: string;
+    kind: 'service' | 'container';
+    name: string;
+    detail: string;
+    state: string;
+  }>;
+  onSelectAgent?: (agentId: string) => void;
+}) {
+  if (hits.length === 0) {
+    return (
+      <div className="border border-dashed border-slate-800 rounded-md p-8 text-center text-slate-500 text-sm">
+        No matches.
+      </div>
+    );
+  }
+  return (
+    <div>
+      <div className="text-xs text-slate-500 mb-2">
+        {hits.length} match{hits.length === 1 ? '' : 'es'} across the fleet
+      </div>
+      <ul className="space-y-1.5">
+        {hits.map((h, i) => (
+          <li key={`${h.agentId}-${h.kind}-${h.name}-${i}`}>
+            <button
+              type="button"
+              onClick={() => onSelectAgent?.(h.agentId)}
+              className="w-full text-left bg-slate-900 border border-slate-800 hover:border-slate-700 rounded-md px-3 py-2 transition-colors flex items-center gap-3"
+            >
+              <span className="text-[10px] uppercase tracking-wide text-slate-500 w-16 shrink-0">
+                {h.kind}
+              </span>
+              <ServerIcon className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+              <span className="text-xs text-slate-400 w-32 truncate" title={h.hostname}>
+                {h.hostname}
+              </span>
+              <span className="text-sm text-slate-100 truncate flex-1" title={h.name}>
+                {h.name}
+              </span>
+              <span className="text-xs text-slate-500 truncate max-w-xs hidden md:inline" title={h.detail}>
+                {h.detail}
+              </span>
+              <span
+                className={`text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded shrink-0 ${
+                  h.state === 'active' || h.state === 'running'
+                    ? 'bg-emerald-500/20 text-emerald-300'
+                    : h.state === 'failed' || h.state === 'dead'
+                      ? 'bg-red-500/20 text-red-300'
+                      : 'bg-slate-800 text-slate-400'
+                }`}
+              >
+                {h.state || '—'}
+              </span>
+            </button>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

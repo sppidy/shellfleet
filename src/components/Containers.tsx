@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useWebSocket } from './providers/WebSocketProvider';
 import {
   DockerContainer,
+  DockerContainerAction,
   DockerListPayload,
   SwarmAction,
   SwarmListPayload,
@@ -17,7 +18,10 @@ import {
   NetworkIcon,
   Trash2Icon,
   PlayIcon,
+  SquareIcon,
+  ScrollTextIcon,
 } from 'lucide-react';
+import LogViewer from './LogViewer';
 
 const REFRESH_MS = 10_000;
 const TIMEOUT_MS = 8_000;
@@ -25,6 +29,11 @@ const TIMEOUT_MS = 8_000;
 type SwarmActionState =
   | null
   | { name: string; action: 'scale' | 'update' | 'remove' };
+
+type ContainerActionState = {
+  id: string;
+  action: DockerContainerAction;
+};
 
 export default function Containers({ agentId }: { agentId: string }) {
   const { sendToAgent, onAgentMessage } = useWebSocket();
@@ -38,6 +47,13 @@ export default function Containers({ agentId }: { agentId: string }) {
     success: boolean;
     text: string;
   } | null>(null);
+  const [containerAction, setContainerAction] = useState<ContainerActionState | null>(null);
+  const [containerActionLog, setContainerActionLog] = useState<{
+    id: string;
+    success: boolean;
+    text: string;
+  } | null>(null);
+  const [logViewer, setLogViewer] = useState<{ id: string; name: string } | null>(null);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -72,6 +88,15 @@ export default function Containers({ agentId }: { agentId: string }) {
           text: msg.payload.log || (msg.payload.error ?? ''),
         });
         sendToAgent(agentId, { type: 'SwarmListRequest' });
+      } else if (msg.type === 'DockerContainerActionResponse') {
+        setContainerAction(null);
+        setContainerActionLog({
+          id: msg.payload.id,
+          success: msg.payload.success,
+          text: msg.payload.log || (msg.payload.error ?? ''),
+        });
+        // Refresh the container list so removed/restarted state reflects.
+        sendToAgent(agentId, { type: 'DockerListRequest' });
       }
     });
 
@@ -146,11 +171,60 @@ export default function Containers({ agentId }: { agentId: string }) {
         ) : (
           <ul className="divide-y divide-slate-800 border border-slate-800 rounded-md overflow-hidden">
             {docker.containers.map((c) => (
-              <ContainerRow key={c.id} container={c} />
+              <ContainerRow
+                key={c.id}
+                container={c}
+                pending={containerAction?.id === c.id ? containerAction.action : null}
+                disabled={containerAction !== null && containerAction.id !== c.id}
+                onAction={(action) => {
+                  if (action === 'remove') {
+                    if (!confirm(`Remove container ${c.names || c.id.slice(0, 12)}? Running ones will be force-killed.`)) {
+                      return;
+                    }
+                  }
+                  setContainerAction({ id: c.id, action });
+                  setContainerActionLog(null);
+                  sendToAgent(agentId, {
+                    type: 'DockerContainerActionRequest',
+                    payload: { id: c.id, action },
+                  });
+                }}
+                onShowLogs={() => setLogViewer({ id: c.id, name: c.names || c.id.slice(0, 12) })}
+              />
             ))}
           </ul>
         )}
+        {containerActionLog && (
+          <details
+            open
+            className={`mt-2 rounded-md border ${
+              containerActionLog.success
+                ? 'border-emerald-500/30 bg-emerald-500/5'
+                : 'border-red-500/30 bg-red-500/5'
+            }`}
+          >
+            <summary
+              className={`cursor-pointer px-3 py-1.5 text-xs font-medium ${
+                containerActionLog.success ? 'text-emerald-300' : 'text-red-300'
+              }`}
+            >
+              {containerActionLog.id.slice(0, 12)} · {containerActionLog.success ? 'success' : 'failed'}
+            </summary>
+            <pre className="text-[11px] bg-slate-950 text-slate-300 px-3 py-2 overflow-x-auto whitespace-pre-wrap max-h-48 border-t border-slate-800">
+              {containerActionLog.text || '(empty)'}
+            </pre>
+          </details>
+        )}
       </section>
+
+      {logViewer && (
+        <LogViewer
+          agentId={agentId}
+          containerId={logViewer.id}
+          containerName={logViewer.name}
+          onClose={() => setLogViewer(null)}
+        />
+      )}
 
       {docker.swarm_role === 'manager' && (
         <section>
@@ -392,13 +466,25 @@ function SwarmServiceRow({
   );
 }
 
-function ContainerRow({ container }: { container: DockerContainer }) {
-  const stateClasses =
-    container.state === 'running'
-      ? 'bg-emerald-500/20 text-emerald-300'
-      : container.state === 'exited' || container.state === 'dead'
-        ? 'bg-red-500/20 text-red-300'
-        : 'bg-slate-800 text-slate-300';
+function ContainerRow({
+  container,
+  pending,
+  disabled,
+  onAction,
+  onShowLogs,
+}: {
+  container: DockerContainer;
+  pending: DockerContainerAction | null;
+  disabled: boolean;
+  onAction: (action: DockerContainerAction) => void;
+  onShowLogs: () => void;
+}) {
+  const isRunning = container.state === 'running';
+  const stateClasses = isRunning
+    ? 'bg-emerald-500/20 text-emerald-300'
+    : container.state === 'exited' || container.state === 'dead'
+      ? 'bg-red-500/20 text-red-300'
+      : 'bg-slate-800 text-slate-300';
   return (
     <li className="px-3 py-2 bg-slate-900 flex items-center justify-between gap-3">
       <div className="min-w-0 flex-1">
@@ -417,15 +503,89 @@ function ContainerRow({ container }: { container: DockerContainer }) {
           </div>
         )}
       </div>
-      <div className="flex flex-col items-end gap-1 text-xs shrink-0">
-        <span className={`px-1.5 py-0.5 rounded uppercase tracking-wide font-medium text-[10px] ${stateClasses}`}>
-          {container.state || '—'}
-        </span>
-        <span className="text-slate-500 text-[11px] truncate max-w-[14rem]" title={container.status}>
-          {container.status}
-        </span>
+      <div className="flex items-center gap-2 shrink-0">
+        <div className="flex flex-col items-end gap-0.5 text-xs">
+          <span
+            className={`px-1.5 py-0.5 rounded uppercase tracking-wide font-medium text-[10px] ${stateClasses}`}
+          >
+            {container.state || '—'}
+          </span>
+          <span className="text-slate-500 text-[11px] truncate max-w-[14rem]" title={container.status}>
+            {container.status}
+          </span>
+        </div>
+        <div className="flex items-center gap-0.5">
+          <ContainerActionButton
+            label="Logs"
+            icon={<ScrollTextIcon className="w-3.5 h-3.5" />}
+            onClick={onShowLogs}
+            disabled={disabled}
+          />
+          <ContainerActionButton
+            label={isRunning ? 'Stop' : 'Start'}
+            icon={
+              isRunning ? <SquareIcon className="w-3.5 h-3.5" /> : <PlayIcon className="w-3.5 h-3.5" />
+            }
+            color={isRunning ? 'red' : 'emerald'}
+            onClick={() => onAction(isRunning ? 'stop' : 'start')}
+            disabled={disabled}
+            loading={pending === 'stop' || pending === 'start'}
+          />
+          <ContainerActionButton
+            label="Restart"
+            icon={<RefreshCwIcon className="w-3.5 h-3.5" />}
+            color="blue"
+            onClick={() => onAction('restart')}
+            disabled={disabled}
+            loading={pending === 'restart'}
+          />
+          <ContainerActionButton
+            label="Remove"
+            icon={<Trash2Icon className="w-3.5 h-3.5" />}
+            color="red"
+            onClick={() => onAction('remove')}
+            disabled={disabled}
+            loading={pending === 'remove'}
+          />
+        </div>
       </div>
     </li>
+  );
+}
+
+function ContainerActionButton({
+  label,
+  icon,
+  color,
+  onClick,
+  disabled,
+  loading,
+}: {
+  label: string;
+  icon: React.ReactNode;
+  color?: 'emerald' | 'red' | 'blue';
+  onClick: () => void;
+  disabled?: boolean;
+  loading?: boolean;
+}) {
+  const palette =
+    color === 'emerald'
+      ? 'hover:text-emerald-300 hover:bg-emerald-500/10'
+      : color === 'red'
+        ? 'hover:text-red-300 hover:bg-red-500/10'
+        : color === 'blue'
+          ? 'hover:text-blue-300 hover:bg-blue-500/10'
+          : 'hover:text-slate-100 hover:bg-slate-800';
+  return (
+    <button
+      type="button"
+      title={label}
+      onClick={onClick}
+      disabled={disabled}
+      className={`p-1.5 rounded text-slate-400 ${palette} disabled:opacity-50 disabled:cursor-not-allowed transition-colors`}
+    >
+      {loading ? <Loader2Icon className="w-3.5 h-3.5 animate-spin" /> : icon}
+    </button>
   );
 }
 

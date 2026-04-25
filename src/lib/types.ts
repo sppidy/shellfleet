@@ -142,6 +142,25 @@ export type CreateServiceResponse = {
   error: string | null;
 };
 
+export type DockerContainerAction = 'start' | 'stop' | 'restart' | 'remove';
+
+export type DockerContainerActionResponse = {
+  id: string;
+  success: boolean;
+  log: string;
+  error: string | null;
+};
+
+export type DockerLogsChunkPayload = {
+  container_id: string;
+  data: string;
+};
+
+export type DockerLogsEndPayload = {
+  container_id: string;
+  error: string | null;
+};
+
 export type AgentMessagePayload =
   | { type: 'Register'; payload: { hostname: string; protocol_version?: number } }
   | { type: 'RegisterAck'; payload: { agent_id: string } }
@@ -175,7 +194,13 @@ export type AgentMessagePayload =
   | { type: 'DockerCreateContainerRequest'; payload: { spec: ContainerSpec } }
   | { type: 'DockerCreateContainerResponse'; payload: CreateContainerResponse }
   | { type: 'SwarmCreateServiceRequest'; payload: { spec: ServiceSpec } }
-  | { type: 'SwarmCreateServiceResponse'; payload: CreateServiceResponse };
+  | { type: 'SwarmCreateServiceResponse'; payload: CreateServiceResponse }
+  | { type: 'DockerContainerActionRequest'; payload: { id: string; action: DockerContainerAction } }
+  | { type: 'DockerContainerActionResponse'; payload: DockerContainerActionResponse }
+  | { type: 'DockerLogsRequest'; payload: { container_id: string; tail?: number; follow?: boolean } }
+  | { type: 'DockerLogsChunk'; payload: DockerLogsChunkPayload }
+  | { type: 'DockerLogsStop'; payload: { container_id: string } }
+  | { type: 'DockerLogsEnd'; payload: DockerLogsEndPayload };
 
 export type UiMessage =
   | { type: 'ListAgentsRequest' }
