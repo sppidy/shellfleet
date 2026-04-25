@@ -3,7 +3,7 @@
 <title>sys-manager apt repo</title>
 <style>body{font:14px/1.5 system-ui,sans-serif;max-width:720px;margin:3rem auto;padding:0 1rem;color:#222}code,pre{font:13px/1.5 ui-monospace,monospace;background:#f4f4f5;padding:0.1rem 0.3rem;border-radius:3px}pre{padding:1rem;overflow-x:auto}</style>
 <h1>sys-manager apt repo</h1>
-<p>Add to your apt sources:</p>
+<p>Add to your apt sources (auto-detected per arch — amd64 + arm64 both published):</p>
 <pre>echo "deb [trusted=yes] https://sys-mgr-repo.sppidy.in stable main" \
   | sudo tee /etc/apt/sources.list.d/sys-manager.list
 sudo apt update
