@@ -1,6 +1,7 @@
 mod apt;
 mod deploy;
 mod docker;
+mod logs;
 mod stats;
 mod systemd;
 mod terminal;
@@ -128,6 +129,7 @@ async fn main() {
     });
 
     let mut term_session: Option<terminal::TerminalSession> = None;
+    let log_streams = logs::LogStreams::default();
 
     // Watchdog: if the WebSocket goes silent for 75s the connection is
     // probably dead at the TCP layer (Cloudflare or the kernel may drop
@@ -240,6 +242,31 @@ async fn main() {
                                         log,
                                         error,
                                     });
+                                });
+                            }
+                            Message::DockerContainerActionRequest { id, action } => {
+                                let tx_clone = tx.clone();
+                                tokio::spawn(async move {
+                                    let (success, log, error) = docker::run_container_action(&id, action).await;
+                                    let _ = tx_clone.send(Message::DockerContainerActionResponse {
+                                        id,
+                                        success,
+                                        log,
+                                        error,
+                                    });
+                                });
+                            }
+                            Message::DockerLogsRequest { container_id, tail, follow } => {
+                                let streams = log_streams.clone();
+                                let tx_clone = tx.clone();
+                                tokio::spawn(async move {
+                                    streams.start(container_id, tail, follow, tx_clone).await;
+                                });
+                            }
+                            Message::DockerLogsStop { container_id } => {
+                                let streams = log_streams.clone();
+                                tokio::spawn(async move {
+                                    streams.stop(&container_id).await;
                                 });
                             }
                             Message::DockerCreateContainerRequest { spec } => {

@@ -1,0 +1,139 @@
+use shared::Message;
+use std::collections::HashMap;
+use std::process::Stdio;
+use std::sync::Arc;
+use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::process::Command;
+use tokio::sync::{mpsc, Mutex};
+use tokio::task::JoinHandle;
+
+/// One active `docker logs` stream per container_id. New requests for the
+/// same container cancel the previous stream so the operator never has to
+/// stop one log before starting another.
+#[derive(Default, Clone)]
+pub struct LogStreams {
+    inner: Arc<Mutex<HashMap<String, JoinHandle<()>>>>,
+}
+
+impl LogStreams {
+    pub async fn start(
+        &self,
+        container_id: String,
+        tail: u32,
+        follow: bool,
+        tx: mpsc::UnboundedSender<Message>,
+    ) {
+        // Cancel any previous stream for the same container.
+        self.stop(&container_id).await;
+
+        let cid_for_task = container_id.clone();
+        let tx_task = tx.clone();
+        let handle = tokio::spawn(async move {
+            run_stream(cid_for_task, tail, follow, tx_task).await;
+        });
+        self.inner.lock().await.insert(container_id, handle);
+    }
+
+    pub async fn stop(&self, container_id: &str) {
+        if let Some(handle) = self.inner.lock().await.remove(container_id) {
+            handle.abort();
+        }
+    }
+
+    pub async fn shutdown(&self) {
+        let mut guard = self.inner.lock().await;
+        for (_, h) in guard.drain() {
+            h.abort();
+        }
+    }
+}
+
+async fn run_stream(
+    container_id: String,
+    tail: u32,
+    follow: bool,
+    tx: mpsc::UnboundedSender<Message>,
+) {
+    let mut cmd = Command::new("docker");
+    cmd.arg("logs");
+    if follow {
+        cmd.arg("--follow");
+    }
+    // `--timestamps` is a deliberate no-op — many users prefer raw output;
+    // toggle later if a flag is added.
+    cmd.arg(format!("--tail={tail}"));
+    cmd.arg(&container_id);
+    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+    cmd.kill_on_drop(true);
+
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            let _ = tx.send(Message::DockerLogsEnd {
+                container_id,
+                error: Some(format!("docker spawn: {e}")),
+            });
+            return;
+        }
+    };
+
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+    let cid_out = container_id.clone();
+    let cid_err = container_id.clone();
+    let tx_out = tx.clone();
+    let tx_err = tx.clone();
+
+    let stdout_task = stdout.map(|s| {
+        tokio::spawn(async move {
+            let mut reader = BufReader::new(s).lines();
+            while let Ok(Some(line)) = reader.next_line().await {
+                if tx_out
+                    .send(Message::DockerLogsChunk {
+                        container_id: cid_out.clone(),
+                        data: line,
+                    })
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        })
+    });
+
+    let stderr_task = stderr.map(|s| {
+        tokio::spawn(async move {
+            let mut reader = BufReader::new(s).lines();
+            while let Ok(Some(line)) = reader.next_line().await {
+                if tx_err
+                    .send(Message::DockerLogsChunk {
+                        container_id: cid_err.clone(),
+                        data: line,
+                    })
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        })
+    });
+
+    let status = child.wait().await;
+    if let Some(t) = stdout_task {
+        let _ = t.await;
+    }
+    if let Some(t) = stderr_task {
+        let _ = t.await;
+    }
+
+    let error = match status {
+        Ok(s) if s.success() => None,
+        Ok(s) => Some(format!("docker logs exited with {:?}", s.code())),
+        Err(e) => Some(format!("docker logs wait failed: {e}")),
+    };
+
+    let _ = tx.send(Message::DockerLogsEnd {
+        container_id,
+        error,
+    });
+}
