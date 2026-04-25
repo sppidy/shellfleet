@@ -44,6 +44,20 @@ jobs:
           fi
           git submodule update --init --recursive --depth 1 agent shared
 
+      - name: Trim workspace to agent + shared
+        shell: bash
+        run: |
+          # The root Cargo.toml lists server as a workspace member, but we
+          # don't fetch the server submodule in this build. cargo metadata
+          # would refuse to load. Replace the manifest with an agent-only
+          # workspace just for this run; the file is restored on next
+          # checkout.
+          cat > Cargo.toml <<'EOF'
+          [workspace]
+          members = ["agent", "shared"]
+          resolver = "2"
+          EOF
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
