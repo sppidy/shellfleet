@@ -84,12 +84,11 @@ jobs:
           HARBOR_USER: ${{ secrets.HARBOR_ROBOT_USER }}
           HARBOR_SECRET: ${{ secrets.HARBOR_ROBOT_SECRET }}
         run: |
-          # Use env vars (not direct ${{ }} substitution into bash) because the
-          # robot username contains a literal `$`, which bash would otherwise
-          # try to expand as a variable reference.
+          # Pass creds via env vars rather than direct workflow-expression
+          # substitution into bash — the robot username contains a literal $
+          # which bash would otherwise try to expand as a variable reference.
           echo "$HARBOR_SECRET" \
             | docker login "$HARBOR_HOST" -u "$HARBOR_USER" --password-stdin
-        # HARBOR_HOST is exported globally below.
 
       - name: Build + push (${{ matrix.platform }})
         run: |
@@ -139,12 +138,11 @@ jobs:
           HARBOR_USER: ${{ secrets.HARBOR_ROBOT_USER }}
           HARBOR_SECRET: ${{ secrets.HARBOR_ROBOT_SECRET }}
         run: |
-          # Use env vars (not direct ${{ }} substitution into bash) because the
-          # robot username contains a literal `$`, which bash would otherwise
-          # try to expand as a variable reference.
+          # Pass creds via env vars rather than direct workflow-expression
+          # substitution into bash — the robot username contains a literal $
+          # which bash would otherwise try to expand as a variable reference.
           echo "$HARBOR_SECRET" \
             | docker login "$HARBOR_HOST" -u "$HARBOR_USER" --password-stdin
-        # HARBOR_HOST is exported globally below.
 
       - name: Build manifest list (${{ steps.tag.outputs.value }})
         run: |
