@@ -16,10 +16,26 @@ interface WebSocketContextValue {
 
 const WebSocketContext = createContext<WebSocketContextValue | null>(null);
 
-const WS_URL =
-  typeof process !== 'undefined' && process.env.NEXT_PUBLIC_WS_URL
-    ? process.env.NEXT_PUBLIC_WS_URL
-    : 'wss://dashboard.example.com/ui/ws';
+// Resolve the WS URL once on import. Order of precedence:
+//   1. NEXT_PUBLIC_WS_URL — explicit override baked at build time, used
+//      when web and server live on different hosts.
+//   2. window.location — same-origin /ui/ws, derived per request. This
+//      makes a fresh deploy "just work" wherever it's hosted, no env
+//      var or rebuild needed.
+//   3. SSR placeholder — never actually reached by the browser, but
+//      keeps TypeScript happy and avoids accidental crashes if the
+//      provider is ever evaluated outside a browser.
+function resolveWsUrl(): string {
+  if (typeof process !== 'undefined' && process.env.NEXT_PUBLIC_WS_URL) {
+    return process.env.NEXT_PUBLIC_WS_URL;
+  }
+  if (typeof window !== 'undefined') {
+    const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    return `${proto}//${window.location.host}/ui/ws`;
+  }
+  return 'wss://dashboard.example.com/ui/ws';
+}
+const WS_URL = resolveWsUrl();
 
 export function WebSocketProvider({ children }: { children: React.ReactNode }) {
   const [agents, setAgents] = useState<string[]>([]);
