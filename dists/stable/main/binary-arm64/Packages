@@ -1,28 +1,5 @@
 Package: sys-manager-agent
 Architecture: arm64
-Version: 1.1.0-ci202604251658.g47a7761
-Priority: optional
-Section: admin
-Maintainer: sppidy <sppidytg@gmail.com>
-Installed-Size: 5997
-Depends: libc6 (>= 2.39), libssl3t64 (>= 3.0.0), systemd
-Filename: pool/main/sys-manager-agent_1.1.0-ci202604251658.g47a7761_arm64.deb
-Size: 1380808
-MD5sum: d71da0ce7e5c5244dbd869f5b2ed5c18
-SHA1: 1d0e66ffdc0a8ecb08eb477bb4420f512fac408d
-SHA256: 131ffc3cde69c7096c607000bc75c2e0b15f8322deebdeae5df609d77d3b13b2
-SHA512: 516e3f672f9db3a125904a622cb964261f85135cee00af2bf2925a2261927911b325d3310c30b2d755de710f02875828362449a8026ed8f8ab80a39480fee6bc
-Homepage: https://github.com/sppidy/sys-mngr-agent
-Description: Agent for sys-manager: connects a host to a sys-manager server over WebSocket
- and exposes systemd service control, terminal, and config editing.
- Agent for sys-manager. Connects a Linux host to a sys-manager server over a
- TLS WebSocket and exposes systemd service control, an interactive terminal,
- and remote read/write of configuration files. Pairing happens through the
- server's device-auth flow; the resulting token is cached at
- /etc/sys-manager/agent-token.txt.
-
-Package: sys-manager-agent
-Architecture: arm64
 Version: 1.1.0-ci202604251825.g14b1c7d
 Priority: optional
 Section: admin
@@ -104,6 +81,29 @@ MD5sum: bd734c1e286fdcba771e5d11b54d41c4
 SHA1: 3a229bb7928c71c566833c0781467e3365cc3753
 SHA256: 0f593f7460b6e6c36f3d181743e712657e83a5f42082dab118d810783aba56ce
 SHA512: bd39e2f063f44b60848723d93a665bf9eedcf9cc4bb745e6228c3c37caa3ad3b1eba2cd49f7dc3cb1b012ad041c5b2aea024b37fbc1029e1f6fdcda9ddca7d97
+Homepage: https://github.com/sppidy/sys-mngr-agent
+Description: Agent for sys-manager: connects a host to a sys-manager server over WebSocket
+ and exposes systemd service control, terminal, and config editing.
+ Agent for sys-manager. Connects a Linux host to a sys-manager server over a
+ TLS WebSocket and exposes systemd service control, an interactive terminal,
+ and remote read/write of configuration files. Pairing happens through the
+ server's device-auth flow; the resulting token is cached at
+ /etc/sys-manager/agent-token.txt.
+
+Package: sys-manager-agent
+Architecture: arm64
+Version: 1.1.0-ci202604260917.g9eaf8dc
+Priority: optional
+Section: admin
+Maintainer: sppidy <sppidytg@gmail.com>
+Installed-Size: 6915
+Depends: libc6 (>= 2.39), libssl3t64 (>= 3.0.0), systemd
+Filename: pool/main/sys-manager-agent_1.1.0-ci202604260917.g9eaf8dc_arm64.deb
+Size: 1530084
+MD5sum: ab1fe5e760e041e0b88a5880b382c1a7
+SHA1: ace8a82b01062cd3c0e15b14f76019c4f41de868
+SHA256: 1efabfc8c585705af426c60c2075e8750271e3f4d79e49ff5ca1ad4e932b8f69
+SHA512: bf37d7cd73989e701a889350898357099ec0802b816de4fb3072d4c41a5aa9b8e07eac4bb584ef483fa2a95ab6446c845cee02d9b3909a4310951f8ed0bb6afc
 Homepage: https://github.com/sppidy/sys-mngr-agent
 Description: Agent for sys-manager: connects a host to a sys-manager server over WebSocket
  and exposes systemd service control, terminal, and config editing.
