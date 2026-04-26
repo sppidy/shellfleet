@@ -1,0 +1,51 @@
+# Build context exclusions for all three Dockerfiles
+# (Dockerfile.server, Dockerfile.web, Dockerfile.agent share the repo root context).
+
+# VCS + tooling
+.git
+.gitignore
+.gitmodules
+.gitattributes
+.dockerignore
+.github
+.vscode
+.idea
+.claude
+*.swp
+**/.DS_Store
+**/Thumbs.db
+
+# Rust build artefacts (server + agent + shared)
+target/
+**/target/
+
+# Next.js / Node build artefacts (web)
+**/node_modules/
+**/.next/
+**/out/
+**/dist/
+**/build/
+**/*.tsbuildinfo
+**/.turbo/
+
+# Local env files (only .env.example is allowed in)
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
+
+# Local agent build artefacts that occasionally land in the worktree
+*.deb
+*.tar.gz
+agent-x86_64-linux
+sys-manager-agent_*/
+
+# Workflow scratch / handoffs
+conductor/
+design-handoff/
+
+# Operator-only docs (not needed inside images)
+LOG.md
+README.md
