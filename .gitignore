@@ -3,3 +3,5 @@
 *.deb
 /agent-x86_64-linux
 conductor/*
+.claude/
+design-handoff/
