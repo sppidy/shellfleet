@@ -493,7 +493,8 @@ body {
 }
 .panel-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .panel-body { padding: 12px; }
-.panel-body.flush { padding: 0; }
+.panel-body.flush { padding: 0; overflow-x: auto; }
+.tbl { min-width: max-content; }
 
 /* ============== Buttons ============== */
 .btn {
