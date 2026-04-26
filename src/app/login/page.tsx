@@ -15,8 +15,15 @@ export default function LoginPage() {
 
   return (
     <div
-      className="app-shell"
-      style={{ alignItems: 'center', justifyContent: 'center' }}
+      style={{
+        minHeight: '100vh',
+        width: '100%',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: 16,
+        background: 'var(--bg)',
+      }}
     >
       <div style={{ width: 'min(420px, 92vw)' }}>
         <div style={{ textAlign: 'center', marginBottom: 24 }}>

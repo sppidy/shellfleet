@@ -48,10 +48,7 @@ export default function ActivityPage() {
 
   if (status !== 'authed') {
     return (
-      <div
-        className="app-shell"
-        style={{ alignItems: 'center', justifyContent: 'center' }}
-      >
+      <div className="center-screen">
         <Loader2Icon className="w-6 h-6 animate-spin" style={{ color: 'var(--fg-2)' }} />
       </div>
     );
