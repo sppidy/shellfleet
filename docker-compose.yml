@@ -13,12 +13,12 @@ services:
       - UI_URL=${UI_URL:-https://dashboard.example.com/}
       # JWT_SECRET signs every session cookie. Anyone who knows this value
       # can forge sessions, so we refuse to start without an explicit value.
-      # Generate one with:  openssl rand -hex 32
-      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET must be set — generate with: openssl rand -hex 32}
+      # Generate one with `openssl rand -hex 32` and put it in .env.
+      - "JWT_SECRET=${JWT_SECRET:?JWT_SECRET must be set, run openssl rand -hex 32}"
       # Comma-separated GitHub logins allowed to sign in. No default —
       # publishing a default would mean every fresh deploy starts wide
       # open to whoever the default user is.
-      - ALLOWED_GITHUB_USERS=${ALLOWED_GITHUB_USERS:?ALLOWED_GITHUB_USERS must be set — comma-separated GitHub logins permitted to sign in}
+      - "ALLOWED_GITHUB_USERS=${ALLOWED_GITHUB_USERS:?ALLOWED_GITHUB_USERS must be set, comma-separated GitHub logins permitted to sign in}"
       # Optional legacy shared agent token for one-shot bootstrapping.
       # Leave unset to disable; do NOT set it to "legacy_secret_off".
       - AGENT_SECRET=${AGENT_SECRET:-}
