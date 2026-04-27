@@ -179,7 +179,12 @@ require an agent rollout.
   promoted to admin; everyone else defaults to viewer. Override via
   `BOOTSTRAP_ADMIN`. Enforced in a tower middleware on `/api/*`:
   mutating methods require admin, all other methods require an
-  authenticated, MFA-verified session.
+  authenticated, MFA-verified session. Admins manage roles and seats
+  at `/admin`.
+- **Seat cap.** Community Edition is capped at **3 active seats**.
+  New sign-ins past the cap are rejected at the OAuth callback;
+  existing users keep their access. Remove a seat at `/admin` to free
+  up room. EE lifts this with a license-keyed cap.
 - **Audit log.** All sign-ins, MFA events, and meaningful agent /
   scheduler actions land in the `audit` table. Visible at `/activity`.
   **7-day local retention** — an hourly task drops rows past the
