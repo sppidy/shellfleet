@@ -807,6 +807,12 @@ async fn main() {
                                     Err(e) => eprintln!("Failed to spawn terminal: {}", e),
                                 }
                             }
+                            Message::StopTerminalRequest => {
+                                // Dropping the TerminalSession closes the
+                                // tx_input sender; the write thread exits;
+                                // the child gets EOF on stdin and reaps.
+                                term_session = None;
+                            }
                             Message::TerminalData { data } => {
                                 // Route to exec session if active; fall back to host terminal.
                                 if let Some(session) = &exec_session {
