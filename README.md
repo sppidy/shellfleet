@@ -224,6 +224,12 @@ require an agent rollout.
   and a tight `Permissions-Policy`.
 - **Branch protection.** All five repos require signed commits on
   `main`; force-push and deletion are disabled.
+- **Per-real-IP rate limiting.** Token bucket on the
+  anonymous-attacker surface (`/auth/*`, `/api/me`,
+  `/api/auth/mfa/verify`) keyed off `CF-Connecting-IP`. 30 burst, 30
+  req/min steady. Defence-in-depth on top of Cloudflare's edge rate
+  limiter — see [`docs/CLOUDFLARE.md`](docs/CLOUDFLARE.md) for the
+  edge rules.
 
 ### Roadmap — Enterprise Edition
 
