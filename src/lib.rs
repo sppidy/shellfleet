@@ -4,7 +4,9 @@ use serde::{Deserialize, Serialize};
 /// the wire format changes in a way the server needs to reject older agents
 /// for. Value `0` means "legacy agent that predates this field" — those
 /// still connect, just without the version-aware fast paths.
-pub const PROTOCOL_VERSION: u32 = 13;
+/// v14: terminal variants gain `session_id` for multi-PTY per host.
+/// Empty string = the singleton container-exec session (DockerExec*).
+pub const PROTOCOL_VERSION: u32 = 14;
 
 fn default_protocol_version() -> u32 {
     0
@@ -82,22 +84,35 @@ pub enum Message {
         error: Option<String>,
     },
 
-    /// Request to start a terminal session
-    StartTerminalRequest,
+    /// Open a host PTY tagged with `session_id`. Multiple sessions per
+    /// host are allowed; each is keyed by the client-chosen id (the
+    /// dashboard generates a UUID per terminal tab). The empty string
+    /// is reserved for the container-exec session — host shells must
+    /// never use it.
+    StartTerminalRequest { session_id: String },
 
-    /// Terminal data
-    TerminalData { data: Vec<u8> },
+    /// Terminal data — bidirectional. From client→agent, `session_id`
+    /// selects which PTY the bytes are written into. From agent→client,
+    /// `session_id` tags which PTY emitted them so the right xterm
+    /// instance can render. `session_id == ""` is the container-exec
+    /// session (singleton, scoped by container_id on the start
+    /// request).
+    TerminalData { session_id: String, data: Vec<u8> },
 
-    /// Tear down the host PTY started by `StartTerminalRequest`.
-    /// Called by the dashboard when an operator closes a terminal
-    /// pane (multi-tab multiplexer, page navigation, etc.) so the
-    /// agent doesn't keep zombie shells around. Old agents (pre-
-    /// this-version) ignore the variant and the PTY dies on the
-    /// next WS disconnect anyway — graceful, not catastrophic.
-    StopTerminalRequest,
+    /// Tear down the host PTY identified by `session_id`. Closing one
+    /// tab on the dashboard sends this with the tab's id; other tabs
+    /// against the same agent keep running. Old agents (pre-v14)
+    /// ignored the variant entirely and the PTY died on the next WS
+    /// disconnect; new agents reap immediately.
+    StopTerminalRequest { session_id: String },
 
-    /// Request to resize terminal
-    TerminalResize { cols: u16, rows: u16 },
+    /// Resize the PTY identified by `session_id`. Each xterm instance
+    /// resizes independently; sizes do not propagate between tabs.
+    TerminalResize {
+        session_id: String,
+        cols: u16,
+        rows: u16,
+    },
 
     /// Request to read a configuration file
     ReadConfigRequest { path: String },
