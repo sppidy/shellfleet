@@ -15,6 +15,7 @@ import LogViewer from './LogViewer';
 import SwarmServiceDrawer from './SwarmServiceDrawer';
 import ContainerExecModal from './ContainerExecModal';
 import { useUi } from './providers/UiProvider';
+import { useCanWrite } from './providers/SessionProvider';
 
 const REFRESH_MS = 10_000;
 const TIMEOUT_MS = 8_000;
@@ -24,6 +25,7 @@ type ContainerActionState = { id: string; action: DockerContainerAction };
 
 export default function Containers({ agentId }: { agentId: string }) {
   const { sendToAgent, onAgentMessage } = useWebSocket();
+  const canWrite = useCanWrite();
   const [docker, setDocker] = useState<DockerListPayload | null>(null);
   const [swarm, setSwarm] = useState<SwarmListPayload | null>(null);
   const [waiting, setWaiting] = useState(true);
@@ -245,6 +247,7 @@ export default function Containers({ agentId }: { agentId: string }) {
                   <ContainerRow
                     key={c.id}
                     container={c}
+                    canWrite={canWrite}
                     pending={containerAction?.id === c.id ? containerAction.action : null}
                     disabled={containerAction !== null && containerAction.id !== c.id}
                     onAction={async (action) => {
@@ -502,6 +505,7 @@ export default function Containers({ agentId }: { agentId: string }) {
 
 function ContainerRow({
   container,
+  canWrite,
   pending,
   disabled,
   onAction,
@@ -509,6 +513,7 @@ function ContainerRow({
   onShowShell,
 }: {
   container: DockerContainer;
+  canWrite: boolean;
   pending: DockerContainerAction | null;
   disabled: boolean;
   onAction: (action: DockerContainerAction) => void;
@@ -555,32 +560,32 @@ function ContainerRow({
         </button>
         <button
           className="btn sm icon"
-          title="Shell"
+          title={!canWrite ? 'viewer role: read-only' : 'Shell'}
           onClick={onShowShell}
-          disabled={disabled || !isRunning}
+          disabled={disabled || !isRunning || !canWrite}
         >
           ›_
         </button>
         <button
           className="btn sm icon"
-          title={isRunning ? 'Stop' : 'Start'}
-          disabled={disabled}
+          title={!canWrite ? 'viewer role: read-only' : isRunning ? 'Stop' : 'Start'}
+          disabled={disabled || !canWrite}
           onClick={() => onAction(isRunning ? 'stop' : 'start')}
         >
           {pending === 'start' || pending === 'stop' ? '…' : isRunning ? '■' : '▶'}
         </button>
         <button
           className="btn sm icon"
-          title="Restart"
-          disabled={disabled}
+          title={!canWrite ? 'viewer role: read-only' : 'Restart'}
+          disabled={disabled || !canWrite}
           onClick={() => onAction('restart')}
         >
           {pending === 'restart' ? '…' : '↻'}
         </button>
         <button
           className="btn sm icon danger"
-          title="Remove"
-          disabled={disabled}
+          title={!canWrite ? 'viewer role: read-only' : 'Remove'}
+          disabled={disabled || !canWrite}
           onClick={() => onAction('remove')}
         >
           {pending === 'remove' ? '…' : '×'}

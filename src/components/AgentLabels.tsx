@@ -3,10 +3,12 @@
 import { useCallback, useEffect, useState } from 'react';
 import { apiFetch } from '@/lib/api';
 import { useUi } from './providers/UiProvider';
+import { useCanWrite } from './providers/SessionProvider';
 import type { LabelsResponse } from '@/lib/types';
 
 export default function AgentLabels({ agentId }: { agentId: string }) {
   const ui = useUi();
+  const canWrite = useCanWrite();
   const [labels, setLabels] = useState<string[]>([]);
   const [adding, setAdding] = useState(false);
   const [draft, setDraft] = useState('');
@@ -68,31 +70,35 @@ export default function AgentLabels({ agentId }: { agentId: string }) {
       {labels.map((l) => (
         <span key={l} className="label-chip">
           {l}
-          <span className="x" onClick={() => remove(l)} title={`Remove ${l}`}>
-            ×
-          </span>
+          {canWrite && (
+            <span className="x" onClick={() => remove(l)} title={`Remove ${l}`}>
+              ×
+            </span>
+          )}
         </span>
       ))}
-      {adding ? (
-        <form onSubmit={add} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-          <input
-            type="text"
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onBlur={() => {
-              if (!draft) setAdding(false);
-            }}
-            autoFocus
-            placeholder="label"
-            className="input"
-            style={{ height: 22, fontSize: 11, padding: '2px 6px', width: 96 }}
-          />
-        </form>
-      ) : (
-        <span className="label-chip add" onClick={() => setAdding(true)}>
-          + label
-        </span>
-      )}
+      {canWrite ? (
+        adding ? (
+          <form onSubmit={add} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+            <input
+              type="text"
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onBlur={() => {
+                if (!draft) setAdding(false);
+              }}
+              autoFocus
+              placeholder="label"
+              className="input"
+              style={{ height: 22, fontSize: 11, padding: '2px 6px', width: 96 }}
+            />
+          </form>
+        ) : (
+          <span className="label-chip add" onClick={() => setAdding(true)}>
+            + label
+          </span>
+        )
+      ) : null}
     </>
   );
 }

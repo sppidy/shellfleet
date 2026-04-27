@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Loader2Icon } from 'lucide-react';
 import { apiFetch } from '@/lib/api';
+import { useCanWrite } from '@/components/providers/SessionProvider';
 
 type TokenRow = {
   token_preview: string;
@@ -23,6 +24,7 @@ const formatRelative = (unixSeconds: number) => {
 
 export default function TokensPage() {
   const router = useRouter();
+  const canWrite = useCanWrite();
   const [rows, setRows] = useState<TokenRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [revoking, setRevoking] = useState<string | null>(null);
@@ -157,7 +159,8 @@ export default function TokensPage() {
                           <td className="actions">
                             <button
                               className="btn sm danger"
-                              disabled={revoking === row.token_preview}
+                              disabled={!canWrite || revoking === row.token_preview}
+                              title={!canWrite ? 'viewer role: read-only' : undefined}
                               onClick={() => handleRevoke(row)}
                             >
                               {revoking === row.token_preview ? '…' : 'revoke'}

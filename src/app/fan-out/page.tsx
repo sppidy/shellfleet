@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { useSession } from '@/components/providers/SessionProvider';
+import { useSession, useCanWrite } from '@/components/providers/SessionProvider';
 import { useWebSocket } from '@/components/providers/WebSocketProvider';
 import { useUi } from '@/components/providers/UiProvider';
 import { apiFetch } from '@/lib/api';
@@ -24,6 +24,7 @@ export default function FanOutPage() {
   const router = useRouter();
   const ui = useUi();
   const { status } = useSession();
+  const canWrite = useCanWrite();
   const { agents } = useWebSocket();
   const [kind, setKind] = useState<FanOutKind>('docker-list');
   const [targetMode, setTargetMode] = useState<'ids' | 'label'>('ids');
@@ -305,7 +306,8 @@ export default function FanOutPage() {
                   <button
                     type="button"
                     onClick={submit}
-                    disabled={submitting}
+                    disabled={submitting || !canWrite}
+                    title={!canWrite ? 'viewer role: read-only' : undefined}
                     className="btn primary"
                   >
                     {submitting ? '…' : `▶ run on ${targetMode === 'ids' ? `${selectedCount} hosts` : `label "${labelChoice || '—'}"`}`}

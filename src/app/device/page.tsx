@@ -4,12 +4,14 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Loader2Icon } from 'lucide-react';
 import { apiFetch } from '@/lib/api';
+import { useCanWrite } from '@/components/providers/SessionProvider';
 
 type AuthStatus = 'checking' | 'authed' | 'guest';
 type SubmitStatus = 'idle' | 'loading' | 'success' | 'error';
 
 export default function DeviceAuthPage() {
   const router = useRouter();
+  const canWrite = useCanWrite();
   const [authStatus, setAuthStatus] = useState<AuthStatus>('checking');
   const [userCode, setUserCode] = useState('');
   const [submitStatus, setSubmitStatus] = useState<SubmitStatus>('idle');
@@ -149,7 +151,8 @@ export default function DeviceAuthPage() {
                     <div className="kbd-hint">codes expire after ~5 min</div>
                     <button
                       type="submit"
-                      disabled={submitStatus === 'loading' || !userCode.trim()}
+                      disabled={submitStatus === 'loading' || !userCode.trim() || !canWrite}
+                      title={!canWrite ? 'viewer role: read-only' : undefined}
                       className="btn primary"
                     >
                       {submitStatus === 'loading' ? '…' : '▶ approve & connect'}

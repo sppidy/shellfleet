@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { useSession } from '@/components/providers/SessionProvider';
+import { useSession, useCanWrite } from '@/components/providers/SessionProvider';
 import { useUi } from '@/components/providers/UiProvider';
 import { apiFetch } from '@/lib/api';
 import type { Notification } from '@/lib/types';
@@ -23,6 +23,7 @@ export default function NotificationsPage() {
   const router = useRouter();
   const ui = useUi();
   const { status } = useSession();
+  const canWrite = useCanWrite();
   const [rows, setRows] = useState<Notification[] | null>(null);
   const [filter, setFilter] = useState<LevelFilter>('all');
 
@@ -145,7 +146,12 @@ export default function NotificationsPage() {
                       warn
                     </button>
                   </div>
-                  <button className="btn" onClick={markAll}>
+                  <button
+                    className="btn"
+                    onClick={markAll}
+                    disabled={!canWrite}
+                    title={!canWrite ? 'viewer role: read-only' : undefined}
+                  >
                     mark all read
                   </button>
                 </div>
@@ -231,14 +237,20 @@ export default function NotificationsPage() {
                         </div>
                         <div className="row" style={{ gap: 6, alignSelf: 'start' }}>
                           {unread && (
-                            <button className="btn sm" onClick={() => markRead(n.id)}>
+                            <button
+                              className="btn sm"
+                              onClick={() => markRead(n.id)}
+                              disabled={!canWrite}
+                              title={!canWrite ? 'viewer role: read-only' : undefined}
+                            >
                               mark read
                             </button>
                           )}
                           <button
                             className="btn sm icon danger"
                             onClick={() => remove(n.id)}
-                            title="Delete"
+                            disabled={!canWrite}
+                            title={!canWrite ? 'viewer role: read-only' : 'Delete'}
                           >
                             ×
                           </button>

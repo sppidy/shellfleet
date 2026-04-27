@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useWebSocket } from './providers/WebSocketProvider';
+import { useCanWrite } from './providers/SessionProvider';
 import { ServiceInfo } from '@/lib/types';
 import { Loader2Icon } from 'lucide-react';
 import JournalLogViewer from './JournalLogViewer';
@@ -14,6 +15,7 @@ const REQUEST_TIMEOUT_MS = 10_000;
 
 export default function ServiceList({ agentId }: { agentId: string }) {
   const { sendToAgent, onAgentMessage, isConnected } = useWebSocket();
+  const canWrite = useCanWrite();
   const [services, setServices] = useState<ServiceInfo[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState('');
@@ -210,24 +212,24 @@ export default function ServiceList({ agentId }: { agentId: string }) {
                     <td className="actions" style={{ width: 130 }}>
                       <button
                         className="btn sm icon"
-                        title="Start"
-                        disabled={!!p}
+                        title={!canWrite ? 'viewer role: read-only' : 'Start'}
+                        disabled={!!p || !canWrite}
                         onClick={() => handleControl(s.name, 'start')}
                       >
                         {p === 'start' ? '…' : '▶'}
                       </button>
                       <button
                         className="btn sm icon"
-                        title="Stop"
-                        disabled={!!p}
+                        title={!canWrite ? 'viewer role: read-only' : 'Stop'}
+                        disabled={!!p || !canWrite}
                         onClick={() => handleControl(s.name, 'stop')}
                       >
                         {p === 'stop' ? '…' : '■'}
                       </button>
                       <button
                         className="btn sm icon"
-                        title="Restart"
-                        disabled={!!p}
+                        title={!canWrite ? 'viewer role: read-only' : 'Restart'}
+                        disabled={!!p || !canWrite}
                         onClick={() => handleControl(s.name, 'restart')}
                       >
                         {p === 'restart' ? '…' : '↻'}
