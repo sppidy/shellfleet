@@ -33,9 +33,20 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
   const [mfaEnabled, setMfaEnabled] = useState<boolean>(false);
   const [status, setStatus] = useState<SessionStatus>('loading');
 
-  const refresh = useCallback(() => {
-    fetch('/api/me', { credentials: 'same-origin' })
-      .then(async (res) => {
+  const refresh = useCallback(async () => {
+    // /api/me is the session probe. Most failures are short-lived
+    // (Cloudflare challenge, 5xx blip, network flake), so we retry
+    // a few times with backoff before giving up. A persistent 403
+    // — typically an ad-blocker matching `*/api/me` against a
+    // privacy filter list — eventually flips to 'guest' so the
+    // dashboard doesn't sit on an infinite spinner.
+    const ATTEMPT_DELAYS_MS = [0, 400, 1200, 3000];
+    for (let i = 0; i < ATTEMPT_DELAYS_MS.length; i++) {
+      if (ATTEMPT_DELAYS_MS[i] > 0) {
+        await new Promise((r) => setTimeout(r, ATTEMPT_DELAYS_MS[i]));
+      }
+      try {
+        const res = await fetch('/api/me', { credentials: 'same-origin' });
         if (res.ok) {
           const data = (await res.json()) as MeResponse;
           setUser(data.user);
@@ -44,8 +55,6 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
           setStatus(data.mfa_verified ? 'authed' : 'pending_mfa');
           return;
         }
-        // 401 — truly logged out (no cookie, expired, signature
-        // mismatch, session_epoch invalidated). Drop to guest.
         if (res.status === 401) {
           setUser(null);
           setRole(null);
@@ -53,17 +62,30 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
           setStatus('guest');
           return;
         }
-        // 403 / 429 / 5xx — transient (rate limit, edge challenge,
-        // server hiccup). Keeping the previous state avoids
-        // bouncing a mid-MFA user back to /login because Cloudflare
-        // briefly didn't like one of the burst /api/me calls.
-        // First-load case: still in 'loading' — leave it there;
-        // a subsequent refresh() (post-verify, etc.) will retry.
-      })
-      .catch(() => {
-        // Network error: same defensive posture as 5xx — don't drop
-        // to guest unless we know the cookie is bad.
-      });
+        // 403 / 429 / 5xx — fall through to retry.
+        if (i === ATTEMPT_DELAYS_MS.length - 1) {
+          console.error(
+            `[sys-manager] /api/me persistently returning ${res.status}. ` +
+              `If this is your dashboard, check your browser's ad-blocker / ` +
+              `privacy extension — many block paths matching /api/me/.`,
+          );
+          setUser(null);
+          setRole(null);
+          setMfaEnabled(false);
+          setStatus('guest');
+          return;
+        }
+      } catch (err) {
+        if (i === ATTEMPT_DELAYS_MS.length - 1) {
+          console.error('[sys-manager] /api/me unreachable:', err);
+          setUser(null);
+          setRole(null);
+          setMfaEnabled(false);
+          setStatus('guest');
+          return;
+        }
+      }
+    }
   }, []);
 
   useEffect(() => {
