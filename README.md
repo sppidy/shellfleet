@@ -7,12 +7,18 @@ remote shells across every host you connect.
 
 Apt repo: <https://sys-mgr-repo.sppidy.in/>  ·  Container images: <https://hrbr.sppidy.in/sys-manager>
 
-> Built because Prometheus node-exporter + Grafana + Datadog all trade quality
-> data for real CPU + RAM cost on every managed host. The agent's design rule
-> is **be cheap when nobody's looking**: ~4 MB RSS at idle, no background
-> polling for stats / containers / images / networks / volumes / stacks. The
-> dashboard issuing a request is the only thing that triggers those code
-> paths. See the "Idle cost" section below.
+> The agent's design rule is **be cheap when nobody's looking**: ~4 MB RSS at
+> idle, no background polling for stats / containers / images / networks /
+> volumes / stacks. The dashboard issuing a request is the only thing that
+> triggers those code paths. See the "Idle cost" section below.
+>
+> For metrics, sys-manager **doesn't compete with Prometheus — it delegates
+> to it**. The agent doesn't scrape, doesn't keep a TSDB, and doesn't run an
+> exporter. If you want CPU / memory / disk history, point the dashboard at
+> your existing Prometheus via the metrics plugin (named panel templates in
+> YAML, queried on demand) and the per-agent **Metrics** tab renders the
+> result. No free-form PromQL from the browser, no metric storage in
+> sys-manager. See [`docs/METRICS.md`](docs/METRICS.md).
 
 ## Quick start
 
@@ -52,6 +58,14 @@ The fastest path to a running dashboard + a paired host:
    │  • health probes (http/tcp/exec) — opt-in only              │
    │  • backups (tar/gzip → local or s3) — gated by env          │
    └─────────────────────────────────────────────────────────────┘
+
+       (optional) Metrics plugin — server-side only
+   ┌─────────────────────────────────────────────────────────────┐
+   │  YAML panel templates → server queries your Prometheus      │
+   │  on demand → per-agent "Metrics" tab renders the result.    │
+   │  Agent is uninvolved; node_exporter / process_exporter live │
+   │  on the host as separate, operator-managed processes.       │
+   └─────────────────────────────────────────────────────────────┘
 ```
 
 ## Repository layout
@@ -76,6 +90,8 @@ Top-level files in this superproject:
 | `.github/workflows/`       | `agent-deb.yml` — multi-arch (amd64 + arm64) .deb build + apt repo |
 | `dist/QUICKSTART.md`       | Self-contained 5-min install using published container images      |
 | `docs/CLOUDFLARE.md`       | Edge configuration: WAF rate-limit rules, headers, origin cert     |
+| `docs/METRICS.md`          | Metrics plugin — point the dashboard at your existing Prometheus    |
+| `metrics.example.yaml`     | Drop-in starter config for the metrics plugin                       |
 | `CONTRIBUTING.md`, `CLA.md`| Contribution flow + Individual Contributor License Agreement        |
 
 ## Deploy
@@ -109,6 +125,7 @@ The `.env` on the docker host carries:
 | `BACKUPS_ENABLED`                                | optional | `true` to mount `/api/backups/*` and run the backup scheduler                |
 | `WS_ALLOWED_ORIGINS`                             | optional | Extra origins allowed on `/ui/ws` (UI_URL is always allowed)                 |
 | `UPDATE_WEBHOOK_URL` / `UPDATE_WEBHOOK_FORMAT`   | optional | Outbound webhook on `update_window.result`. Format: `json` (default) or `slack`|
+| `METRICS_CONFIG_PATH`                            | optional | Path to the metrics plugin YAML. Default `/etc/sys-manager/metrics.yaml`. Missing/invalid → plugin disabled, Metrics tab hidden |
 
 ## Connecting an agent
 
@@ -170,6 +187,41 @@ For a full local end-to-end test (server + web + a containerized agent),
 uncomment the `agent:` stanza in `docker-compose.yml`. That stanza mounts
 the host's DBus socket so the in-container agent can drive the host's
 systemd.
+
+## Metrics
+
+sys-manager doesn't store time-series. If you want persistent CPU / memory
+/ disk / process history per host, **bring your own Prometheus** and point
+the dashboard at it.
+
+```yaml
+# /etc/sys-manager/metrics.yaml — minimal
+prometheus:
+  url: https://prometheus.your-domain.example/api/v1
+  basic_auth: { username: sys-manager, password: ${PROMETHEUS_PASSWORD} }
+
+panels:
+  - id: cpu_percent
+    title: CPU %
+    unit: percent
+    query: |
+      100 - (avg by (instance) (rate(node_cpu_seconds_total{mode="idle",instance="{instance}"}[1m])) * 100)
+```
+
+Drop the file at `METRICS_CONFIG_PATH`, restart the server, and a Metrics
+tab appears on every agent. The server substitutes `{instance}` (and
+`{agent_id}`, `{hostname}`) into each query — the browser only sends a
+panel **id**, never raw PromQL.
+
+Worked example with `process_exporter` (top-10 processes by CPU + RSS as
+panels) is in [`docs/METRICS.md`](docs/METRICS.md). A drop-in starter
+config is at [`metrics.example.yaml`](metrics.example.yaml).
+
+> Why bolt on Prometheus instead of building a metrics collector? Two
+> reasons: (1) we'd reinvent something Prometheus already does well, and
+> (2) it would force the agent to run a continuous scrape loop, breaking
+> the "be cheap when nobody's looking" rule. Delegating keeps the agent
+> at ~4 MB idle and lets operators reuse infrastructure they already run.
 
 ## Wire format
 
@@ -283,8 +335,12 @@ Continuous loops on the agent — full inventory:
 4. Backup scheduler — same shape, gated behind `BACKUPS_ENABLED`.
 
 That's it. There is no continuous polling for stats, container lists,
-image lists, network/volume/stack lists, or prune previews. When no UI is
-connected, the agent's average CPU is ≈ 0%. Idle RSS measured at ~4 MB.
+image lists, network/volume/stack lists, or prune previews. **Metrics
+collection is intentionally out of scope** — node_exporter (or whatever
+exporter you're using) runs as its own process, scraped by your own
+Prometheus, queried by the dashboard server on demand. The sys-manager
+agent itself is uninvolved. When no UI is connected, the agent's average
+CPU is ≈ 0%. Idle RSS measured at ~4 MB.
 
 Cost banners on every UI surface that triggers a non-trivial agent call
 (Stats, Prune, Exec) document the cost model in-place so the operator
