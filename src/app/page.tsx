@@ -19,6 +19,7 @@ import ContainerStats from '@/components/ContainerStats';
 import SystemPrune from '@/components/SystemPrune';
 import AptManager from '@/components/AptManager';
 import Metrics from '@/components/Metrics';
+import JournalStream from '@/components/JournalStream';
 import FleetOverview from '@/components/FleetOverview';
 import Deploy from '@/components/Deploy';
 import HealthProbes from '@/components/HealthProbes';
@@ -32,6 +33,7 @@ type Tab =
   | 'containers'
   | 'stats'
   | 'metrics'
+  | 'journal'
   | 'images'
   | 'networks'
   | 'volumes'
@@ -48,6 +50,7 @@ const TABS: Tab[] = [
   'containers',
   'stats',
   'metrics',
+  'journal',
   'images',
   'networks',
   'volumes',
@@ -65,6 +68,7 @@ const TAB_DEFS: { id: Tab; label: string; badge?: () => string | null }[] = [
   { id: 'containers', label: 'containers' },
   { id: 'stats', label: 'stats' },
   { id: 'metrics', label: 'metrics' },
+  { id: 'journal', label: 'journal' },
   { id: 'images', label: 'images' },
   { id: 'networks', label: 'networks' },
   { id: 'volumes', label: 'volumes' },
@@ -539,6 +543,8 @@ function HomeBody() {
                 <ContainerStats agentId={selectedAgent} />
               ) : activeTab === 'metrics' ? (
                 <Metrics agentId={selectedAgent} />
+              ) : activeTab === 'journal' ? (
+                <JournalStream agentId={selectedAgent} />
               ) : activeTab === 'prune' ? (
                 <SystemPrune agentId={selectedAgent} />
               ) : activeTab === 'deploy' ? (

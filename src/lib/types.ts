@@ -448,6 +448,22 @@ export type AgentMessagePayload =
   | { type: 'JournalLogsChunk'; payload: JournalLogsChunkPayload }
   | { type: 'JournalLogsStop'; payload: { unit: string } }
   | { type: 'JournalLogsEnd'; payload: JournalLogsEndPayload }
+  | {
+      type: 'JournalStreamRequest';
+      payload: {
+        stream_id: string;
+        units?: string[];
+        priority?: string | null;
+        since?: string | null;
+        grep?: string | null;
+        identifier?: string | null;
+        lines?: number;
+        follow?: boolean;
+      };
+    }
+  | { type: 'JournalStreamChunk'; payload: { stream_id: string; lines: string[] } }
+  | { type: 'JournalStreamStop'; payload: { stream_id: string } }
+  | { type: 'JournalStreamEnd'; payload: { stream_id: string; error: string | null } }
   | { type: 'SwarmServiceInspectRequest'; payload: { name: string } }
   | { type: 'SwarmServiceInspectResponse'; payload: SwarmServiceInspectPayload }
   | { type: 'SwarmStackDeployRequest'; payload: { stack_name: string; compose_yaml: string; prune: boolean } }
