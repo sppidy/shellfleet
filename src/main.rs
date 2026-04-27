@@ -888,6 +888,8 @@ fn is_mutating_agent_message(msg: &Message) -> bool {
         | DockerLogsStop { .. }
         | JournalLogsRequest { .. }
         | JournalLogsStop { .. }
+        | JournalStreamRequest { .. }
+        | JournalStreamStop { .. }
         | SwarmServiceInspectRequest { .. }
         | BackupListArchivesRequest { .. }
         | DockerImageListRequest
