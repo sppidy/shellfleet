@@ -170,6 +170,20 @@ require an agent rollout.
 ## Security
 
 - **Auth.** GitHub OAuth → 24h session cookie (`SameSite=Lax`, `Secure`).
+- **2FA (TOTP).** Optional per-user. Enroll at `/security`. RFC 6238
+  with SHA-1, 6 digits, 30 s period, ±1 step skew. Recovery codes are
+  generated at enrollment time, hashed (SHA-256) at rest, and burned on
+  use.
+- **RBAC.** Two roles, **admin** (read + write) and **viewer**
+  (read-only). The first allowlisted GitHub login that signs in is
+  promoted to admin; everyone else defaults to viewer. Override via
+  `BOOTSTRAP_ADMIN`. Enforced in a tower middleware on `/api/*`:
+  mutating methods require admin, all other methods require an
+  authenticated, MFA-verified session.
+- **Audit log.** All sign-ins, MFA events, and meaningful agent /
+  scheduler actions land in the `audit` table. Visible at `/activity`.
+  **7-day local retention** — an hourly task drops rows past the
+  window. EE will offer long retention + SIEM export.
 - **CSRF.** Double-submit cookie + `X-CSRF` header on every mutating
   `/api/*` route. The web client routes mutations through
   `web/src/lib/api.ts::apiFetch`.
@@ -178,6 +192,17 @@ require an agent rollout.
 - **Apt repo.** ed25519-signed `Release` + `InRelease`. The clearsigned
   `InRelease` is verified by `apt` against the public key piped into
   `/etc/apt/keyrings/sys-manager.asc`.
+
+### Roadmap — Enterprise Edition
+
+The CE feature set above is the **safety floor**: every operator gets
+2FA, basic RBAC, and a short local audit log. The Enterprise Edition
+ships as a separate sidecar binary that registers with CE over an
+extension API and adds the **scale ceiling**: SSO (SAML, OIDC), SCIM
+provisioning, custom RBAC with per-resource permissions, multi-tenant
+organizations, secrets-manager integration (Vault, SOPS, AWS SM),
+long-retention audit log with SIEM export, and a support SLA. CE
+remains fully functional without EE; EE without CE is meaningless.
 
 ## Idle cost
 
