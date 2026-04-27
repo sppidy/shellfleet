@@ -26,7 +26,7 @@ mod webhook;
 pub const CE_USER_LIMIT: usize = 3;
 
 use axum::{
-    extract::{Query, State, ws::{Message as WsMessage, WebSocket, WebSocketUpgrade}},
+    extract::{DefaultBodyLimit, Query, State, ws::{Message as WsMessage, WebSocket, WebSocketUpgrade}},
     http::StatusCode,
     response::IntoResponse,
     routing::get,
@@ -328,6 +328,11 @@ async fn main() {
         .route("/healthz", get(healthz))
         .route("/audit", get(audit_handler))
         .route("/features", get(features_handler))
+        // Cap any single JSON / form body. The largest legitimate
+        // request is a SwarmStackDeployRequest carrying a compose YAML,
+        // realistically well under 256 KiB. 1 MiB is generous and
+        // closes the unbounded-body footgun.
+        .layer(DefaultBodyLimit::max(1 * 1024 * 1024))
         // RBAC runs after CSRF: CSRF rejects forged cross-site writes,
         // RBAC rejects insufficiently-privileged callers (viewer-on-
         // mutating, pending-MFA-on-anything-but-/verify, etc.).
@@ -866,8 +871,13 @@ fn is_mutating_agent_message(msg: &Message) -> bool {
     use Message::*;
     match msg {
         // Pure reads — viewer-OK.
+        // ReadConfigRequest is deliberately NOT in this list. The agent
+        // serves it via `std::fs::read_to_string` as root with no
+        // sandbox; granting any caller (let alone a viewer) the ability
+        // to ask for `/etc/shadow` or the agent's own token file would
+        // be an arbitrary-file-read trivially. Admin-only here, plus
+        // the agent rejects sensitive paths in `agent::config`.
         ListServicesRequest
-        | ReadConfigRequest { .. }
         | SystemStatsRequest
         | DockerListRequest
         | SwarmListRequest

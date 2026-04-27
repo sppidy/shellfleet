@@ -41,6 +41,25 @@ pub async fn middleware(req: Request, next: Next) -> Response<Body> {
                 "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
             )
         });
+    // Content-Security-Policy. The dashboard self-hosts its JS/CSS
+    // (Next.js standalone build) and only talks to its own origin
+    // (HTTPS for /api/*, WSS for /ui/ws). Inline <style> tags ship
+    // from styled-jsx and Next, so 'unsafe-inline' is required for
+    // styles. xterm.js + Monaco both bundle into the same origin so
+    // no extra script-src entries are needed.
+    h.entry(header::CONTENT_SECURITY_POLICY).or_insert_with(|| {
+        HeaderValue::from_static(
+            "default-src 'self'; \
+             script-src 'self'; \
+             style-src 'self' 'unsafe-inline'; \
+             img-src 'self' data: https:; \
+             font-src 'self' data:; \
+             connect-src 'self' wss:; \
+             frame-ancestors 'none'; \
+             base-uri 'self'; \
+             form-action 'self' https://github.com",
+        )
+    });
 
     resp
 }

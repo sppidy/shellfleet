@@ -326,11 +326,17 @@ async fn list_archives_handler(
 
     let (otx, orx) = tokio::sync::oneshot::channel();
     {
+        const MAX_PENDING: usize = 32;
         let mut waiters = state.pending_backup_lists.lock().await;
-        waiters
-            .entry(row.agent_id.clone())
-            .or_default()
-            .push_back(otx);
+        let q = waiters.entry(row.agent_id.clone()).or_default();
+        if q.len() >= MAX_PENDING {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "too many in-flight backup-list requests for this agent",
+            )
+                .into_response();
+        }
+        q.push_back(otx);
     }
     let req = Message::BackupListArchivesRequest {
         id: row.id.to_string(),
@@ -404,11 +410,17 @@ async fn restore_handler(
 
     let (otx, orx) = tokio::sync::oneshot::channel();
     {
+        const MAX_PENDING: usize = 32;
         let mut waiters = state.pending_backup_restores.lock().await;
-        waiters
-            .entry(row.agent_id.clone())
-            .or_default()
-            .push_back(otx);
+        let q = waiters.entry(row.agent_id.clone()).or_default();
+        if q.len() >= MAX_PENDING {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "too many in-flight backup-restore requests for this agent",
+            )
+                .into_response();
+        }
+        q.push_back(otx);
     }
     let req = Message::BackupRestoreRequest {
         id: row.id.to_string(),

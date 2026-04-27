@@ -458,7 +458,16 @@ async fn disable_handler(
     if row.totp_enabled == 0 {
         return (StatusCode::OK, "already disabled").into_response();
     }
-    let secret = match row.totp_secret.as_deref() {
+    // The stored `totp_secret` is AES-GCM ciphertext (`v1:...`) since
+    // the at-rest encryption rolled in. Decrypt before handing to
+    // `verify_totp`, which expects a base32 string. Without this the
+    // call would silently fail every code and lock legitimate users
+    // out of disabling 2FA.
+    let secret_plain = row
+        .totp_secret
+        .as_deref()
+        .and_then(crate::crypto::decrypt);
+    let secret = match secret_plain.as_deref() {
         Some(s) => s,
         None => return (StatusCode::BAD_REQUEST, "totp not enabled").into_response(),
     };
@@ -469,9 +478,15 @@ async fn disable_handler(
         tracing::error!(error = %e, "failed to disable totp");
         return (StatusCode::INTERNAL_SERVER_ERROR, "db error").into_response();
     }
+    // Bump session_epoch so that disabling 2FA also invalidates any
+    // other sessions the user has open — defence-in-depth against the
+    // case where one of them was leaked and the 2FA-removal is part
+    // of an attacker's lock-down sequence.
+    let now = crate::now_unix();
+    let _ = crate::db::bump_session_epoch(&state.db, &claims.sub, now).await;
     crate::db::record_audit(
         &state.db,
-        crate::now_unix(),
+        now,
         Some(&claims.sub),
         None,
         "auth.mfa.disabled",

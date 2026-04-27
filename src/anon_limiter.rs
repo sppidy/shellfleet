@@ -35,8 +35,11 @@ use crate::AppState;
 fn is_limited_path(path: &str) -> bool {
     path.starts_with("/auth/")
         || path == "/api/me"
-        || path == "/api/auth/mfa/verify"
-        || path == "/api/auth/mfa/status"
+        || path.starts_with("/api/auth/mfa/")
+        // Device-auth flow can be hit by a polling agent before any
+        // user-side cookie exists, so it lives on the unauth surface
+        // even though the eventual `approve` step is admin-only.
+        || path.starts_with("/api/device/")
 }
 
 pub async fn middleware(

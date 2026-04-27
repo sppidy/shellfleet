@@ -107,9 +107,15 @@ async fn set_role_handler(
 
     match crate::db::set_user_role(&state.db, &login, new_role).await {
         Ok(true) => {
+            // Bump the target's session_epoch so any outstanding JWT
+            // (still 24h valid) loses its role power on the next
+            // request. Without this, a demoted admin would keep admin
+            // until their cookie expires.
+            let now = crate::now_unix();
+            let _ = crate::db::bump_session_epoch(&state.db, &login, now).await;
             crate::db::record_audit(
                 &state.db,
-                crate::now_unix(),
+                now,
                 Some(&actor.sub),
                 None,
                 "users.set_role",

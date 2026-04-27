@@ -15,9 +15,10 @@
 //! deliberately stays small.
 
 use axum::http::HeaderMap;
+use ipnet::IpNet;
 use std::collections::HashMap;
 use std::net::IpAddr;
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 
 /// How many fails before locking the key.
 pub const MAX_FAILS: u32 = 10;
@@ -141,34 +142,97 @@ impl IpBucketLimiter {
     }
 }
 
-/// Best-effort real-client-IP extraction. Trust order:
-/// 1. `CF-Connecting-IP` (set by Cloudflare on every request — the
-///    canonical real-client header for CF deployments).
-/// 2. `X-Real-IP` (set by some reverse proxies; included for non-CF
-///    deployments).
-/// 3. The leftmost non-private hop in `X-Forwarded-For`.
-/// 4. The peer address as observed by the connection.
+/// Cloudflare's published egress ranges (https://www.cloudflare.com/ips/),
+/// hard-coded as the default trusted-proxy set so a fresh deploy gets
+/// safe defaults. The operator can override via `TRUSTED_PROXY_CIDRS`
+/// (comma-separated) — useful if you're behind a different proxy or
+/// running edge-direct (in which case set it to the empty string).
+const CLOUDFLARE_CIDRS: &[&str] = &[
+    // IPv4
+    "173.245.48.0/20",
+    "103.21.244.0/22",
+    "103.22.200.0/22",
+    "103.31.4.0/22",
+    "141.101.64.0/18",
+    "108.162.192.0/18",
+    "190.93.240.0/20",
+    "188.114.96.0/20",
+    "197.234.240.0/22",
+    "198.41.128.0/17",
+    "162.158.0.0/15",
+    "104.16.0.0/13",
+    "104.24.0.0/14",
+    "172.64.0.0/13",
+    "131.0.72.0/22",
+    // IPv6
+    "2400:cb00::/32",
+    "2606:4700::/32",
+    "2803:f800::/32",
+    "2405:b500::/32",
+    "2405:8100::/32",
+    "2a06:98c0::/29",
+    "2c0f:f248::/32",
+];
+
+fn trusted_proxy_set() -> &'static Vec<IpNet> {
+    static SET: OnceLock<Vec<IpNet>> = OnceLock::new();
+    SET.get_or_init(|| {
+        let raw = std::env::var("TRUSTED_PROXY_CIDRS").ok();
+        let source: Vec<String> = match raw.as_deref() {
+            Some("") => Vec::new(),
+            Some(v) => v.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect(),
+            None => CLOUDFLARE_CIDRS.iter().map(|s| s.to_string()).collect(),
+        };
+        source
+            .into_iter()
+            .filter_map(|s| match s.parse::<IpNet>() {
+                Ok(n) => Some(n),
+                Err(e) => {
+                    tracing::warn!(cidr = %s, error = %e, "ignoring invalid TRUSTED_PROXY_CIDRS entry");
+                    None
+                }
+            })
+            .collect()
+    })
+}
+
+fn peer_is_trusted_proxy(peer: IpAddr) -> bool {
+    let set = trusted_proxy_set();
+    set.iter().any(|n| n.contains(&peer))
+}
+
+/// Best-effort real-client-IP extraction. Forwarding headers are only
+/// honoured when the connection's peer address is in the trusted-proxy
+/// set (Cloudflare CIDRs by default; configurable via
+/// `TRUSTED_PROXY_CIDRS`). This prevents an attacker who reaches the
+/// origin directly — bypassing Cloudflare via a misconfigured DNS or
+/// a leaked Tailscale ACL — from spoofing `CF-Connecting-IP` to dodge
+/// the per-IP rate limiter.
 ///
-/// Returns the IP as a string. Falls back to the literal `"unknown"`
-/// when nothing is parsable, which means the bucket for `"unknown"`
-/// will be aggressively shared — that's fine; it just means
-/// unidentifiable traffic is throttled jointly.
+/// Trust order, after the proxy gate:
+/// 1. `CF-Connecting-IP` (Cloudflare's canonical real-client header).
+/// 2. `X-Real-IP` (other reverse proxies).
+/// 3. The leftmost parseable hop in `X-Forwarded-For`.
+/// Falls back to peer IP otherwise.
 pub fn real_client_ip(headers: &HeaderMap, peer: Option<IpAddr>) -> String {
-    if let Some(v) = headers.get("cf-connecting-ip").and_then(|h| h.to_str().ok()) {
-        if v.parse::<IpAddr>().is_ok() {
-            return v.to_string();
+    let peer_trusted = peer.map(peer_is_trusted_proxy).unwrap_or(false);
+    if peer_trusted {
+        if let Some(v) = headers.get("cf-connecting-ip").and_then(|h| h.to_str().ok()) {
+            if v.parse::<IpAddr>().is_ok() {
+                return v.to_string();
+            }
         }
-    }
-    if let Some(v) = headers.get("x-real-ip").and_then(|h| h.to_str().ok()) {
-        if v.parse::<IpAddr>().is_ok() {
-            return v.to_string();
+        if let Some(v) = headers.get("x-real-ip").and_then(|h| h.to_str().ok()) {
+            if v.parse::<IpAddr>().is_ok() {
+                return v.to_string();
+            }
         }
-    }
-    if let Some(v) = headers.get("x-forwarded-for").and_then(|h| h.to_str().ok()) {
-        for part in v.split(',') {
-            let trimmed = part.trim();
-            if trimmed.parse::<IpAddr>().is_ok() {
-                return trimmed.to_string();
+        if let Some(v) = headers.get("x-forwarded-for").and_then(|h| h.to_str().ok()) {
+            for part in v.split(',') {
+                let trimmed = part.trim();
+                if trimmed.parse::<IpAddr>().is_ok() {
+                    return trimmed.to_string();
+                }
             }
         }
     }

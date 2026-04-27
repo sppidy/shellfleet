@@ -110,12 +110,21 @@ pub async fn init() -> Result<SqlitePool, sqlx::Error> {
             totp_secret TEXT,
             totp_recovery_hashes TEXT NOT NULL DEFAULT '[]',
             created_at INTEGER NOT NULL DEFAULT 0,
-            last_login_at INTEGER NOT NULL DEFAULT 0
+            last_login_at INTEGER NOT NULL DEFAULT 0,
+            session_epoch INTEGER NOT NULL DEFAULT 0
         );
         "#,
     )
     .execute(&pool)
     .await?;
+    // Idempotent column add for installs created before session_epoch
+    // landed. `ALTER TABLE ADD COLUMN` errors if the column already
+    // exists; ignore that case.
+    let _ = sqlx::query(
+        "ALTER TABLE users ADD COLUMN session_epoch INTEGER NOT NULL DEFAULT 0",
+    )
+    .execute(&pool)
+    .await;
 
     sqlx::query(
         r#"
@@ -1193,16 +1202,35 @@ pub struct UserRow {
     pub created_at: i64,
     #[allow(dead_code)]
     pub last_login_at: i64,
+    pub session_epoch: i64,
 }
 
 pub async fn get_user(pool: &SqlitePool, login: &str) -> Result<Option<UserRow>, sqlx::Error> {
     sqlx::query_as::<_, UserRow>(
         "SELECT login, role, totp_enabled, totp_secret, totp_recovery_hashes, \
-         created_at, last_login_at FROM users WHERE login = ?",
+         created_at, last_login_at, session_epoch FROM users WHERE login = ?",
     )
     .bind(login)
     .fetch_optional(pool)
     .await
+}
+
+/// Bumps the user's `session_epoch` to `now`. JWTs whose `iat` is
+/// older than the new epoch are treated as logged-out by
+/// `claims_from_token`. Called on explicit logout, role change, and
+/// MFA disable so a leaked-but-still-unexpired cookie can't keep
+/// authenticating.
+pub async fn bump_session_epoch(
+    pool: &SqlitePool,
+    login: &str,
+    now: i64,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE users SET session_epoch = ? WHERE login = ?")
+        .bind(now)
+        .bind(login)
+        .execute(pool)
+        .await?;
+    Ok(())
 }
 
 pub async fn count_users(pool: &SqlitePool) -> Result<i64, sqlx::Error> {
@@ -1338,7 +1366,7 @@ pub async fn upsert_login_with_seat_check(
 
     let existing: Option<UserRow> = sqlx::query_as::<_, UserRow>(
         "SELECT login, role, totp_enabled, totp_secret, totp_recovery_hashes, \
-         created_at, last_login_at FROM users WHERE login = ?",
+         created_at, last_login_at, session_epoch FROM users WHERE login = ?",
     )
     .bind(login)
     .fetch_optional(&mut *tx)
@@ -1352,7 +1380,7 @@ pub async fn upsert_login_with_seat_check(
             .await?;
         let row: UserRow = sqlx::query_as::<_, UserRow>(
             "SELECT login, role, totp_enabled, totp_secret, totp_recovery_hashes, \
-             created_at, last_login_at FROM users WHERE login = ?",
+             created_at, last_login_at, session_epoch FROM users WHERE login = ?",
         )
         .bind(login)
         .fetch_one(&mut *tx)
@@ -1384,7 +1412,7 @@ pub async fn upsert_login_with_seat_check(
 
     let row: UserRow = sqlx::query_as::<_, UserRow>(
         "SELECT login, role, totp_enabled, totp_secret, totp_recovery_hashes, \
-         created_at, last_login_at FROM users WHERE login = ?",
+         created_at, last_login_at, session_epoch FROM users WHERE login = ?",
     )
     .bind(login)
     .fetch_one(&mut *tx)

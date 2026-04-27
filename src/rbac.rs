@@ -74,13 +74,21 @@ pub async fn middleware(
         return forbidden("MFA required");
     }
 
+    // Single DB lookup that handles both the session-epoch invalidation
+    // check and the role re-resolution. Avoids a second hit for the
+    // mutating-method branch.
+    let user_row = crate::db::get_user(&state.db, &claims.sub).await.ok().flatten();
+    if let Some(ref row) = user_row {
+        if claims.iat < row.session_epoch {
+            return unauthorized("session revoked — please sign in again");
+        }
+    }
+
     if is_mutating(&method) {
-        // Re-resolve role from DB so a freshly-demoted admin can't
-        // keep mutating just because their JWT still says admin.
-        let role_str = match crate::db::get_user(&state.db, &claims.sub).await {
-            Ok(Some(row)) => row.role,
-            _ => claims.role.clone(),
-        };
+        let role_str = user_row
+            .as_ref()
+            .map(|r| r.role.clone())
+            .unwrap_or_else(|| claims.role.clone());
         if auth::Role::parse(&role_str) != auth::Role::Admin {
             return forbidden("viewer role: read-only");
         }

@@ -78,6 +78,11 @@ impl Role {
 pub struct Claims {
     pub sub: String,
     pub exp: usize,
+    /// Issued-at timestamp. Compared against `users.session_epoch` on
+    /// every check; tokens issued before the user's epoch (logout,
+    /// role change, MFA disable) are rejected.
+    #[serde(default)]
+    pub iat: i64,
     /// CE: role at the moment the JWT was issued. Re-checked against
     /// the `users` row by `require_admin` so a demotion takes effect on
     /// the next request, not just the next login.
@@ -225,7 +230,17 @@ async fn login_handler(jar: CookieJar) -> impl IntoResponse {
     (jar.add(cookie), Redirect::temporary(&redirect_url)).into_response()
 }
 
-async fn logout_handler(jar: CookieJar) -> impl IntoResponse {
+async fn logout_handler(
+    jar: CookieJar,
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    // Best-effort: bump the session epoch so the JWT we just dropped
+    // can't be replayed. Reads the cookie before clearing it.
+    if let Some(cookie) = jar.get("auth_token") {
+        if let Some(claims) = claims_from_token_no_epoch_check(cookie.value()) {
+            let _ = crate::db::bump_session_epoch(&state.db, &claims.sub, crate::now_unix()).await;
+        }
+    }
     let mut cookie = Cookie::build(("auth_token", ""))
         .path("/")
         .http_only(true)
@@ -254,15 +269,16 @@ pub fn build_session_cookie(token: String) -> Cookie<'static> {
 /// controls the cookie lifetime; pending-MFA tokens use a much shorter
 /// TTL than fully-verified ones.
 pub fn issue_jwt(sub: &str, role: Role, mfa: bool, ttl_secs: i64) -> Result<String, String> {
-    let exp = (std::time::SystemTime::now()
+    let now_secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
-        .as_secs() as i64
-        + ttl_secs) as usize;
+        .as_secs() as i64;
+    let exp = (now_secs + ttl_secs) as usize;
 
     let claims = Claims {
         sub: sub.to_string(),
         exp,
+        iat: now_secs,
         role: role.as_str().to_string(),
         mfa,
     };
@@ -497,9 +513,22 @@ fn decode_claims(token: &str) -> Option<Claims> {
     .map(|d| d.claims)
 }
 
+/// Decode without checking the user's session_epoch. Used by the
+/// logout handler so we can identify *who* to bump even though we're
+/// about to invalidate the token. Other call sites must use
+/// `claims_from_token` (which performs the epoch check) instead.
+pub fn claims_from_token_no_epoch_check(token: &str) -> Option<Claims> {
+    decode_claims(token).filter(|c| is_user_allowed(&c.sub))
+}
+
 /// Returns true if the token decodes, the subject is on the allowlist,
 /// AND the MFA challenge has been completed. Pending-MFA tokens are
 /// treated as unauthenticated for everything except the verify endpoint.
+///
+/// NB: this *does not* check the session_epoch — for a fast pre-DB
+/// path used by code that doesn't carry the pool. The DB-backed
+/// `current_user` / RBAC middleware path is the authoritative one and
+/// re-validates against `users.session_epoch`.
 pub fn verify_token(token: &str) -> bool {
     decode_claims(token)
         .map(|c| c.mfa && is_user_allowed(&c.sub))
@@ -521,7 +550,8 @@ pub fn user_from_token(token: &str) -> Option<String> {
 
 /// Returns the full Claims (role + mfa flag) regardless of MFA state.
 /// Callers that need to distinguish pending-vs-verified must inspect
-/// `claims.mfa`.
+/// `claims.mfa`. **Does not** check session_epoch — most call sites
+/// follow up with a DB lookup that does.
 pub fn claims_from_token(token: &str) -> Option<Claims> {
     decode_claims(token).filter(|c| is_user_allowed(&c.sub))
 }
@@ -530,13 +560,14 @@ pub fn claims_from_token(token: &str) -> Option<Claims> {
 /// the gating helpers below so a single env-var flip continues to make
 /// local development frictionless.
 fn dev_claims() -> Claims {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
     Claims {
         sub: "dev".to_string(),
-        exp: (std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as usize)
-            + 24 * 3600,
+        exp: (now as usize) + 24 * 3600,
+        iat: now,
         role: "admin".to_string(),
         mfa: true,
     }
@@ -544,9 +575,14 @@ fn dev_claims() -> Claims {
 
 /// Resolve the current session from a CookieJar. Returns the verified
 /// claims, or a `(StatusCode, &'static str)` suitable for direct
-/// IntoResponse use in handlers. The role string in the returned claims
-/// is *re-resolved* against the `users` table so a freshly-demoted user
-/// is treated as viewer immediately, even if their JWT still says admin.
+/// IntoResponse use in handlers.
+///
+/// In addition to the JWT signature + expiry checks, this:
+///   - Re-resolves `role` from the `users` table so a freshly-demoted
+///     admin is treated as viewer immediately on the next request.
+///   - Rejects tokens whose `iat` predates the user's `session_epoch`,
+///     which lets logout / role-change / MFA-disable invalidate
+///     in-flight cookies without waiting for the 24h JWT expiry.
 pub async fn current_user(
     jar: &CookieJar,
     db: &sqlx::SqlitePool,
@@ -563,6 +599,9 @@ pub async fn current_user(
         return Err((StatusCode::FORBIDDEN, "MFA required"));
     }
     if let Ok(Some(row)) = crate::db::get_user(db, &claims.sub).await {
+        if claims.iat < row.session_epoch {
+            return Err((StatusCode::UNAUTHORIZED, "session revoked — please sign in again"));
+        }
         claims.role = row.role;
     }
     Ok(claims)
