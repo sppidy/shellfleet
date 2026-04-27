@@ -176,6 +176,8 @@ function HomeBody() {
   useEffect(() => {
     if (status === 'guest') {
       router.replace('/login');
+    } else if (status === 'pending_mfa') {
+      router.replace('/mfa');
     }
   }, [status, router]);
 
@@ -199,7 +201,7 @@ function HomeBody() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedAgent, activeTab]);
 
-  if (status === 'loading' || status === 'guest') {
+  if (status !== 'authed') {
     return (
       <div className="center-screen">
         <Loader2Icon className="w-6 h-6 animate-spin" style={{ color: 'var(--fg-2)' }} />
