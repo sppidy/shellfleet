@@ -88,6 +88,14 @@ pub enum Message {
     /// Terminal data
     TerminalData { data: Vec<u8> },
 
+    /// Tear down the host PTY started by `StartTerminalRequest`.
+    /// Called by the dashboard when an operator closes a terminal
+    /// pane (multi-tab multiplexer, page navigation, etc.) so the
+    /// agent doesn't keep zombie shells around. Old agents (pre-
+    /// this-version) ignore the variant and the PTY dies on the
+    /// next WS disconnect anyway — graceful, not catastrophic.
+    StopTerminalRequest,
+
     /// Request to resize terminal
     TerminalResize { cols: u16, rows: u16 },
 
