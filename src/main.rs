@@ -1,5 +1,6 @@
 mod apt;
 mod backup;
+mod config;
 mod deploy;
 mod docker;
 mod health;
@@ -8,6 +9,39 @@ mod logs;
 mod stats;
 mod systemd;
 mod terminal;
+
+/// Write the bearer token to disk with mode 0600. Tries the operator
+/// path first; on permission failure (e.g. the agent isn't running as
+/// root and `/etc/sys-manager` doesn't exist) falls back to a CWD-
+/// local file. Errors are intentionally swallowed because the token
+/// is also returned in-memory and the caller proceeds either way.
+fn write_token_secure(primary: &str, token: &str) {
+    fn write_with_mode(path: &str, contents: &str) -> std::io::Result<()> {
+        // Open with O_CREAT|O_TRUNC|O_WRONLY and explicit 0600 on Unix.
+        #[cfg(unix)]
+        {
+            use std::io::Write as _;
+            use std::os::unix::fs::OpenOptionsExt;
+            let mut f = std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(path)?;
+            f.write_all(contents.as_bytes())
+        }
+        #[cfg(not(unix))]
+        {
+            // Windows: best-effort. The dashboard targets Linux agents
+            // so this branch is for local test builds only.
+            std::fs::write(path, contents)
+        }
+    }
+    if write_with_mode(primary, token).is_ok() {
+        return;
+    }
+    let _ = write_with_mode("agent-token.txt", token);
+}
 
 use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
@@ -78,10 +112,13 @@ async fn get_agent_token(api_url: &str) -> String {
                 match data {
                     DeviceTokenResponse::Token { access_token } => {
                         println!("Agent successfully authorized!");
-                        // Try to save to /etc/ first, fallback to local
-                        if std::fs::write(token_path, &access_token).is_err() {
-                            let _ = std::fs::write("agent-token.txt", &access_token);
-                        }
+                        // The token grants WebSocket connect privileges,
+                        // so the on-disk file is mode 0600 — readable
+                        // only by the agent's user (typically root via
+                        // the systemd unit). Write+chmod is split into
+                        // two steps because std::fs::write doesn't
+                        // expose a perm-on-create knob.
+                        write_token_secure(token_path, &access_token);
                         return access_token;
                     }
                     DeviceTokenResponse::Error { error } => {
@@ -816,34 +853,46 @@ async fn main() {
                                 });
                             }
                             Message::ReadConfigRequest { path } => {
-                                let content = std::fs::read_to_string(&path);
-                                let resp = match content {
-                                    Ok(c) => Message::ReadConfigResponse {
-                                        path: path.clone(),
-                                        content: c,
-                                        error: None,
-                                    },
+                                let resp = match config::check(&path) {
                                     Err(e) => Message::ReadConfigResponse {
                                         path: path.clone(),
                                         content: "".to_string(),
                                         error: Some(e.to_string()),
-                                    }
+                                    },
+                                    Ok(safe_path) => match std::fs::read_to_string(&safe_path) {
+                                        Ok(c) => Message::ReadConfigResponse {
+                                            path: path.clone(),
+                                            content: c,
+                                            error: None,
+                                        },
+                                        Err(e) => Message::ReadConfigResponse {
+                                            path: path.clone(),
+                                            content: "".to_string(),
+                                            error: Some(e.to_string()),
+                                        },
+                                    },
                                 };
                                 let _ = tx.send(resp);
                             }
                             Message::WriteConfigRequest { path, content } => {
-                                let res = std::fs::write(&path, content);
-                                let resp = match res {
-                                    Ok(_) => Message::WriteConfigResponse {
-                                        path: path.clone(),
-                                        success: true,
-                                        error: None,
-                                    },
+                                let resp = match config::check(&path) {
                                     Err(e) => Message::WriteConfigResponse {
                                         path: path.clone(),
                                         success: false,
                                         error: Some(e.to_string()),
-                                    }
+                                    },
+                                    Ok(safe_path) => match std::fs::write(&safe_path, content) {
+                                        Ok(_) => Message::WriteConfigResponse {
+                                            path: path.clone(),
+                                            success: true,
+                                            error: None,
+                                        },
+                                        Err(e) => Message::WriteConfigResponse {
+                                            path: path.clone(),
+                                            success: false,
+                                            error: Some(e.to_string()),
+                                        },
+                                    },
                                 };
                                 let _ = tx.send(resp);
                             }

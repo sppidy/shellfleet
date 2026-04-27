@@ -98,10 +98,27 @@ pub async fn list_services() -> Result<Vec<ServiceInfo>, String> {
     Ok(services)
 }
 
+/// True if `name` is a syntactically valid systemd unit name.
+/// Restricts the alphabet so the value can't be misread by `systemctl`
+/// as a flag (`--user`, `--version`) or otherwise expand into shell-
+/// surprising tokens. systemd's own grammar is stricter than this
+/// regex, but anything matching it is at minimum harmless to pass to
+/// `systemctl` argv.
+fn is_safe_unit_name(name: &str) -> bool {
+    if name.is_empty() || name.starts_with('-') || name.len() > 256 {
+        return false;
+    }
+    name.chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '@' | ':' | '\\'))
+}
+
 pub async fn control_service(name: &str, action: &str) -> Result<(), String> {
     let allowed_actions = ["start", "stop", "restart", "reload"];
     if !allowed_actions.contains(&action) {
         return Err(format!("invalid action: {action}"));
+    }
+    if !is_safe_unit_name(name) {
+        return Err(format!("invalid unit name: {name}"));
     }
 
     let output = Command::new("systemctl")

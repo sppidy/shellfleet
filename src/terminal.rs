@@ -30,8 +30,30 @@ pub fn spawn_docker_exec(
     shell: &str,
     tx_msg: mpsc::UnboundedSender<Message>,
 ) -> Result<TerminalSession, String> {
-    let mut cmd = CommandBuilder::new("docker");
+    // Validate so a `container_id` like "--privileged" can't slip in
+    // as a docker flag. Docker container IDs are 12 or 64 hex chars in
+    // their canonical form, but names allow `[a-zA-Z0-9][a-zA-Z0-9_.-]*`.
+    if container_id.is_empty() || container_id.starts_with('-') || container_id.len() > 256 {
+        return Err("invalid container id".to_string());
+    }
+    if !container_id
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'))
+    {
+        return Err("container id has disallowed characters".to_string());
+    }
     let shell = if shell.is_empty() { "sh" } else { shell };
+    // Likewise restrict the shell argument — there's no use case for
+    // anything outside a tiny set, and a value like `-c` followed by
+    // arbitrary code would be hostile.
+    if shell.starts_with('-')
+        || !shell
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '_' | '-' | '.'))
+    {
+        return Err("invalid shell".to_string());
+    }
+    let mut cmd = CommandBuilder::new("docker");
     cmd.args(["exec", "-it", container_id, shell]);
     spawn_pty(cmd, tx_msg)
 }
