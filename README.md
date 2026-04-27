@@ -251,11 +251,25 @@ require an agent rollout.
 The CE feature set above is the **safety floor**: every operator gets
 2FA, basic RBAC, and a short local audit log. The Enterprise Edition
 ships as a separate sidecar binary that registers with CE over an
-extension API and adds the **scale ceiling**: SSO (SAML, OIDC), SCIM
-provisioning, custom RBAC with per-resource permissions, multi-tenant
-organizations, secrets-manager integration (Vault, SOPS, AWS SM),
-long-retention audit log with SIEM export, and a support SLA. CE
-remains fully functional without EE; EE without CE is meaningless.
+extension API and adds the **scale ceiling**:
+
+- **SSO**: SAML, OIDC, SCIM provisioning.
+- **Custom RBAC** with per-resource permissions and group-based
+  assignment.
+- **Multi-tenant organizations** with isolated agent pools.
+- **Secrets-manager integration** (Vault, SOPS, AWS Secrets Manager).
+- **Long-retention audit log** with SIEM export.
+- **Multi-Prometheus federation** + SaaS observability vendors
+  (Datadog, New Relic, Grafana Cloud) on top of CE's single-Prometheus
+  metrics plugin.
+- **AI log analysis.** "Summarize the last hour of journal entries on
+  amd64-builder", "what's anomalous in this output?", "explain this
+  error". Configurable via OpenAI-compatible env vars
+  (`EE_AI_API_URL`, `EE_AI_API_KEY`, `EE_AI_MODEL`) so it works
+  with OpenAI, Ollama, vLLM, OpenRouter, or any drop-in.
+- **Support SLA** + a managed hosted control plane.
+
+CE remains fully functional without EE; EE without CE is meaningless.
 
 ## Idle cost
 
