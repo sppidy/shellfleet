@@ -12,7 +12,14 @@ mod probe_library;
 mod rbac;
 mod tokens;
 mod update_windows;
+mod users;
 mod webhook;
+
+/// Hard CE seat cap. Enforced on new sign-ins in `auth::callback_handler`
+/// and surfaced through `/api/users` so the dashboard can show
+/// headroom. Existing seats always get through; the cap only blocks
+/// *adding* a seat. EE will lift this with a license-keyed cap.
+pub const CE_USER_LIMIT: usize = 3;
 
 use axum::{
     extract::{Query, State, ws::{Message as WsMessage, WebSocket, WebSocketUpgrade}},
@@ -279,6 +286,7 @@ async fn main() {
     let api_routes = api_routes
         .nest("/probe-library", probe_library::routes())
         .nest("/auth/mfa", mfa::routes())
+        .nest("/users", users::routes())
         .route("/me", get(me_handler))
         .route("/healthz", get(healthz))
         .route("/audit", get(audit_handler))

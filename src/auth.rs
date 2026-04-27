@@ -272,14 +272,50 @@ async fn callback_handler(
             .into_response();
     }
 
+    // CE seat cap: a fresh sign-in (login not already in `users`) is
+    // rejected once `users` has reached `CE_USER_LIMIT` rows. Existing
+    // users always get through — the cap is on *adding seats*, not on
+    // sign-in volume. EE will lift this with a license-keyed cap.
+    let now = crate::now_unix();
+    let bootstrap_admin = env::var("BOOTSTRAP_ADMIN").ok();
+    let user_count = crate::db::count_users(&state.db).await.unwrap_or(0);
+    let already_seated = matches!(
+        crate::db::get_user(&state.db, &user_data.login).await,
+        Ok(Some(_))
+    );
+    if !already_seated && user_count >= crate::CE_USER_LIMIT as i64 {
+        tracing::warn!(
+            login = %user_data.login,
+            user_count,
+            limit = crate::CE_USER_LIMIT,
+            "rejecting new sign-in: CE seat cap reached"
+        );
+        crate::db::record_audit(
+            &state.db,
+            now,
+            Some(&user_data.login),
+            None,
+            "auth.login.seat_cap_reached",
+            false,
+            Some(&format!("limit={}", crate::CE_USER_LIMIT)),
+        )
+        .await;
+        return (
+            StatusCode::FORBIDDEN,
+            format!(
+                "This sys-manager Community Edition is at its {}-user seat cap. \
+                 Ask an existing admin to remove a seat at /admin, or upgrade to EE.",
+                crate::CE_USER_LIMIT
+            ),
+        )
+            .into_response();
+    }
+
     // CE bootstrap rule: if no users exist yet, the first allowlisted
     // login becomes admin. Subsequent allowlisted logins default to
     // viewer. An operator can also pin a specific login as the
     // bootstrap admin via BOOTSTRAP_ADMIN — useful when the allowlist
     // changes order or the first sign-in is mistakenly someone else.
-    let now = crate::now_unix();
-    let bootstrap_admin = env::var("BOOTSTRAP_ADMIN").ok();
-    let user_count = crate::db::count_users(&state.db).await.unwrap_or(0);
     let default_role = if user_count == 0 || bootstrap_admin.as_deref() == Some(user_data.login.as_str()) {
         "admin"
     } else {
