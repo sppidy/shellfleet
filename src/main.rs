@@ -183,7 +183,12 @@ async fn main() {
         });
     }
 
-    let mut term_session: Option<terminal::TerminalSession> = None;
+    // Multi-PTY per host: each StartTerminalRequest carries a
+    // dashboard-generated session_id and lands as its own entry.
+    // Container exec stays singleton (a separate concern, scoped by
+    // container_id, identified on the wire by an empty session_id).
+    let mut term_sessions: std::collections::HashMap<String, terminal::TerminalSession> =
+        std::collections::HashMap::new();
     let mut exec_session: Option<terminal::TerminalSession> = None;
     let log_streams = logs::LogStreams::default();
     let journal_streams = journal::JournalStreams::default();
@@ -798,33 +803,47 @@ async fn main() {
                                     });
                                 });
                             }
-                            Message::StartTerminalRequest => {
-                                match terminal::spawn_terminal(tx.clone()) {
-                                    Ok(session) => {
-                                        term_session = Some(session);
-                                        println!("Terminal spawned");
+                            Message::StartTerminalRequest { session_id } => {
+                                if session_id.is_empty() {
+                                    eprintln!("StartTerminalRequest with empty session_id rejected");
+                                } else if term_sessions.contains_key(&session_id) {
+                                    // Idempotent: re-issuing the same id (e.g. after a
+                                    // transient WS reconnect on the dashboard) is a no-op
+                                    // rather than tearing down the live PTY.
+                                    println!("Terminal session_id={} already exists", session_id);
+                                } else {
+                                    match terminal::spawn_terminal(session_id.clone(), tx.clone()) {
+                                        Ok(session) => {
+                                            term_sessions.insert(session_id.clone(), session);
+                                            println!("Terminal spawned session_id={}", session_id);
+                                        }
+                                        Err(e) => eprintln!("Failed to spawn terminal: {}", e),
                                     }
-                                    Err(e) => eprintln!("Failed to spawn terminal: {}", e),
                                 }
                             }
-                            Message::StopTerminalRequest => {
+                            Message::StopTerminalRequest { session_id } => {
                                 // Dropping the TerminalSession closes the
                                 // tx_input sender; the write thread exits;
                                 // the child gets EOF on stdin and reaps.
-                                term_session = None;
+                                term_sessions.remove(&session_id);
                             }
-                            Message::TerminalData { data } => {
-                                // Route to exec session if active; fall back to host terminal.
-                                if let Some(session) = &exec_session {
-                                    let _ = session.tx_input.send(data);
-                                } else if let Some(session) = &term_session {
+                            Message::TerminalData { session_id, data } => {
+                                // Empty session_id is the container-exec singleton;
+                                // anything else is a host PTY keyed by id.
+                                if session_id.is_empty() {
+                                    if let Some(session) = &exec_session {
+                                        let _ = session.tx_input.send(data);
+                                    }
+                                } else if let Some(session) = term_sessions.get(&session_id) {
                                     let _ = session.tx_input.send(data);
                                 }
                             }
-                            Message::TerminalResize { cols, rows } => {
-                                if let Some(session) = &exec_session {
-                                    let _ = session.tx_resize.send((cols, rows));
-                                } else if let Some(session) = &term_session {
+                            Message::TerminalResize { session_id, cols, rows } => {
+                                if session_id.is_empty() {
+                                    if let Some(session) = &exec_session {
+                                        let _ = session.tx_resize.send((cols, rows));
+                                    }
+                                } else if let Some(session) = term_sessions.get(&session_id) {
                                     let _ = session.tx_resize.send((cols, rows));
                                 }
                             }

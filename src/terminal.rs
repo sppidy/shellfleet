@@ -10,14 +10,17 @@ pub struct TerminalSession {
     pub tx_input: std::sync::mpsc::Sender<Vec<u8>>,
 }
 
-pub fn spawn_terminal(tx_msg: mpsc::UnboundedSender<Message>) -> Result<TerminalSession, String> {
+pub fn spawn_terminal(
+    session_id: String,
+    tx_msg: mpsc::UnboundedSender<Message>,
+) -> Result<TerminalSession, String> {
     #[cfg(target_os = "windows")]
     let cmd = CommandBuilder::new("powershell.exe");
     #[cfg(not(target_os = "windows"))]
     let mut cmd = CommandBuilder::new("bash");
     #[cfg(not(target_os = "windows"))]
     cmd.args(["-l"]);
-    spawn_pty(cmd, tx_msg)
+    spawn_pty(cmd, session_id, tx_msg)
 }
 
 /// Open a PTY for `docker exec -it <container_id> <shell>`. Reuses the same
@@ -30,6 +33,9 @@ pub fn spawn_docker_exec(
     shell: &str,
     tx_msg: mpsc::UnboundedSender<Message>,
 ) -> Result<TerminalSession, String> {
+    // Container-exec sessions tag emitted TerminalData with an empty
+    // session_id; the dashboard's exec terminal listens for "".
+    let session_id = String::new();
     // Validate so a `container_id` like "--privileged" can't slip in
     // as a docker flag. Docker container IDs are 12 or 64 hex chars in
     // their canonical form, but names allow `[a-zA-Z0-9][a-zA-Z0-9_.-]*`.
@@ -55,11 +61,12 @@ pub fn spawn_docker_exec(
     }
     let mut cmd = CommandBuilder::new("docker");
     cmd.args(["exec", "-it", container_id, shell]);
-    spawn_pty(cmd, tx_msg)
+    spawn_pty(cmd, session_id, tx_msg)
 }
 
 fn spawn_pty(
     cmd: CommandBuilder,
+    session_id: String,
     tx_msg: mpsc::UnboundedSender<Message>,
 ) -> Result<TerminalSession, String> {
     let pty_system = NativePtySystem::default();
@@ -114,6 +121,7 @@ fn spawn_pty(
             match reader.read(&mut buf) {
                 Ok(n) if n > 0 => {
                     let _ = tx_msg.send(Message::TerminalData {
+                        session_id: session_id.clone(),
                         data: buf[..n].to_vec(),
                     });
                 }
