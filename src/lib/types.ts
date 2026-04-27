@@ -464,6 +464,7 @@ export type AgentMessagePayload =
   | { type: 'JournalStreamChunk'; payload: { stream_id: string; lines: string[] } }
   | { type: 'JournalStreamStop'; payload: { stream_id: string } }
   | { type: 'JournalStreamEnd'; payload: { stream_id: string; error: string | null } }
+  | { type: 'StopTerminalRequest' }
   | { type: 'SwarmServiceInspectRequest'; payload: { name: string } }
   | { type: 'SwarmServiceInspectResponse'; payload: SwarmServiceInspectPayload }
   | { type: 'SwarmStackDeployRequest'; payload: { stack_name: string; compose_yaml: string; prune: boolean } }

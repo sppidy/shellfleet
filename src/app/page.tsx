@@ -20,6 +20,7 @@ import SystemPrune from '@/components/SystemPrune';
 import AptManager from '@/components/AptManager';
 import Metrics from '@/components/Metrics';
 import JournalStream from '@/components/JournalStream';
+import HSplitter from '@/components/HSplitter';
 import FleetOverview from '@/components/FleetOverview';
 import Deploy from '@/components/Deploy';
 import HealthProbes from '@/components/HealthProbes';
@@ -291,6 +292,10 @@ function HomeBody() {
             <span className="ico">≡</span>
             <span>Activity</span>
           </button>
+          <button type="button" className="nav-item" onClick={() => router.push('/terminal')}>
+            <span className="ico">›_</span>
+            <span>Terminal</span>
+          </button>
           <button
             type="button"
             className="nav-item"
@@ -492,43 +497,35 @@ function HomeBody() {
 
             <div className="scroll" style={{ display: 'flex', flexDirection: 'column' }}>
               {activeTab === 'dashboard' ? (
-                <div
-                  style={{
-                    flex: 1,
-                    display: 'grid',
-                    gridTemplateColumns: '1fr 1fr',
-                    minHeight: 0,
-                    overflow: 'hidden',
-                  }}
-                  className="agent-overview-grid"
-                >
-                  <div
-                    style={{
-                      display: 'flex',
-                      flexDirection: 'column',
-                      borderRight: '1px solid var(--line)',
-                      minHeight: 0,
-                      overflow: 'hidden',
-                    }}
-                  >
-                    <div style={{ padding: 'var(--pad)', borderBottom: '1px solid var(--line)' }}>
-                      <SystemStats agentId={selectedAgent} />
+                <HSplitter
+                  storageKey="sys-manager.agent-overview.split"
+                  defaultLeftPct={50}
+                  minLeftPct={25}
+                  maxLeftPct={80}
+                  left={
+                    <>
+                      <div style={{ padding: 'var(--pad)', borderBottom: '1px solid var(--line)' }}>
+                        <SystemStats agentId={selectedAgent} />
+                      </div>
+                      <div style={{ flex: 1, padding: 'var(--pad)', overflowY: 'auto' }}>
+                        <ServiceList agentId={selectedAgent} />
+                      </div>
+                    </>
+                  }
+                  right={
+                    <div
+                      style={{
+                        display: 'flex',
+                        flexDirection: 'column',
+                        flex: 1,
+                        minHeight: 0,
+                        background: '#06090b',
+                      }}
+                    >
+                      <Terminal agentId={selectedAgent} />
                     </div>
-                    <div style={{ flex: 1, padding: 'var(--pad)', overflowY: 'auto' }}>
-                      <ServiceList agentId={selectedAgent} />
-                    </div>
-                  </div>
-                  <div
-                    style={{
-                      display: 'flex',
-                      flexDirection: 'column',
-                      minHeight: 0,
-                      background: '#06090b',
-                    }}
-                  >
-                    <Terminal agentId={selectedAgent} />
-                  </div>
-                </div>
+                  }
+                />
               ) : activeTab === 'containers' ? (
                 <Containers agentId={selectedAgent} />
               ) : activeTab === 'images' ? (

@@ -33,6 +33,7 @@ export default function CommandPalette({
       { ico: '＋', label: 'Connect new agent', meta: 'go', action: () => router.push('/device') },
       { ico: '⌘', label: 'Account & 2FA', meta: 'go', action: () => router.push('/security') },
       { ico: '⌬', label: 'Admin · users & seats', meta: 'go', action: () => router.push('/admin') },
+      { ico: '›_', label: 'Terminal · multi-host', meta: 'go', action: () => router.push('/terminal') },
     ];
     const agentItems: Item[] = agents.map((a) => ({
       ico: '▢',

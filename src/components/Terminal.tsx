@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useWebSocket } from './providers/WebSocketProvider';
 import { useCanWrite } from './providers/SessionProvider';
 import { Terminal as XTerm } from '@xterm/xterm';
@@ -12,20 +12,32 @@ type TerminalProps = {
   containerId?: string;
   shell?: string;
   title?: string;
+  /**
+   * When false, the host renders the component but hides it (used by
+   * the multi-tab multiplexer to keep PTY state across tab switches).
+   * Defaults to true. The xterm instance refits whenever this flips
+   * back to true so the dimensions match the now-visible container.
+   */
+  visible?: boolean;
 };
 
-export default function Terminal({ agentId, containerId, shell, title }: TerminalProps) {
+export default function Terminal({
+  agentId,
+  containerId,
+  shell,
+  title,
+  visible = true,
+}: TerminalProps) {
   const { sendToAgent, onAgentMessage } = useWebSocket();
   const canWrite = useCanWrite();
+  const wrapperRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<XTerm | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
 
+  const [isFullscreen, setIsFullscreen] = useState(false);
+
   useEffect(() => {
-    // Viewers can't start a PTY: TerminalData / DockerExecStartRequest /
-    // StartTerminalRequest are all mutating messages the WS RBAC layer
-    // would reject. Skip the whole xterm init so we don't even open
-    // the empty terminal.
     if (!canWrite) return;
     if (!terminalRef.current) return;
 
@@ -33,6 +45,7 @@ export default function Terminal({ agentId, containerId, shell, title }: Termina
       cursorBlink: true,
       fontFamily: "JetBrains Mono, ui-monospace, 'SF Mono', Menlo, monospace",
       fontSize: 12,
+      scrollback: 5000,
       theme: {
         background: '#06090b',
         foreground: '#c8d3dc',
@@ -75,14 +88,24 @@ export default function Terminal({ agentId, containerId, shell, title }: Termina
       });
     });
 
-    const handleResize = () => {
-      fitAddon.fit();
+    // ResizeObserver covers everything: window resize, manual splitter
+    // drag, fullscreen toggle, multiplexer tab switch (display:none →
+    // visible). Single mechanism keeps cols/rows in sync without
+    // sprinkling fit() calls everywhere.
+    const sendSize = () => {
+      try {
+        fitAddon.fit();
+      } catch {
+        /* container with zero size during a transition; ignore */
+      }
       sendToAgent(agentId, {
         type: 'TerminalResize',
         payload: { cols: term.cols, rows: term.rows },
       });
     };
-    window.addEventListener('resize', handleResize);
+    const ro = new ResizeObserver(() => sendSize());
+    if (terminalRef.current) ro.observe(terminalRef.current);
+    window.addEventListener('resize', sendSize);
 
     if (containerId) {
       sendToAgent(agentId, {
@@ -92,7 +115,7 @@ export default function Terminal({ agentId, containerId, shell, title }: Termina
     } else {
       sendToAgent(agentId, { type: 'StartTerminalRequest' });
     }
-    setTimeout(() => handleResize(), 100);
+    setTimeout(sendSize, 100);
 
     const unsubscribe = onAgentMessage(agentId, (msg) => {
       if (msg.type === 'TerminalData') {
@@ -103,24 +126,78 @@ export default function Terminal({ agentId, containerId, shell, title }: Termina
 
     return () => {
       unsubscribe();
-      window.removeEventListener('resize', handleResize);
+      ro.disconnect();
+      window.removeEventListener('resize', sendSize);
+      // Tell the agent to drop the PTY rather than waiting for the
+      // next WS disconnect to reap it. Container-exec already had
+      // this; host shells now do too via StopTerminalRequest.
       if (containerId) {
         sendToAgent(agentId, { type: 'DockerExecStopRequest' });
+      } else {
+        sendToAgent(agentId, { type: 'StopTerminalRequest' });
       }
       term.dispose();
     };
   }, [agentId, sendToAgent, onAgentMessage, containerId, shell, canWrite]);
 
-  return (
-    <div
-      style={{
+  // Refit + refocus whenever the pane becomes visible again. Used by
+  // the multiplexer when the operator switches tabs.
+  useEffect(() => {
+    if (!visible) return;
+    const t = setTimeout(() => {
+      try {
+        fitAddonRef.current?.fit();
+        xtermRef.current?.focus();
+      } catch {
+        /* noop */
+      }
+    }, 0);
+    return () => clearTimeout(t);
+  }, [visible]);
+
+  // Refit when toggling fullscreen — the available area changes
+  // significantly. Also wire ESC to exit.
+  useEffect(() => {
+    if (!isFullscreen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setIsFullscreen(false);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    const t = setTimeout(() => {
+      try {
+        fitAddonRef.current?.fit();
+        xtermRef.current?.focus();
+      } catch {
+        /* noop */
+      }
+    }, 0);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      clearTimeout(t);
+    };
+  }, [isFullscreen]);
+
+  const wrapperStyle: React.CSSProperties = isFullscreen
+    ? {
+        position: 'fixed',
+        inset: 0,
+        zIndex: 100,
+        background: '#06090b',
+        display: 'flex',
+        flexDirection: 'column',
+      }
+    : {
         height: '100%',
         width: '100%',
         display: 'flex',
         flexDirection: 'column',
         background: '#06090b',
-      }}
-    >
+      };
+
+  return (
+    <div ref={wrapperRef} style={{ ...wrapperStyle, display: visible ? wrapperStyle.display : 'none' }}>
       <div
         className="panel-head"
         style={{ background: 'var(--bg-1)', flexShrink: 0 }}
@@ -128,6 +205,16 @@ export default function Terminal({ agentId, containerId, shell, title }: Termina
         <div className="panel-title">
           <span className="ico">›_</span> {title ?? 'SHELL'}
           <span className="meta">root@{agentId.replace(/-id$/, '')}</span>
+        </div>
+        <div className="panel-actions">
+          <button
+            type="button"
+            className="btn sm icon"
+            onClick={() => setIsFullscreen((f) => !f)}
+            title={isFullscreen ? 'Exit fullscreen (Esc)' : 'Fullscreen'}
+          >
+            {isFullscreen ? '⤡' : '⛶'}
+          </button>
         </div>
       </div>
       {!canWrite ? (
