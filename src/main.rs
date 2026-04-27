@@ -1,3 +1,4 @@
+mod anon_limiter;
 mod auth;
 mod backups;
 mod crypto;
@@ -76,6 +77,12 @@ pub struct AppState {
     /// Per-IP throttle for /api/device/approve. The 8-char user_code
     /// has only ~10^9 entropy and could otherwise be brute-forced.
     pub device_approve_throttle: throttle::Throttle,
+    /// Per-IP token-bucket limiter for the anonymous-attacker surface
+    /// (/auth/*, /api/me, /api/auth/mfa/verify). This is the
+    /// defence-in-depth layer that catches unauthenticated brute force
+    /// when the edge (Cloudflare WAF) is bypassed via Tailscale-direct
+    /// or a misconfigured DNS record.
+    pub anon_ip_limiter: throttle::IpBucketLimiter,
     /// agent_ids currently expecting an `AptUpgradeResponse` that should
     /// be attributed to the auto-update scheduler (or `run_now` button)
     /// rather than a UI-driven upgrade. Cleared when the response lands.
@@ -288,6 +295,7 @@ async fn main() {
         db: pool,
         mfa_throttle: throttle::Throttle::new(),
         device_approve_throttle: throttle::Throttle::new(),
+        anon_ip_limiter: throttle::IpBucketLimiter::new(),
         scheduled_apt_runs: Mutex::new(HashSet::new()),
         pending_backup_lists: Mutex::new(HashMap::new()),
         pending_backup_restores: Mutex::new(HashMap::new()),
@@ -344,11 +352,16 @@ async fn main() {
         .nest("/auth", auth::auth_routes(state.clone()))
         .nest("/api", api_routes)
         .merge(ws_routes)
-        // Security headers are belt-and-suspenders: Cloudflare adds
-        // these on the live deploy too, but local / Tailscale-direct
-        // access bypasses the edge. Order: trace_layer wraps response
-        // observation, security_headers writes headers on the way back
-        // out — applied last so it sees the final response.
+        // Per-real-IP token-bucket limiter on the anonymous-attacker
+        // surface (/auth/*, /api/me, /api/auth/mfa/verify,
+        // /api/auth/mfa/status). Defence-in-depth on top of the edge
+        // limiter (Cloudflare WAF) — closes the gap when the edge is
+        // bypassed via direct Tailscale.
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            anon_limiter::middleware,
+        ))
+        // Security headers: HSTS, frame-options, etc.
         .layer(axum::middleware::from_fn(security_headers::middleware))
         .layer(trace_layer);
 
@@ -356,7 +369,16 @@ async fn main() {
     tracing::info!(%addr, "server listening");
 
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-    axum::serve(listener, app).await.unwrap();
+    // `into_make_service_with_connect_info` is required so the
+    // `ConnectInfo<SocketAddr>` extractor in `anon_limiter::middleware`
+    // gets the peer address. Without it the middleware would 500 on
+    // every request that goes through the IP limiter.
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await
+    .unwrap();
 }
 
 async fn agent_ws_handler(
