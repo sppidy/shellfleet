@@ -121,8 +121,9 @@ The agent runs on small hardware. New features must respect:
 - **<1% average CPU** when no UI is connected
 - **No outbound traffic** when idle except the WS keepalive
 
-If your patch adds a background loop, document it in `LOG.md` and
-include a measurement of its impact.
+If your patch adds a background loop, call it out in the PR
+description and include a measurement of its impact (RSS at idle,
+CPU% during a representative window).
 
 ## Reporting bugs
 

@@ -9,8 +9,8 @@ real attacker IP before TLS terminates on your origin.
 This document is the minimum config needed for sys-manager to be safe
 behind Cloudflare. It assumes:
 
-- The proxied A/AAAA record for `dashboard.example.com` (or whatever you
-  use) is **orange-clouded** (proxy enabled).
+- The proxied A/AAAA record for your dashboard hostname is
+  **orange-clouded** (proxy enabled).
 - `JWT_SECRET` on the origin is a 64-char random hex (enforced by the
   server's startup check).
 - WebSocket proxying is enabled (it is, by default, on Free).
@@ -163,7 +163,7 @@ threshold:
 ```bash
 for i in {1..15}; do
   curl -s -o /dev/null -w "%{http_code}\n" \
-    https://dashboard.example.com/api/auth/mfa/verify \
+    https://<your-dashboard>/api/auth/mfa/verify \
     -X POST -H 'content-type: application/json' -d '{"code":"000000"}'
 done
 ```

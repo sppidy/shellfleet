@@ -5,14 +5,26 @@ axum/SQLite server, one Next.js dashboard. Manages systemd services, Docker
 containers + swarm, apt updates, health probes, backups, fan-out commands, and
 remote shells across every host you connect.
 
-Live: https://dashboard.example.com/  ·  Apt repo: https://sys-mgr-repo.sppidy.in/
+Apt repo: <https://sys-mgr-repo.sppidy.in/>  ·  Container images: <https://hrbr.sppidy.in/sys-manager>
 
 > Built because Prometheus node-exporter + Grafana + Datadog all trade quality
 > data for real CPU + RAM cost on every managed host. The agent's design rule
 > is **be cheap when nobody's looking**: ~4 MB RSS at idle, no background
 > polling for stats / containers / images / networks / volumes / stacks. The
 > dashboard issuing a request is the only thing that triggers those code
-> paths. See [LOG.md](./LOG.md) → "Idle cost philosophy".
+> paths. See the "Idle cost" section below.
+
+## Quick start
+
+The fastest path to a running dashboard + a paired host:
+
+1. Bring up the server + web stack from the published container images.
+   See [`dist/QUICKSTART.md`](dist/QUICKSTART.md) for the self-contained
+   walkthrough — no GitHub access needed.
+2. Install the agent on a target host via the signed apt repo
+   (instructions further down under **Connecting an agent**).
+3. Sign in via GitHub OAuth, paste the agent's pairing code at
+   `/device`, and the agent appears in the sidebar.
 
 ## Architecture
 
@@ -44,7 +56,7 @@ Live: https://dashboard.example.com/  ·  Apt repo: https://sys-mgr-repo.sppidy.
 
 ## Repository layout
 
-This superproject pins four submodules — each is its own private GitHub repo:
+This superproject pins four submodules — each is its own GitHub repo:
 
 | Path     | Repo                              | Stack       | Purpose                                                  |
 |----------|-----------------------------------|-------------|----------------------------------------------------------|
@@ -62,13 +74,16 @@ Top-level files in this superproject:
 | `Dockerfile.web`           | Next.js standalone build → node:slim runtime                       |
 | `Dockerfile.agent`         | Local-test agent image (referenced by the commented compose stanza)|
 | `.github/workflows/`       | `agent-deb.yml` — multi-arch (amd64 + arm64) .deb build + apt repo |
-| `LOG.md`                   | Running session log — every shipped version, idle cost notes, follow-ups |
+| `dist/QUICKSTART.md`       | Self-contained 5-min install using published container images      |
+| `docs/CLOUDFLARE.md`       | Edge configuration: WAF rate-limit rules, headers, origin cert     |
+| `CONTRIBUTING.md`, `CLA.md`| Contribution flow + Individual Contributor License Agreement        |
 
 ## Deploy
 
-The live deploy lives on a docker host reachable over Tailscale. Submodule
-commits land first, then the superproject pointer is bumped, then the host
-pulls + rebuilds.
+The intended deploy shape is a small docker host (single VM, not a
+shared compute cluster) reachable from your operator's browser over
+HTTPS. Submodule commits land first, then the superproject pointer is
+bumped, then the host pulls and rebuilds.
 
 ```bash
 # 1. Commit + push inside the affected submodule(s)
@@ -78,7 +93,7 @@ cd web && git commit -am "…" && git push
 cd .. && git add web && git commit -m "Bump web: …" && git push
 
 # 3. Pull + rebuild on the docker host
-ssh ubuntu@<docker-host> "cd /srv/sys-manager && \
+ssh <user>@<docker-host> "cd <install-dir> && \
   git pull --recurse-submodules && \
   docker compose up -d --build server web"
 ```
@@ -265,11 +280,11 @@ never has to guess what's running in the background.
 
 ```bash
 # Tail the live server
-ssh ubuntu@<docker-host> \
-  "docker compose -f /srv/sys-manager/docker-compose.yml logs --tail=200 -f server"
+ssh <user>@<docker-host> \
+  "docker compose -f <install-dir>/docker-compose.yml logs --tail=200 -f server"
 
 # Inspect approved agent tokens
-ssh ubuntu@<docker-host> \
+ssh <user>@<docker-host> \
   "docker exec sys-manager-server-1 sqlite3 /data/sys-manager.db \
     'SELECT hostname, datetime(created_at,\"unixepoch\"), datetime(last_seen,\"unixepoch\") FROM tokens'"
 
@@ -277,6 +292,22 @@ ssh ubuntu@<docker-host> \
 gh workflow run agent-deb.yml --ref main
 ```
 
+## Contributing
+
+Pull requests welcome. Please read [`CONTRIBUTING.md`](CONTRIBUTING.md)
+first — it covers the dev setup, the signed-commit requirement on
+`main`, and the [`CLA`](CLA.md) flow. The CLA is one click on your
+first PR via [cla-assistant.io](https://cla-assistant.io/).
+
+Security issues should NOT be filed as public GitHub issues. Email
+`sppidytg@gmail.com` with the subject `[security] sys-manager: …`
+and we'll coordinate a fix and disclosure timeline.
+
 ## License
 
-Private. All rights reserved.
+[**AGPL-3.0-or-later**](LICENSE) for the Community Edition contained
+in this repository. The planned closed-source Enterprise Edition
+sidecar (SSO, SCIM, custom RBAC, multi-tenant, Vault, long-retention
+audit log) is licensed separately to paying customers; CE remains
+fully functional without it. The CLA grants the maintainer dual-
+licensing rights so contributor code can flow into both.
