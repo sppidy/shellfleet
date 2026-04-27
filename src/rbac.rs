@@ -54,11 +54,29 @@ pub async fn middleware(
     let path = req.uri().path().to_string();
     let method = req.method().clone();
 
-    // The MFA endpoints handle their own auth (verify accepts a
-    // pending-MFA cookie that this layer would otherwise reject).
-    // /api/me is also whitelisted so the dashboard can render
-    // "you are <login>" during the MFA challenge.
-    if path.starts_with("/api/auth/mfa/") || path == "/api/me" {
+    // This middleware is mounted *inside* the `/api` nest, so axum
+    // strips the prefix before the request reaches us — `path` is
+    // `/me`, `/auth/mfa/verify`, `/device/request`, etc., NOT
+    // `/api/me`. The whitelist below must therefore match the
+    // post-strip form. (Earlier versions used the `/api/...` form
+    // and silently let RBAC gate /api/me + the MFA verify path,
+    // which broke the MFA flow.)
+    //
+    // Whitelist:
+    //   /me                       — session probe; needed during the
+    //                               pending-MFA window.
+    //   /auth/mfa/...             — the MFA endpoints themselves
+    //                               handle pending-MFA cookies.
+    //   /device/request, /token   — agent pairing handshake; the
+    //                               agent has no cookie at this
+    //                               point and shouldn't need one.
+    //                               /device/approve is NOT in the
+    //                               whitelist — that's admin-only.
+    if path == "/me"
+        || path.starts_with("/auth/mfa/")
+        || path == "/device/request"
+        || path == "/device/token"
+    {
         return next.run(req).await;
     }
 
