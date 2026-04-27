@@ -377,6 +377,7 @@ export default function Containers({ agentId }: { agentId: string }) {
                     <SwarmServiceRow
                       key={s.id}
                       service={s}
+                      canWrite={canWrite}
                       pending={pendingAction?.name === s.name ? pendingAction.action : null}
                       disabled={pendingAction !== null && pendingAction.name !== s.name}
                       onShowDetail={() => setServiceDrawer(s.name)}
@@ -597,12 +598,14 @@ function ContainerRow({
 
 function SwarmServiceRow({
   service,
+  canWrite,
   pending,
   disabled,
   onAction,
   onShowDetail,
 }: {
   service: SwarmService;
+  canWrite: boolean;
   pending: 'scale' | 'update' | 'remove' | null;
   disabled: boolean;
   onAction: (action: 'scale' | 'forceupdate' | 'remove') => void;
@@ -642,23 +645,24 @@ function SwarmServiceRow({
       <td className="actions">
         <button
           className="btn sm"
-          disabled={disabled}
+          disabled={disabled || !canWrite}
+          title={!canWrite ? 'viewer role: read-only' : undefined}
           onClick={() => onAction('scale')}
         >
           {pending === 'scale' ? '…' : 'scale'}
         </button>
         <button
           className="btn sm icon"
-          title="Force update"
-          disabled={disabled}
+          title={!canWrite ? 'viewer role: read-only' : 'Force update'}
+          disabled={disabled || !canWrite}
           onClick={() => onAction('forceupdate')}
         >
           {pending === 'update' ? '…' : '↻'}
         </button>
         <button
           className="btn sm icon danger"
-          title="Remove"
-          disabled={disabled}
+          title={!canWrite ? 'viewer role: read-only' : 'Remove'}
+          disabled={disabled || !canWrite}
           onClick={() => onAction('remove')}
         >
           {pending === 'remove' ? '…' : '×'}

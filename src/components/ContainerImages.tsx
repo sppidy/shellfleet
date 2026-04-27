@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useWebSocket } from './providers/WebSocketProvider';
 import { useUi } from './providers/UiProvider';
+import { useCanWrite } from './providers/SessionProvider';
 import type { DockerImage } from '@/lib/types';
 import { Loader2Icon } from 'lucide-react';
 
@@ -23,6 +24,7 @@ function fmtBytes(n: number): string {
 
 export default function ContainerImages({ agentId }: { agentId: string }) {
   const ui = useUi();
+  const canWrite = useCanWrite();
   const { sendToAgent, onAgentMessage } = useWebSocket();
   const [images, setImages] = useState<DockerImage[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -160,7 +162,8 @@ export default function ContainerImages({ agentId }: { agentId: string }) {
             <button
               type="submit"
               className="btn primary"
-              disabled={pulling || !pullRef.trim()}
+              disabled={pulling || !pullRef.trim() || !canWrite}
+              title={!canWrite ? 'viewer role: read-only' : undefined}
             >
               {pulling ? '…' : '▼ pull'}
             </button>
@@ -259,16 +262,16 @@ export default function ContainerImages({ agentId }: { agentId: string }) {
                       <td className="actions">
                         <button
                           className="btn sm icon"
-                          title="Force remove"
-                          disabled={removing === img.id}
+                          title={!canWrite ? 'viewer role: read-only' : 'Force remove'}
+                          disabled={removing === img.id || !canWrite}
                           onClick={() => remove(img, true)}
                         >
                           !
                         </button>
                         <button
                           className="btn sm icon danger"
-                          title="Remove"
-                          disabled={removing === img.id}
+                          title={!canWrite ? 'viewer role: read-only' : 'Remove'}
+                          disabled={removing === img.id || !canWrite}
                           onClick={() => remove(img, false)}
                         >
                           {removing === img.id ? '…' : '×'}

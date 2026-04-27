@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useWebSocket } from './providers/WebSocketProvider';
 import { useUi } from './providers/UiProvider';
+import { useCanWrite } from './providers/SessionProvider';
 import type { DockerVolume } from '@/lib/types';
 import { Loader2Icon } from 'lucide-react';
 
@@ -22,6 +23,7 @@ function fmtBytes(n: number): string {
 
 export default function ContainerVolumes({ agentId }: { agentId: string }) {
   const ui = useUi();
+  const canWrite = useCanWrite();
   const { sendToAgent, onAgentMessage } = useWebSocket();
   const [volumes, setVolumes] = useState<DockerVolume[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -160,7 +162,12 @@ export default function ContainerVolumes({ agentId }: { agentId: string }) {
           </div>
           <div className="panel-actions">
             <button className="btn" onClick={refresh}>↻</button>
-            <button className="btn warn" onClick={prune} disabled={pruning}>
+            <button
+              className="btn warn"
+              onClick={prune}
+              disabled={pruning || !canWrite}
+              title={!canWrite ? 'viewer role: read-only' : undefined}
+            >
               {pruning ? '…' : '⚠ prune unused'}
             </button>
           </div>
@@ -200,16 +207,16 @@ export default function ContainerVolumes({ agentId }: { agentId: string }) {
                       </button>
                       <button
                         className="btn sm icon"
-                        title="Force remove"
-                        disabled={removing === v.name}
+                        title={!canWrite ? 'viewer role: read-only' : 'Force remove'}
+                        disabled={removing === v.name || !canWrite}
                         onClick={() => remove(v, true)}
                       >
                         !
                       </button>
                       <button
                         className="btn sm icon danger"
-                        title="Remove"
-                        disabled={removing === v.name}
+                        title={!canWrite ? 'viewer role: read-only' : 'Remove'}
+                        disabled={removing === v.name || !canWrite}
                         onClick={() => remove(v, false)}
                       >
                         {removing === v.name ? '…' : '×'}

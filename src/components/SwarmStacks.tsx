@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useWebSocket } from './providers/WebSocketProvider';
 import { useUi } from './providers/UiProvider';
+import { useCanWrite } from './providers/SessionProvider';
 import type { SwarmStackRow, SwarmService, SwarmTask } from '@/lib/types';
 import { Loader2Icon } from 'lucide-react';
 
@@ -10,6 +11,7 @@ const REFRESH_MS = 15_000;
 
 export default function SwarmStacks({ agentId }: { agentId: string }) {
   const ui = useUi();
+  const canWrite = useCanWrite();
   const { sendToAgent, onAgentMessage } = useWebSocket();
   const [stacks, setStacks] = useState<SwarmStackRow[] | null>(null);
   const [isManager, setIsManager] = useState<boolean | null>(null);
@@ -186,8 +188,8 @@ export default function SwarmStacks({ agentId }: { agentId: string }) {
                       </button>
                       <button
                         className="btn sm icon danger"
-                        title="Remove"
-                        disabled={removing === s.name}
+                        title={!canWrite ? 'viewer role: read-only' : 'Remove'}
+                        disabled={removing === s.name || !canWrite}
                         onClick={() => remove(s)}
                       >
                         {removing === s.name ? '…' : '×'}

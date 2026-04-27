@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { useUi } from './providers/UiProvider';
+import { useCanWrite } from './providers/SessionProvider';
 import { apiFetch } from '@/lib/api';
 import type { UpdateWindow } from '@/lib/types';
 import { Loader2Icon } from 'lucide-react';
@@ -20,6 +21,7 @@ function fmtTs(secs: number | null | undefined) {
 
 export default function UpdateWindowPanel({ agentId }: { agentId: string }) {
   const ui = useUi();
+  const canWrite = useCanWrite();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [running, setRunning] = useState(false);
@@ -187,14 +189,29 @@ export default function UpdateWindowPanel({ agentId }: { agentId: string }) {
         </label>
 
         <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
-          <button className="btn primary" onClick={save} disabled={saving}>
+          <button
+            className="btn primary"
+            onClick={save}
+            disabled={saving || !canWrite}
+            title={!canWrite ? 'viewer role: read-only' : undefined}
+          >
             {saving ? '…' : existing ? '▼ save changes' : '＋ create schedule'}
           </button>
-          <button className="btn" onClick={runNow} disabled={running}>
+          <button
+            className="btn"
+            onClick={runNow}
+            disabled={running || !canWrite}
+            title={!canWrite ? 'viewer role: read-only' : undefined}
+          >
             {running ? '…' : '▶ run now'}
           </button>
           {existing && (
-            <button className="btn danger" onClick={remove} disabled={removing}>
+            <button
+              className="btn danger"
+              onClick={remove}
+              disabled={removing || !canWrite}
+              title={!canWrite ? 'viewer role: read-only' : undefined}
+            >
               {removing ? '…' : '× delete'}
             </button>
           )}

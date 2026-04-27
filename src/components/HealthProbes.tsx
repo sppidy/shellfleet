@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { useUi } from './providers/UiProvider';
+import { useCanWrite } from './providers/SessionProvider';
 import { apiFetch } from '@/lib/api';
 import type { HealthProbe, HealthProbeKind, ProbeLibraryEntry } from '@/lib/types';
 import { Loader2Icon } from 'lucide-react';
@@ -13,6 +14,7 @@ function fmtTs(secs: number | null | undefined) {
 
 export default function HealthProbes({ agentId }: { agentId: string }) {
   const ui = useUi();
+  const canWrite = useCanWrite();
   const [loading, setLoading] = useState(true);
   const [probes, setProbes] = useState<HealthProbe[]>([]);
   const [creating, setCreating] = useState(false);
@@ -79,7 +81,12 @@ export default function HealthProbes({ agentId }: { agentId: string }) {
             </span>
           </div>
           <div className="panel-actions">
-            <button className="btn primary" onClick={() => setCreating(true)}>
+            <button
+              className="btn primary"
+              onClick={() => setCreating(true)}
+              disabled={!canWrite}
+              title={!canWrite ? 'viewer role: read-only' : undefined}
+            >
               + probe
             </button>
           </div>
@@ -130,7 +137,8 @@ export default function HealthProbes({ agentId }: { agentId: string }) {
                       <td className="actions" style={{ width: 80 }}>
                         <button
                           className="btn sm icon danger"
-                          title="Remove"
+                          title={!canWrite ? 'viewer role: read-only' : 'Remove'}
+                          disabled={!canWrite}
                           onClick={() => remove(p.id, p.name)}
                         >
                           ×

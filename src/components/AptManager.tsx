@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useWebSocket } from './providers/WebSocketProvider';
+import { useCanWrite } from './providers/SessionProvider';
 import UpdateWindowPanel from './UpdateWindowPanel';
 import { AptStatusPayload, AptUpgradable } from '@/lib/types';
 import { Loader2Icon } from 'lucide-react';
@@ -10,6 +11,7 @@ const STATUS_TIMEOUT_MS = 8_000;
 
 export default function AptManager({ agentId }: { agentId: string }) {
   const { sendToAgent, onAgentMessage } = useWebSocket();
+  const canWrite = useCanWrite();
   const [status, setStatus] = useState<AptStatusPayload | null>(null);
   const [unsupported, setUnsupported] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -144,14 +146,16 @@ export default function AptManager({ agentId }: { agentId: string }) {
             <button
               className="btn"
               onClick={refresh}
-              disabled={refreshing || upgrading !== null}
+              disabled={refreshing || upgrading !== null || !canWrite}
+              title={!canWrite ? 'viewer role: read-only' : undefined}
             >
               {refreshing ? '…' : '↻ apt-get update'}
             </button>
             <button
               className="btn primary"
               onClick={upgradeAll}
-              disabled={refreshing || upgrading !== null || status.upgradable.length === 0}
+              disabled={refreshing || upgrading !== null || status.upgradable.length === 0 || !canWrite}
+              title={!canWrite ? 'viewer role: read-only' : undefined}
             >
               {upgrading === 'all' ? '…' : `▲ upgrade all (${status.upgradable.length})`}
             </button>
@@ -179,7 +183,8 @@ export default function AptManager({ agentId }: { agentId: string }) {
                     key={pkg.name}
                     pkg={pkg}
                     upgrading={upgrading === pkg.name}
-                    disabled={upgrading !== null || refreshing}
+                    disabled={upgrading !== null || refreshing || !canWrite}
+                    canWrite={canWrite}
                     onUpgrade={() => upgradeOne(pkg.name)}
                   />
                 ))}
@@ -222,11 +227,13 @@ function PackageRow({
   pkg,
   upgrading,
   disabled,
+  canWrite,
   onUpgrade,
 }: {
   pkg: AptUpgradable;
   upgrading: boolean;
   disabled: boolean;
+  canWrite: boolean;
   onUpgrade: () => void;
 }) {
   const isSecurity = pkg.source.toLowerCase().includes('security');
@@ -244,6 +251,7 @@ function PackageRow({
         <button
           className="btn sm primary"
           disabled={disabled}
+          title={!canWrite ? 'viewer role: read-only' : undefined}
           onClick={onUpgrade}
         >
           {upgrading ? '…' : '▲ upgrade'}

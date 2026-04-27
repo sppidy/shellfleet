@@ -2,11 +2,13 @@
 
 import { useEffect, useState } from 'react';
 import { useWebSocket } from './providers/WebSocketProvider';
+import { useCanWrite } from './providers/SessionProvider';
 import Editor from '@monaco-editor/react';
 import { Loader2Icon } from 'lucide-react';
 
 export default function ConfigEditor({ agentId }: { agentId: string }) {
   const { sendToAgent, onAgentMessage } = useWebSocket();
+  const canWrite = useCanWrite();
   const [filePath, setFilePath] = useState('');
   const [fileContent, setFileContent] = useState('');
   const [pending, setPending] = useState<'read' | 'save' | null>(null);
@@ -122,7 +124,8 @@ export default function ConfigEditor({ agentId }: { agentId: string }) {
             <button
               className="btn primary"
               onClick={handleSaveFile}
-              disabled={pending !== null || !fileContent}
+              disabled={pending !== null || !fileContent || !canWrite}
+              title={!canWrite ? 'viewer role: read-only' : undefined}
             >
               {pending === 'save' ? '…' : '▼ write'}
             </button>
@@ -162,6 +165,11 @@ export default function ConfigEditor({ agentId }: { agentId: string }) {
               smoothScrolling: true,
               padding: { top: 12, bottom: 12 },
               fontFamily: "JetBrains Mono, ui-monospace, 'SF Mono', Menlo, monospace",
+              // Viewers see the file content but can't modify it. The
+              // server-side WS RBAC layer would also reject any
+              // WriteConfigRequest, but read-only here is the right
+              // UX cue.
+              readOnly: !canWrite,
             }}
           />
           {!fileContent && !filePath && (

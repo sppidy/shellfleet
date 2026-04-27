@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { apiFetch } from '@/lib/api';
 import { useUi } from './providers/UiProvider';
+import { useCanWrite } from './providers/SessionProvider';
 import type { BackupJob, BackupArchive, BackupRestoreResponse } from '@/lib/types';
 import { Loader2Icon } from 'lucide-react';
 
@@ -31,6 +32,7 @@ function fmtTs(secs: number | null | undefined): string {
 
 export default function Backups({ agentId }: { agentId: string }) {
   const ui = useUi();
+  const canWrite = useCanWrite();
   const [loading, setLoading] = useState(true);
   const [jobs, setJobs] = useState<BackupJob[]>([]);
   const [creating, setCreating] = useState(false);
@@ -115,7 +117,12 @@ export default function Backups({ agentId }: { agentId: string }) {
             </span>
           </div>
           <div className="panel-actions">
-            <button className="btn primary" onClick={() => setCreating(true)}>
+            <button
+              className="btn primary"
+              onClick={() => setCreating(true)}
+              disabled={!canWrite}
+              title={!canWrite ? 'viewer role: read-only' : undefined}
+            >
               + job
             </button>
           </div>
@@ -179,7 +186,8 @@ export default function Backups({ agentId }: { agentId: string }) {
                         <button
                           className="btn sm"
                           onClick={() => runNow(j)}
-                          disabled={running === j.id}
+                          disabled={running === j.id || !canWrite}
+                          title={!canWrite ? 'viewer role: read-only' : undefined}
                         >
                           {running === j.id ? '…' : '▶ run'}
                         </button>
@@ -192,7 +200,8 @@ export default function Backups({ agentId }: { agentId: string }) {
                         <button
                           className="btn sm icon danger"
                           onClick={() => remove(j)}
-                          title="Delete job"
+                          disabled={!canWrite}
+                          title={!canWrite ? 'viewer role: read-only' : 'Delete job'}
                         >
                           ×
                         </button>
@@ -213,6 +222,7 @@ export default function Backups({ agentId }: { agentId: string }) {
   );
 }
 
+// CanWrite is captured via the modals' own useCanWrite() calls below.
 function BackupForm({
   agentId,
   onClose,
@@ -384,6 +394,7 @@ function BackupForm({
 }
 
 function ArchivesModal({ job, onClose }: { job: BackupJob; onClose: () => void }) {
+  const canWrite = useCanWrite();
   const ui = useUi();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -461,7 +472,12 @@ function ArchivesModal({ job, onClose }: { job: BackupJob; onClose: () => void }
                     <td className="right mono">{fmtBytes(a.bytes)}</td>
                     <td className="mono muted">{fmtTs(a.mtime)}</td>
                     <td className="actions">
-                      <button className="btn sm" onClick={() => setRestoreFor(a)}>
+                      <button
+                        className="btn sm"
+                        onClick={() => setRestoreFor(a)}
+                        disabled={!canWrite}
+                        title={!canWrite ? 'viewer role: read-only' : undefined}
+                      >
                         restore
                       </button>
                     </td>

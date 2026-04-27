@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useWebSocket } from './providers/WebSocketProvider';
 import { useUi } from './providers/UiProvider';
+import { useCanWrite } from './providers/SessionProvider';
 import type { DockerSystemPrunePayload } from '@/lib/types';
 
 function fmtBytes(n: number): string {
@@ -19,6 +20,7 @@ function fmtBytes(n: number): string {
 
 export default function SystemPrune({ agentId }: { agentId: string }) {
   const ui = useUi();
+  const canWrite = useCanWrite();
   const { sendToAgent, onAgentMessage } = useWebSocket();
   const [pruneVolumes, setPruneVolumes] = useState(false);
   const [busy, setBusy] = useState<'preview' | 'apply' | null>(null);
@@ -116,14 +118,16 @@ export default function SystemPrune({ agentId }: { agentId: string }) {
             <button
               className="btn"
               onClick={runPreview}
-              disabled={busy !== null}
+              disabled={busy !== null || !canWrite}
+              title={!canWrite ? 'viewer role: read-only' : undefined}
             >
               {busy === 'preview' ? '…' : 'i preview (dry run)'}
             </button>
             <button
               className="btn warn"
               onClick={apply}
-              disabled={busy !== null || !preview}
+              disabled={busy !== null || !preview || !canWrite}
+              title={!canWrite ? 'viewer role: read-only' : undefined}
             >
               {busy === 'apply' ? '…' : '⚠ apply'}
             </button>

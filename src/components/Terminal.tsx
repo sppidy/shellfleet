@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from 'react';
 import { useWebSocket } from './providers/WebSocketProvider';
+import { useCanWrite } from './providers/SessionProvider';
 import { Terminal as XTerm } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
@@ -15,11 +16,17 @@ type TerminalProps = {
 
 export default function Terminal({ agentId, containerId, shell, title }: TerminalProps) {
   const { sendToAgent, onAgentMessage } = useWebSocket();
+  const canWrite = useCanWrite();
   const terminalRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<XTerm | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
 
   useEffect(() => {
+    // Viewers can't start a PTY: TerminalData / DockerExecStartRequest /
+    // StartTerminalRequest are all mutating messages the WS RBAC layer
+    // would reject. Skip the whole xterm init so we don't even open
+    // the empty terminal.
+    if (!canWrite) return;
     if (!terminalRef.current) return;
 
     const term = new XTerm({
@@ -102,7 +109,7 @@ export default function Terminal({ agentId, containerId, shell, title }: Termina
       }
       term.dispose();
     };
-  }, [agentId, sendToAgent, onAgentMessage, containerId, shell]);
+  }, [agentId, sendToAgent, onAgentMessage, containerId, shell, canWrite]);
 
   return (
     <div
@@ -123,7 +130,27 @@ export default function Terminal({ agentId, containerId, shell, title }: Termina
           <span className="meta">root@{agentId.replace(/-id$/, '')}</span>
         </div>
       </div>
-      <div ref={terminalRef} style={{ flex: 1, overflow: 'hidden', padding: 8 }} />
+      {!canWrite ? (
+        <div
+          style={{
+            flex: 1,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: 'var(--warn)',
+            fontFamily: 'var(--mono)',
+            fontSize: 12,
+            padding: 24,
+            textAlign: 'center',
+          }}
+        >
+          viewer role: interactive shells are admin-only.
+          <br />
+          ask an admin to promote you at <code>/admin</code>.
+        </div>
+      ) : (
+        <div ref={terminalRef} style={{ flex: 1, overflow: 'hidden', padding: 8 }} />
+      )}
     </div>
   );
 }

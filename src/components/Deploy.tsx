@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useWebSocket } from './providers/WebSocketProvider';
+import { useCanWrite } from './providers/SessionProvider';
 import { ContainerSpec, ServiceSpec, SwarmRole } from '@/lib/types';
 
 type Mode = 'container' | 'service' | 'stack';
@@ -18,6 +19,7 @@ const linesFrom = (s: string) =>
 
 export default function Deploy({ agentId }: { agentId: string }) {
   const { sendToAgent, onAgentMessage } = useWebSocket();
+  const canWrite = useCanWrite();
   const [mode, setMode] = useState<Mode>('container');
   const [swarmRole, setSwarmRole] = useState<SwarmRole | null>(null);
 
@@ -247,8 +249,10 @@ export default function Deploy({ agentId }: { agentId: string }) {
                     submitting ||
                     !canSubmitService ||
                     !stackName.trim() ||
-                    !composeYaml.trim()
+                    !composeYaml.trim() ||
+                    !canWrite
                   }
+                  title={!canWrite ? 'viewer role: read-only' : undefined}
                 >
                   {submitting ? '…' : '▷ deploy stack'}
                 </button>
@@ -465,8 +469,9 @@ export default function Deploy({ agentId }: { agentId: string }) {
                   type="submit"
                   className="btn primary"
                   disabled={
-                    submitting || !image.trim() || (mode === 'service' && !canSubmitService)
+                    submitting || !image.trim() || (mode === 'service' && !canSubmitService) || !canWrite
                   }
+                  title={!canWrite ? 'viewer role: read-only' : undefined}
                 >
                   {submitting
                     ? '…'

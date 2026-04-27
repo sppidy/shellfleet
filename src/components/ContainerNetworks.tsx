@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useWebSocket } from './providers/WebSocketProvider';
 import { useUi } from './providers/UiProvider';
+import { useCanWrite } from './providers/SessionProvider';
 import type { DockerNetwork } from '@/lib/types';
 import { Loader2Icon } from 'lucide-react';
 
@@ -10,6 +11,7 @@ const REFRESH_MS = 15_000;
 
 export default function ContainerNetworks({ agentId }: { agentId: string }) {
   const ui = useUi();
+  const canWrite = useCanWrite();
   const { sendToAgent, onAgentMessage } = useWebSocket();
   const [networks, setNetworks] = useState<DockerNetwork[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -165,8 +167,8 @@ export default function ContainerNetworks({ agentId }: { agentId: string }) {
                         </button>
                         <button
                           className="btn sm icon danger"
-                          title="Remove"
-                          disabled={removing === n.id}
+                          title={!canWrite ? 'viewer role: read-only' : 'Remove'}
+                          disabled={removing === n.id || !canWrite}
                           onClick={() => remove(n)}
                         >
                           {removing === n.id ? '…' : '×'}
@@ -197,6 +199,7 @@ export default function ContainerNetworks({ agentId }: { agentId: string }) {
 
 function CreateForm({ agentId }: { agentId: string }) {
   const { sendToAgent } = useWebSocket();
+  const canWrite = useCanWrite();
   const [name, setName] = useState('');
   const [driver, setDriver] = useState('bridge');
   const [subnet, setSubnet] = useState('');
@@ -291,7 +294,12 @@ function CreateForm({ agentId }: { agentId: string }) {
                 internal
               </label>
             </div>
-            <button type="submit" className="btn primary">
+            <button
+              type="submit"
+              className="btn primary"
+              disabled={!canWrite}
+              title={!canWrite ? 'viewer role: read-only' : undefined}
+            >
               + create
             </button>
           </div>
