@@ -5,6 +5,7 @@ mod deploy;
 mod docker;
 mod health;
 mod journal;
+mod journal_stream;
 mod logs;
 mod stats;
 mod systemd;
@@ -186,6 +187,7 @@ async fn main() {
     let mut exec_session: Option<terminal::TerminalSession> = None;
     let log_streams = logs::LogStreams::default();
     let journal_streams = journal::JournalStreams::default();
+    let journal_stream_mgr = journal_stream::JournalStreams::default();
     let health_probes = health::HealthProbes::default();
 
     // Watchdog: if the WebSocket goes silent for 75s the connection is
@@ -566,6 +568,41 @@ async fn main() {
                                 let streams = journal_streams.clone();
                                 tokio::spawn(async move {
                                     streams.stop(&unit).await;
+                                });
+                            }
+                            Message::JournalStreamRequest {
+                                stream_id,
+                                units,
+                                priority,
+                                since,
+                                grep,
+                                identifier,
+                                lines,
+                                follow,
+                            } => {
+                                let mgr = journal_stream_mgr.clone();
+                                let tx_clone = tx.clone();
+                                tokio::spawn(async move {
+                                    mgr.start(
+                                        journal_stream::StreamArgs {
+                                            stream_id,
+                                            units,
+                                            priority,
+                                            since,
+                                            grep,
+                                            identifier,
+                                            lines,
+                                            follow,
+                                        },
+                                        tx_clone,
+                                    )
+                                    .await;
+                                });
+                            }
+                            Message::JournalStreamStop { stream_id } => {
+                                let mgr = journal_stream_mgr.clone();
+                                tokio::spawn(async move {
+                                    mgr.stop(&stream_id).await;
                                 });
                             }
                             Message::HealthProbeSyncRequest { probes } => {
