@@ -91,7 +91,7 @@ function HomeBody() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { isConnected, agents } = useWebSocket();
-  const { user, status, logout } = useSession();
+  const { user, role, mfaEnabled, status, logout } = useSession();
 
   const agentFromUrl = searchParams.get('agent');
   const tabFromUrl = searchParams.get('tab');
@@ -296,6 +296,23 @@ function HomeBody() {
           </button>
         </div>
 
+        <div className="nav-section">ACCOUNT</div>
+        <div className="nav-list">
+          <button type="button" className="nav-item" onClick={() => router.push('/security')}>
+            <span className="ico">⌘</span>
+            <span>Account &amp; 2FA</span>
+            {!mfaEnabled && (
+              <span
+                className="nav-badge"
+                title="Two-factor authentication is not enabled"
+                style={{ background: 'var(--warn-bg, #2a2310)', color: 'var(--warn, #d8b65a)' }}
+              >
+                !
+              </span>
+            )}
+          </button>
+        </div>
+
         <div className="nav-section">ADMIN</div>
         <div className="nav-list">
           <button type="button" className="nav-item" onClick={() => router.push('/tokens')}>
@@ -306,6 +323,12 @@ function HomeBody() {
             <span className="ico">＋</span>
             <span>Connect agent</span>
           </button>
+          {role === 'admin' && (
+            <button type="button" className="nav-item" onClick={() => router.push('/admin')}>
+              <span className="ico">⌬</span>
+              <span>Users &amp; seats</span>
+            </button>
+          )}
         </div>
 
         <div className="nav-section">
@@ -319,8 +342,29 @@ function HomeBody() {
         <div className="user-bar">
           <div className="who">
             <div className="label">SIGNED IN AS</div>
-            <div className="name" title={user ?? ''}>
-              {user ?? '—'}
+            <div
+              className="name"
+              title={user ?? ''}
+              style={{ display: 'flex', alignItems: 'center', gap: 6 }}
+            >
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {user ?? '—'}
+              </span>
+              {role && (
+                <span
+                  className="chip"
+                  style={{
+                    fontSize: 10,
+                    color:
+                      role === 'admin' ? 'var(--accent)' : 'var(--fg-2)',
+                    border: '1px solid var(--line)',
+                    padding: '0 5px',
+                    borderRadius: 3,
+                  }}
+                >
+                  {role}
+                </span>
+              )}
             </div>
           </div>
           <button
@@ -373,6 +417,37 @@ function HomeBody() {
             </button>
           </div>
         </div>
+
+        {!mfaEnabled && (
+          <div
+            role="status"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 12,
+              padding: '8px 14px',
+              background: 'var(--warn-bg, #2a2310)',
+              borderBottom: '1px solid var(--warn-bd, #4a3a18)',
+              color: 'var(--warn, #d8b65a)',
+              fontFamily: 'var(--mono)',
+              fontSize: 12,
+            }}
+          >
+            <span aria-hidden>⚠</span>
+            <span style={{ flex: 1 }}>
+              two-factor authentication is not enabled on your account.
+              add a second factor in <strong>Account &amp; 2FA</strong>.
+            </span>
+            <button
+              type="button"
+              className="btn"
+              style={{ height: 26, padding: '0 10px', fontSize: 11 }}
+              onClick={() => router.push('/security')}
+            >
+              set up 2FA →
+            </button>
+          </div>
+        )}
 
         {selectedAgent ? (
           <>
