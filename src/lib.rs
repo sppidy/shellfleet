@@ -282,6 +282,50 @@ pub enum Message {
         error: Option<String>,
     },
 
+    /// Free-form journalctl streamer — not tied to a specific systemd
+    /// unit. Operators filter by units (zero or many), priority,
+    /// since-timestamp, SYSLOG_IDENTIFIER, and grep regex. Lines are
+    /// batched into chunks (~100 lines or 250 ms, whichever first)
+    /// to keep WS overhead low on busy hosts.
+    ///
+    /// Old agents (pre-this-version) silently ignore the request;
+    /// the dashboard times out gracefully.
+    JournalStreamRequest {
+        /// Stable id minted by the dashboard so multiple concurrent
+        /// journal streams from one UI don't collide.
+        stream_id: String,
+        #[serde(default)]
+        units: Vec<String>,
+        /// emerg | alert | crit | err | warning | notice | info | debug
+        #[serde(default)]
+        priority: Option<String>,
+        /// `--since` value: "1h ago", "2024-01-01 09:00", etc.
+        #[serde(default)]
+        since: Option<String>,
+        /// Regex grep on the message (`journalctl -g`).
+        #[serde(default)]
+        grep: Option<String>,
+        /// SYSLOG_IDENTIFIER (`-t`).
+        #[serde(default)]
+        identifier: Option<String>,
+        #[serde(default = "default_tail")]
+        lines: u32,
+        #[serde(default = "default_true")]
+        follow: bool,
+    },
+    JournalStreamChunk {
+        stream_id: String,
+        /// Up to ~100 lines per chunk to amortize WS framing cost.
+        lines: Vec<String>,
+    },
+    JournalStreamStop {
+        stream_id: String,
+    },
+    JournalStreamEnd {
+        stream_id: String,
+        error: Option<String>,
+    },
+
     /// Inspect a swarm service: `docker service ps` (replicas + tasks) plus
     /// `docker service inspect` (env, mounts, networks, image digest, etc.).
     /// Manager-only. Introduced in protocol_version 7.
