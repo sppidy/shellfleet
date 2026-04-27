@@ -197,6 +197,33 @@ require an agent rollout.
 - **Apt repo.** ed25519-signed `Release` + `InRelease`. The clearsigned
   `InRelease` is verified by `apt` against the public key piped into
   `/etc/apt/keyrings/sys-manager.asc`.
+- **OAuth state CSRF.** Random per-flow state in an HttpOnly cookie,
+  verified on `/auth/callback`. Defeats the attack where a victim is
+  lured into hitting the callback with the attacker's authorization
+  code.
+- **At-rest encryption.** TOTP secrets and recovery-code hashes are
+  encrypted with AES-256-GCM. The key is `SHA-256("sys-manager-aead-v1"
+  || JWT_SECRET)`, so a DB-only backup leak (without env vars) yields
+  no useful material. Format on disk: `v1:<base64-no-pad nonce>.<base64-no-pad ct>`.
+- **Brute-force defence.** Per-login MFA throttle locks after 10 bad
+  TOTP attempts for 15 minutes. Per-actor `/api/device/approve`
+  throttle on the same shape.
+- **Constant-time recovery-code compare.** SHA-256 hash equality runs
+  through `subtle::ConstantTimeEq` so the loop time doesn't leak which
+  position matched.
+- **WebSocket RBAC.** The `/ui/ws` upgrade pins the user's login at
+  connect time and re-resolves the role from the DB on every mutating
+  `SendToAgent`. Without this, the HTTP RBAC middleware would have
+  been bypassable by sending agent-control messages over the WS plane.
+- **JWT_SECRET fail-loud.** The server refuses to start if
+  `JWT_SECRET` is unset, shorter than 32 chars, or the historical
+  placeholder value.
+- **Defence-in-depth headers.** HSTS (`max-age=31536000;
+  includeSubDomains`), `X-Content-Type-Options: nosniff`,
+  `X-Frame-Options: DENY`, `Referrer-Policy: strict-origin-when-cross-origin`,
+  and a tight `Permissions-Policy`.
+- **Branch protection.** All five repos require signed commits on
+  `main`; force-push and deletion are disabled.
 
 ### Roadmap — Enterprise Edition
 
