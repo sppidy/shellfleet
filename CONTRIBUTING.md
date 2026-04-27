@@ -8,8 +8,8 @@ you need to know before opening a pull request.
 1. Open an issue first if the change is non-trivial.
 2. Fork, branch off `main`, keep PRs focused.
 3. **Sign the [CLA](CLA.md)** — the bot will comment on your first PR.
-4. Sign your commits (`git commit -S`). Required once branch
-   protection is enabled; please do it now anyway.
+4. Sign your commits (`git commit -S`). Branch protection on `main`
+   rejects unsigned commits.
 5. Follow the existing code style; CI will tell you if you didn't.
 
 ## Repository layout
@@ -75,9 +75,10 @@ employer to sign the corporate CLA instead — open an issue tagged
 
 ## Commit hygiene
 
-- **Sign every commit** (`-S`). Branch protection requiring signed
-  commits will be enabled before the project leaves beta; do it now to
-  save yourself a rebase later.
+- **Sign every commit** (`-S`). Branch protection on `main` requires
+  signed commits across all five repos (super + agent + server + web +
+  shared). Set up signing once via `git config --global user.signingkey
+  ...` and `commit.gpgsign true`; see GitHub's [signing-commits docs](https://docs.github.com/en/authentication/managing-commit-signature-verification).
 - **Conventional-style summaries** are appreciated but not strict:
   `feat(server): add WebAuthn enrollment endpoint`,
   `fix(agent): handle reconnect after suspend`.
