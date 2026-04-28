@@ -111,12 +111,33 @@ jobs:
               http = true
               insecure = true
 
-      - name: Log in to Harbor
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ matrix.push_registry }}
-          username: ${{ secrets.HARBOR_ROBOT_USER }}
-          password: ${{ secrets.HARBOR_ROBOT_SECRET }}
+      # Manual ~/.docker/config.json instead of docker/login-action.
+      # Reason: the direct-port URL (arm64-builder leg) is plain HTTP, and
+      # `docker login hrbr.sppidy.in:18080` would fail with
+      # "server gave HTTP response to HTTPS client" because the
+      # daemon enforces HTTPS unless `insecure-registries` is set
+      # at the daemon level (requires restart). Writing the auth
+      # blob directly is daemon-free; buildkit + build-push-action
+      # read from this file.
+      - name: Write Harbor credentials
+        shell: bash
+        env:
+          HARBOR_USER: ${{ secrets.HARBOR_ROBOT_USER }}
+          HARBOR_PASS: ${{ secrets.HARBOR_ROBOT_SECRET }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.docker
+          AUTH=$(printf '%s:%s' "$HARBOR_USER" "$HARBOR_PASS" | base64 -w0)
+          # Both URLs share the same Harbor backend + same robot account.
+          cat > ~/.docker/config.json <<EOF
+          {
+            "auths": {
+              "hrbr.sppidy.in":       { "auth": "$AUTH" },
+              "hrbr.sppidy.in:18080": { "auth": "$AUTH" }
+            }
+          }
+          EOF
+          chmod 0600 ~/.docker/config.json
 
       - name: Compute tags
         id: tags
@@ -182,19 +203,24 @@ jobs:
               http = true
               insecure = true
 
-      - name: Log in to Harbor (canonical)
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ secrets.HARBOR_ROBOT_USER }}
-          password: ${{ secrets.HARBOR_ROBOT_SECRET }}
-
-      - name: Log in to Harbor (direct port)
-        uses: docker/login-action@v3
-        with:
-          registry: hrbr.sppidy.in:18080
-          username: ${{ secrets.HARBOR_ROBOT_USER }}
-          password: ${{ secrets.HARBOR_ROBOT_SECRET }}
+      - name: Write Harbor credentials
+        shell: bash
+        env:
+          HARBOR_USER: ${{ secrets.HARBOR_ROBOT_USER }}
+          HARBOR_PASS: ${{ secrets.HARBOR_ROBOT_SECRET }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.docker
+          AUTH=$(printf '%s:%s' "$HARBOR_USER" "$HARBOR_PASS" | base64 -w0)
+          cat > ~/.docker/config.json <<EOF
+          {
+            "auths": {
+              "hrbr.sppidy.in":       { "auth": "$AUTH" },
+              "hrbr.sppidy.in:18080": { "auth": "$AUTH" }
+            }
+          }
+          EOF
+          chmod 0600 ~/.docker/config.json
 
       - name: Compose multi-arch tags
         id: tags
