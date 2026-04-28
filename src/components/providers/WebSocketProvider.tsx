@@ -8,6 +8,12 @@ type AgentMessageHandler = (msg: AgentMessagePayload) => void;
 
 interface WebSocketContextValue {
   agents: string[];
+  /**
+   * agent_id → capability list. Empty list means a pre-v15 agent that
+   * registered before capability advertisement was added; the dashboard
+   * treats that as "show every tab" so legacy agents keep working.
+   */
+  agentCapabilities: Record<string, string[]>;
   isConnected: boolean;
   sendMessage: (msg: UiMessage) => void;
   sendToAgent: (agentId: string, message: AgentMessagePayload) => void;
@@ -41,6 +47,7 @@ const WS_URL = resolveWsUrl();
 export function WebSocketProvider({ children }: { children: React.ReactNode }) {
   const { status } = useSession();
   const [agents, setAgents] = useState<string[]>([]);
+  const [agentCapabilities, setAgentCapabilities] = useState<Record<string, string[]>>({});
   const [isConnected, setIsConnected] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -91,6 +98,7 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
     if (status !== 'authed') {
       setIsConnected(false);
       setAgents([]);
+      setAgentCapabilities({});
       return;
     }
     stoppedRef.current = false;
@@ -108,6 +116,7 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
       ws.onclose = () => {
         setIsConnected(false);
         setAgents([]);
+        setAgentCapabilities({});
         if (stoppedRef.current) return;
         // Exponential backoff capped at 15s. The provider auto-reconnects so
         // momentary network blips don't leave the dashboard stuck.
@@ -131,6 +140,7 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
           const msg = JSON.parse(event.data) as UiMessage;
           if (msg.type === 'ListAgentsResponse') {
             setAgents(msg.payload.agents);
+            setAgentCapabilities(msg.payload.capabilities ?? {});
           } else if (msg.type === 'AgentMessage') {
             dispatch(msg.payload.agent_id, msg.payload.message);
           }
@@ -167,7 +177,7 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
 
   return (
     <WebSocketContext.Provider
-      value={{ agents, isConnected, sendMessage, sendToAgent, onAgentMessage }}
+      value={{ agents, agentCapabilities, isConnected, sendMessage, sendToAgent, onAgentMessage }}
     >
       {children}
     </WebSocketContext.Provider>

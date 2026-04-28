@@ -509,6 +509,15 @@ export type AgentMessagePayload =
 
 export type UiMessage =
   | { type: 'ListAgentsRequest' }
-  | { type: 'ListAgentsResponse'; payload: { agents: string[] } }
+  | {
+      type: 'ListAgentsResponse';
+      payload: {
+        agents: string[];
+        // agent_id → capability list reported on Register. Pre-v15 agents
+        // appear in `agents` with no entry here; treat absence as
+        // "show every tab" so legacy hosts still work.
+        capabilities?: Record<string, string[]>;
+      };
+    }
   | { type: 'SendToAgent'; payload: { agent_id: string; message: AgentMessagePayload } }
   | { type: 'AgentMessage'; payload: { agent_id: string; message: AgentMessagePayload } };

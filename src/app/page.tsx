@@ -85,7 +85,7 @@ export default function Home() {
 function HomeBody() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { isConnected, agents } = useWebSocket();
+  const { isConnected, agents, agentCapabilities } = useWebSocket();
   const { user, role, mfaEnabled, status, logout } = useSession();
 
   const agentFromUrl = searchParams.get('agent');
@@ -115,6 +115,15 @@ function HomeBody() {
   const [selectedAgent, setSelectedAgent] = useState<string | null>(initialAgent);
   const [activeTab, setActiveTab] = useState<Tab>(initialTab);
   const [dockerSubtab, setDockerSubtab] = useState<DockerSubtab>(initialDockerSub);
+
+  // Per-agent capabilities reported on Register. Pre-v15 agents don't
+  // have an entry here; treat absence as "show every tab" so legacy
+  // hosts still work. Once an entry exists, a missing capability hides
+  // the matching tab. Derived early so the redirect useEffects below
+  // can reference it.
+  const caps = (selectedAgent && agentCapabilities[selectedAgent]) || null;
+  const dockerAvailable = caps === null || caps.includes('docker') || caps.includes('swarm');
+  const swarmAvailable = caps === null || caps.includes('swarm');
   const [unreadCount, setUnreadCount] = useState<number>(0);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [backupsEnabled, setBackupsEnabled] = useState(false);
@@ -143,6 +152,28 @@ function HomeBody() {
       setActiveTab('dashboard');
     }
   }, [backupsEnabled, activeTab]);
+
+  // If the operator deep-links into the Docker tab on an agent that
+  // doesn't have docker (e.g. a future k8s-only agent), bounce them
+  // to overview rather than rendering an empty rail.
+  useEffect(() => {
+    if (activeTab === 'docker' && caps !== null && !dockerAvailable) {
+      setActiveTab('dashboard');
+    }
+  }, [activeTab, caps, dockerAvailable]);
+
+  // If swarm goes away while the operator is on the stacks subtab,
+  // fall back to containers instead of rendering an empty pane.
+  useEffect(() => {
+    if (
+      activeTab === 'docker' &&
+      dockerSubtab === 'stacks' &&
+      caps !== null &&
+      !swarmAvailable
+    ) {
+      setDockerSubtab('containers');
+    }
+  }, [activeTab, dockerSubtab, caps, swarmAvailable]);
 
   useEffect(() => {
     let cancelled = false;
@@ -233,7 +264,11 @@ function HomeBody() {
   }
 
   const agentLabel = selectedAgent?.replace(/-id$/, '');
-  const tabsToShow = TAB_DEFS.filter((t) => t.id !== 'backups' || backupsEnabled);
+  const tabsToShow = TAB_DEFS.filter((t) => {
+    if (t.id === 'backups' && !backupsEnabled) return false;
+    if (t.id === 'docker' && !dockerAvailable) return false;
+    return true;
+  });
 
   // Breadcrumb
   let crumbs: string[];
@@ -545,6 +580,7 @@ function HomeBody() {
                   agentId={selectedAgent}
                   subtab={dockerSubtab}
                   onSubtabChange={setDockerSubtab}
+                  swarmAvailable={swarmAvailable}
                 />
               ) : activeTab === 'metrics' ? (
                 <Metrics agentId={selectedAgent} />

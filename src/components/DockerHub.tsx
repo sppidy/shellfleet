@@ -45,9 +45,23 @@ type Props = {
   agentId: string;
   subtab: DockerSubtab;
   onSubtabChange: (s: DockerSubtab) => void;
+  /**
+   * When false, the Stacks subtab is hidden — the agent's docker
+   * daemon isn't part of a swarm, so listing services would return
+   * empty anyway. Defaults to true (legacy + non-gated cases).
+   */
+  swarmAvailable?: boolean;
 };
 
-export default function DockerHub({ agentId, subtab, onSubtabChange }: Props) {
+export default function DockerHub({
+  agentId,
+  subtab,
+  onSubtabChange,
+  swarmAvailable = true,
+}: Props) {
+  const visibleSubtabs = swarmAvailable
+    ? SUBTAB_DEFS
+    : SUBTAB_DEFS.filter((s) => s.id !== 'stacks');
   return (
     <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
       <nav
@@ -76,7 +90,7 @@ export default function DockerHub({ agentId, subtab, onSubtabChange }: Props) {
         >
           docker
         </div>
-        {SUBTAB_DEFS.map((s, i) => {
+        {visibleSubtabs.map((s, i) => {
           const active = s.id === subtab;
           return (
             <button
