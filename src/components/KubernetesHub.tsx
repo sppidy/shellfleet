@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useWebSocket } from './providers/WebSocketProvider';
 import type {
   K8sPod,
@@ -20,6 +20,12 @@ type DescribeTarget = {
   kind: 'pod' | 'deployment' | 'service' | 'ingress' | 'pvc' | 'event';
   namespace: string | null;
   name: string;
+};
+
+type LogsTarget = {
+  namespace: string;
+  podName: string;
+  containers: string[];
 };
 
 // ──────────────────────────────────────────────────────────────
@@ -388,12 +394,264 @@ const tableStyle: React.CSSProperties = {
 const rowStyle: React.CSSProperties = { borderTop: '1px solid var(--line)' };
 
 // ──────────────────────────────────────────────────────────────
+// Logs modal — live tail with follow + container picker
+// ──────────────────────────────────────────────────────────────
+
+const MAX_LOG_LINES = 5000;
+
+function newStreamId(): string {
+  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
+    return crypto.randomUUID();
+  }
+  return `s-${Math.random().toString(36).slice(2)}-${Date.now()}`;
+}
+
+function LogsModal({
+  agentId,
+  target,
+  onClose,
+}: {
+  agentId: string;
+  target: LogsTarget;
+  onClose: () => void;
+}) {
+  const { sendToAgent, onAgentMessage } = useWebSocket();
+  const [container, setContainer] = useState<string>(target.containers[0] ?? '');
+  const [follow, setFollow] = useState(true);
+  const [streamId, setStreamId] = useState<string>(newStreamId);
+  const [lines, setLines] = useState<string[]>([]);
+  const [ended, setEnded] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // (Re)open the stream whenever the container or follow toggle changes.
+  useEffect(() => {
+    const sid = newStreamId();
+    setStreamId(sid);
+    setLines([]);
+    setEnded(false);
+    setError(null);
+
+    sendToAgent(agentId, {
+      type: 'K8sLogsRequest',
+      payload: {
+        stream_id: sid,
+        namespace: target.namespace,
+        pod_name: target.podName,
+        container: container || null,
+        tail_lines: 200,
+        follow,
+      },
+    });
+
+    const unsub = onAgentMessage(agentId, (msg) => {
+      if (msg.type === 'K8sLogsChunk' && msg.payload.stream_id === sid) {
+        setLines((prev) => {
+          const next = prev.concat(msg.payload.lines);
+          // Clamp so a chatty container doesn't melt the DOM.
+          return next.length > MAX_LOG_LINES
+            ? next.slice(next.length - MAX_LOG_LINES)
+            : next;
+        });
+      } else if (msg.type === 'K8sLogsEnd' && msg.payload.stream_id === sid) {
+        setEnded(true);
+        setError(msg.payload.error);
+      }
+    });
+
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+
+    return () => {
+      sendToAgent(agentId, { type: 'K8sLogsStop', payload: { stream_id: sid } });
+      unsub();
+      window.removeEventListener('keydown', onKey);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agentId, target.namespace, target.podName, container, follow]);
+
+  // Auto-scroll to bottom when new lines arrive (only while in follow mode).
+  const scrollerRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!follow) return;
+    const el = scrollerRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [lines, follow]);
+
+  const stopNow = () => {
+    sendToAgent(agentId, { type: 'K8sLogsStop', payload: { stream_id: streamId } });
+    setEnded(true);
+  };
+
+  const copyAll = async () => {
+    try {
+      await navigator.clipboard.writeText(lines.join('\n'));
+    } catch {
+      /* clipboard API may be unavailable */
+    }
+  };
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: 'fixed',
+        inset: 0,
+        background: 'rgba(0, 0, 0, 0.55)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        zIndex: 90,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: 'min(1100px, 92vw)',
+          height: 'min(720px, 85vh)',
+          display: 'flex',
+          flexDirection: 'column',
+          background: 'var(--bg)',
+          border: '1px solid var(--line)',
+          borderRadius: 4,
+          fontFamily: 'var(--mono)',
+          fontSize: 12,
+          overflow: 'hidden',
+        }}
+      >
+        <div
+          style={{
+            padding: '8px 12px',
+            borderBottom: '1px solid var(--line)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            background: 'var(--bg-1)',
+            flexShrink: 0,
+          }}
+        >
+          <span style={{ color: 'var(--fg-3)' }}>logs</span>
+          <span style={{ color: 'var(--fg-2)' }}>{target.namespace}</span>
+          <span style={{ color: 'var(--fg-3)' }}>/</span>
+          <span>{target.podName}</span>
+
+          {target.containers.length > 1 && (
+            <select
+              value={container}
+              onChange={(e) => setContainer(e.target.value)}
+              style={{
+                marginLeft: 8,
+                background: 'var(--bg)',
+                color: 'var(--fg)',
+                border: '1px solid var(--line)',
+                borderRadius: 3,
+                fontFamily: 'var(--mono)',
+                fontSize: 11,
+                padding: '2px 6px',
+              }}
+            >
+              {target.containers.map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
+            </select>
+          )}
+
+          <label
+            style={{
+              marginLeft: 8,
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 4,
+              color: 'var(--fg-2)',
+              cursor: 'pointer',
+              fontSize: 11,
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={follow}
+              onChange={(e) => setFollow(e.target.checked)}
+            />
+            follow
+          </label>
+
+          <span
+            style={{
+              color: ended ? 'var(--fg-3)' : 'var(--ok, #7fb069)',
+              fontSize: 11,
+            }}
+          >
+            {ended ? (error ? `ended: ${error}` : 'ended') : `${lines.length} line${lines.length === 1 ? '' : 's'}`}
+          </span>
+
+          <div style={{ flex: 1 }} />
+
+          <button
+            type="button"
+            className="btn sm"
+            onClick={copyAll}
+            disabled={lines.length === 0}
+            title="copy buffer"
+            style={{ height: 22, fontSize: 11, padding: '0 8px' }}
+          >
+            copy
+          </button>
+          <button
+            type="button"
+            className="btn sm"
+            onClick={stopNow}
+            disabled={ended}
+            title="stop streaming"
+            style={{ height: 22, fontSize: 11, padding: '0 8px' }}
+          >
+            stop
+          </button>
+          <button
+            type="button"
+            className="btn sm"
+            onClick={onClose}
+            title="close (Esc)"
+            style={{ height: 22, fontSize: 11, padding: '0 8px' }}
+          >
+            ×
+          </button>
+        </div>
+
+        <div
+          ref={scrollerRef}
+          style={{
+            flex: 1,
+            overflow: 'auto',
+            padding: 12,
+            background: '#06090b',
+          }}
+        >
+          {lines.length === 0 ? (
+            <span style={{ color: 'var(--fg-3)' }}>
+              {ended ? 'no log lines' : 'waiting for output…'}
+            </span>
+          ) : (
+            <pre style={{ margin: 0, color: 'var(--fg)', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+              {lines.join('\n')}
+            </pre>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ──────────────────────────────────────────────────────────────
 // Subtab views
 // ──────────────────────────────────────────────────────────────
 
 type ViewProps = { agentId: string; onDescribe: (t: DescribeTarget) => void };
+type PodViewProps = ViewProps & { onLogs: (t: LogsTarget) => void };
 
-function PodsView({ agentId, onDescribe }: ViewProps) {
+function PodsView({ agentId, onDescribe, onLogs }: PodViewProps) {
   const { data, error, loading } = useK8sList<K8sPod[]>(
     agentId,
     { type: 'K8sListPodsRequest' },
@@ -425,6 +683,7 @@ function PodsView({ agentId, onDescribe }: ViewProps) {
                 <th style={tdBase}>restarts</th>
                 <th style={tdBase}>age</th>
                 <th style={tdBase}>node</th>
+                <th style={tdBase}></th>
               </tr>
             </thead>
             <tbody>
@@ -444,6 +703,31 @@ function PodsView({ agentId, onDescribe }: ViewProps) {
                   <td style={tdBase}>{p.restarts}</td>
                   <td style={tdBase}>{fmtAge(p.age_secs)}</td>
                   <td style={tdMuted}>{p.node ?? '—'}</td>
+                  <td style={tdBase}>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        onLogs({
+                          namespace: p.namespace,
+                          podName: p.name,
+                          containers: p.containers,
+                        })
+                      }
+                      style={{
+                        background: 'transparent',
+                        border: '1px solid var(--line)',
+                        borderRadius: 3,
+                        color: 'var(--fg-2)',
+                        cursor: 'pointer',
+                        fontFamily: 'var(--mono)',
+                        fontSize: 10,
+                        padding: '2px 6px',
+                      }}
+                      title="tail logs"
+                    >
+                      logs
+                    </button>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -779,6 +1063,7 @@ type Props = {
 
 export default function KubernetesHub({ agentId, subtab, onSubtabChange }: Props) {
   const [describeTarget, setDescribeTarget] = useState<DescribeTarget | null>(null);
+  const [logsTarget, setLogsTarget] = useState<LogsTarget | null>(null);
   return (
     <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
       <nav
@@ -847,7 +1132,7 @@ export default function KubernetesHub({ agentId, subtab, onSubtabChange }: Props
       </nav>
 
       <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
-        {subtab === 'pods'        && <PodsView        agentId={agentId} onDescribe={setDescribeTarget} />}
+        {subtab === 'pods'        && <PodsView        agentId={agentId} onDescribe={setDescribeTarget} onLogs={setLogsTarget} />}
         {subtab === 'deployments' && <DeploymentsView agentId={agentId} onDescribe={setDescribeTarget} />}
         {subtab === 'services'    && <ServicesView    agentId={agentId} onDescribe={setDescribeTarget} />}
         {subtab === 'ingresses'   && <IngressesView   agentId={agentId} onDescribe={setDescribeTarget} />}
@@ -860,6 +1145,13 @@ export default function KubernetesHub({ agentId, subtab, onSubtabChange }: Props
           agentId={agentId}
           target={describeTarget}
           onClose={() => setDescribeTarget(null)}
+        />
+      )}
+      {logsTarget && (
+        <LogsModal
+          agentId={agentId}
+          target={logsTarget}
+          onClose={() => setLogsTarget(null)}
         />
       )}
     </div>
