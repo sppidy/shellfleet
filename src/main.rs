@@ -164,9 +164,32 @@ async fn main() {
 
     // Send a register message
     let hostname = hostname::get().unwrap_or_else(|_| "unknown-agent".into()).to_string_lossy().to_string();
+
+    // Probe each subsystem and advertise what we find. The dashboard
+    // hides tabs that aren't represented here, so a host with no docker
+    // never has a Docker tab cluttering its view. K8s detection lands
+    // in v1 with the kube-rs feature; for now we never advertise it.
+    let mut capabilities: Vec<String> = Vec::with_capacity(4);
+    if systemd::systemd_available().await {
+        capabilities.push("systemd".into());
+    }
+    if docker::docker_available().await {
+        capabilities.push("docker".into());
+        // swarm_role() also re-checks docker, but the redundant probe is
+        // cheap and keeps the two answers consistent.
+        match docker::swarm_role().await {
+            shared::SwarmRole::Manager | shared::SwarmRole::Worker => {
+                capabilities.push("swarm".into());
+            }
+            shared::SwarmRole::NotInSwarm => {}
+        }
+    }
+    println!("agent capabilities: {capabilities:?}");
+
     let _ = tx.send(Message::Register {
         hostname,
         protocol_version: shared::PROTOCOL_VERSION,
+        capabilities,
     });
 
     // If we exited mid-apt-run last time (e.g. libc/systemd self-upgrade

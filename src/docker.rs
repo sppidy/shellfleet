@@ -37,7 +37,7 @@ struct DockerInfo {
     swarm: Option<DockerInfoSwarm>,
 }
 
-async fn docker_available() -> bool {
+pub async fn docker_available() -> bool {
     Command::new("docker")
         .arg("version")
         .arg("--format")

@@ -2,6 +2,18 @@ use serde::Deserialize;
 use shared::ServiceInfo;
 use tokio::process::Command;
 
+/// Cheap probe used at agent startup to decide whether to advertise the
+/// `"systemd"` capability. `systemctl --version` exits 0 when the binary
+/// + dbus are reachable; we don't need to parse the output.
+pub async fn systemd_available() -> bool {
+    Command::new("systemctl")
+        .arg("--version")
+        .output()
+        .await
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
 #[derive(Debug, Deserialize)]
 struct SystemctlJsonRow {
     unit: Option<String>,
