@@ -635,6 +635,32 @@ async fn main() {
                                     });
                                 });
                             }
+                            Message::K8sDescribeRequest { kind, namespace, name } => {
+                                let tx_clone = tx.clone();
+                                tokio::spawn(async move {
+                                    #[cfg(feature = "kube")]
+                                    let (yaml, error) = match k8s::describe(
+                                        &kind,
+                                        namespace.as_deref(),
+                                        &name,
+                                    ).await {
+                                        Ok(y) => (y, None),
+                                        Err(e) => (String::new(), Some(e)),
+                                    };
+                                    #[cfg(not(feature = "kube"))]
+                                    let (yaml, error) = (
+                                        String::new(),
+                                        Some("agent built without k8s support".into()),
+                                    );
+                                    let _ = tx_clone.send(Message::K8sDescribeResponse {
+                                        kind,
+                                        namespace,
+                                        name,
+                                        yaml,
+                                        error,
+                                    });
+                                });
+                            }
                             Message::SwarmServiceActionRequest { name, action } => {
                                 let tx_clone = tx.clone();
                                 tokio::spawn(async move {

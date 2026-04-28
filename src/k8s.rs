@@ -385,3 +385,61 @@ pub async fn list_events() -> Result<Vec<K8sEvent>, String> {
 
     Ok(out)
 }
+
+/// Fetch one object and return it as YAML. The kind dispatch is
+/// explicit because each typed Api<T> wants a different `T`; we
+/// could go through kube's DynamicObject API instead but the
+/// trade-off (looser typing, runtime kind resolution) isn't worth
+/// it for the six concrete kinds we expose. `managedFields` is
+/// stripped to keep the modal readable — kubectl does the same by
+/// default in its describe output.
+pub async fn describe(
+    kind: &str,
+    namespace: Option<&str>,
+    name: &str,
+) -> Result<String, String> {
+    let client = Client::try_default()
+        .await
+        .map_err(|e| format!("kube client: {e}"))?;
+
+    let yaml = match kind {
+        "pod" => describe_one::<Pod>(client, namespace, name).await?,
+        "deployment" => describe_one::<Deployment>(client, namespace, name).await?,
+        "service" => describe_one::<Service>(client, namespace, name).await?,
+        "ingress" => describe_one::<Ingress>(client, namespace, name).await?,
+        "pvc" => describe_one::<PersistentVolumeClaim>(client, namespace, name).await?,
+        "event" => describe_one::<Event>(client, namespace, name).await?,
+        other => return Err(format!("unsupported kind: {other}")),
+    };
+    Ok(yaml)
+}
+
+async fn describe_one<K>(
+    client: Client,
+    namespace: Option<&str>,
+    name: &str,
+) -> Result<String, String>
+where
+    K: kube::Resource<Scope = k8s_openapi::NamespaceResourceScope>
+        + serde::Serialize
+        + Clone
+        + std::fmt::Debug
+        + serde::de::DeserializeOwned
+        + Send
+        + Sync
+        + 'static,
+    <K as kube::Resource>::DynamicType: Default,
+{
+    let api: Api<K> = match namespace {
+        Some(ns) => Api::namespaced(client, ns),
+        // None on a namespaced resource is meaningless; fail loud.
+        None => return Err("namespaced kind needs a namespace".into()),
+    };
+    let mut obj = api
+        .get(name)
+        .await
+        .map_err(|e| format!("get: {e}"))?;
+    // Strip managedFields — verbose, useless in a describe view.
+    obj.meta_mut().managed_fields = None;
+    serde_yaml::to_string(&obj).map_err(|e| format!("yaml: {e}"))
+}

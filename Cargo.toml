@@ -15,7 +15,7 @@ path = "src/main.rs"
 # for the sys-manager-agent-k8s package, which adds kube-rs + k8s-openapi
 # (~2 MB of crypto deps) so the agent can talk to a kube-apiserver.
 default = []
-kube = ["dep:kube", "dep:k8s-openapi", "dep:chrono", "dep:rustls"]
+kube = ["dep:kube", "dep:k8s-openapi", "dep:chrono", "dep:rustls", "dep:serde_yaml"]
 
 [dependencies]
 crossbeam-channel = "0.5.15"
@@ -44,6 +44,10 @@ k8s-openapi = { version = "0.25", default-features = false, features = ["v1_32"]
 # `install_default()` at the top of main() when the `kube` feature is
 # on; otherwise rustls panics on first apiserver call.
 rustls = { version = "0.23", default-features = false, features = ["ring"], optional = true }
+# YAML serialization for K8sDescribeResponse. serde_yaml is archived
+# upstream but still functional and pervasive in the k8s ecosystem;
+# revisit if a maintained fork (serde_yml) becomes the de-facto choice.
+serde_yaml = { version = "0.9", optional = true }
 
 # cargo-deb metadata. Used by the .github/workflows/agent-deb.yml job in the
 # superproject to publish .deb packages to https://sppidy.github.io/sys-manager.
