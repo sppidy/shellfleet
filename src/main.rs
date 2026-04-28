@@ -922,7 +922,8 @@ fn is_mutating_agent_message(msg: &Message) -> bool {
         | DockerVolumeInspectRequest { .. }
         | SwarmStackListRequest
         | SwarmStackInspectRequest { .. }
-        | DockerStatsRequest => false,
+        | DockerStatsRequest
+        | K8sListPodsRequest => false,
         // Everything else is treated as mutating. AptRefreshRequest
         // counts as mutating because it triggers `apt-get update`,
         // which writes to /var/lib/apt/lists and can interact with
