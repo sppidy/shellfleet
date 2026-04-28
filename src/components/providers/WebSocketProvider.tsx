@@ -3,6 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { AgentMessagePayload, UiMessage } from '@/lib/types';
 import { useSession } from './SessionProvider';
+import { useUi } from './UiProvider';
 
 type AgentMessageHandler = (msg: AgentMessagePayload) => void;
 
@@ -46,6 +47,13 @@ const WS_URL = resolveWsUrl();
 
 export function WebSocketProvider({ children }: { children: React.ReactNode }) {
   const { status } = useSession();
+  const { toast } = useUi();
+  // Keep toast in a ref so the WS effect doesn't tear down and reconnect
+  // every time React rebinds the callback identity.
+  const toastRef = useRef(toast);
+  useEffect(() => {
+    toastRef.current = toast;
+  }, [toast]);
   const [agents, setAgents] = useState<string[]>([]);
   const [agentCapabilities, setAgentCapabilities] = useState<Record<string, string[]>>({});
   const [isConnected, setIsConnected] = useState(false);
@@ -143,6 +151,9 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
             setAgentCapabilities(msg.payload.capabilities ?? {});
           } else if (msg.type === 'AgentMessage') {
             dispatch(msg.payload.agent_id, msg.payload.message);
+          } else if (msg.type === 'PermissionDenied') {
+            const { variant_type, reason } = msg.payload;
+            toastRef.current('error', `${variant_type} denied: ${reason}`);
           }
         } catch (e) {
           console.error('failed to parse WS message:', e);

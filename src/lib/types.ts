@@ -685,4 +685,8 @@ export type UiMessage =
       };
     }
   | { type: 'SendToAgent'; payload: { agent_id: string; message: AgentMessagePayload } }
-  | { type: 'AgentMessage'; payload: { agent_id: string; message: AgentMessagePayload } };
+  | { type: 'AgentMessage'; payload: { agent_id: string; message: AgentMessagePayload } }
+  | {
+      type: 'PermissionDenied';
+      payload: { agent_id: string; variant_type: string; reason: string };
+    };
