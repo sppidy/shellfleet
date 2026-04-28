@@ -3,12 +3,21 @@
 //! listing existing archives at a destination and restoring a named
 //! archive to an operator-chosen root path.
 
+use aws_sdk_s3::primitives::ByteStream;
+use aws_sdk_s3::types::{CompletedMultipartUpload, CompletedPart};
+use aws_sdk_s3::Client as S3Client;
 use shared::{BackupArchive, BackupMode};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
 
 const LOG_CAP: usize = 8_000;
+/// Above this many bytes we use S3 multipart upload (~5 MB minimum
+/// per non-final part is the S3 rule). Single PUT under it is one
+/// less round-trip and safer on small files.
+const MULTIPART_THRESHOLD: u64 = 64 * 1024 * 1024;
+const MULTIPART_CHUNK: usize = 16 * 1024 * 1024;
 
 #[derive(Debug, Clone)]
 pub enum Dest {
@@ -57,6 +66,154 @@ fn truncate(s: &mut String, cap: usize) {
         s.drain(..cut);
         s.insert_str(0, &head);
     }
+}
+
+/// Build an S3 client from the standard AWS credential chain.
+/// Honors AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY / AWS_REGION /
+/// AWS_ENDPOINT_URL (for MinIO / R2 / B2 / etc.) — same env shape
+/// the previous `aws` CLI shellout used.
+async fn s3_client() -> S3Client {
+    let cfg = aws_config::defaults(aws_config::BehaviorVersion::latest())
+        .load()
+        .await;
+    S3Client::new(&cfg)
+}
+
+/// Single-PUT upload for files under MULTIPART_THRESHOLD.
+async fn s3_put_object(
+    client: &S3Client,
+    bucket: &str,
+    key: &str,
+    path: &Path,
+) -> Result<u64, String> {
+    let body = ByteStream::from_path(path)
+        .await
+        .map_err(|e| format!("ByteStream::from_path: {e}"))?;
+    let bytes = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+    client
+        .put_object()
+        .bucket(bucket)
+        .key(key)
+        .body(body)
+        .send()
+        .await
+        .map_err(|e| format!("PutObject: {}", aws_sdk_err(&e)))?;
+    Ok(bytes)
+}
+
+/// Multipart upload for larger files. Uses MULTIPART_CHUNK chunks;
+/// aborts the upload on any part failure so we don't leave half-
+/// finished multipart sessions accumulating storage on the bucket.
+async fn s3_multipart_upload(
+    client: &S3Client,
+    bucket: &str,
+    key: &str,
+    path: &Path,
+) -> Result<u64, String> {
+    let create = client
+        .create_multipart_upload()
+        .bucket(bucket)
+        .key(key)
+        .send()
+        .await
+        .map_err(|e| format!("CreateMultipartUpload: {}", aws_sdk_err(&e)))?;
+    let upload_id = match create.upload_id() {
+        Some(s) => s.to_string(),
+        None => return Err("CreateMultipartUpload returned no upload_id".into()),
+    };
+
+    let result = upload_parts(client, bucket, key, &upload_id, path).await;
+    match result {
+        Ok((parts, total_bytes)) => {
+            let completed = CompletedMultipartUpload::builder()
+                .set_parts(Some(parts))
+                .build();
+            client
+                .complete_multipart_upload()
+                .bucket(bucket)
+                .key(key)
+                .upload_id(&upload_id)
+                .multipart_upload(completed)
+                .send()
+                .await
+                .map_err(|e| format!("CompleteMultipartUpload: {}", aws_sdk_err(&e)))?;
+            Ok(total_bytes)
+        }
+        Err(e) => {
+            // Best-effort abort; ignore secondary error.
+            let _ = client
+                .abort_multipart_upload()
+                .bucket(bucket)
+                .key(key)
+                .upload_id(&upload_id)
+                .send()
+                .await;
+            Err(e)
+        }
+    }
+}
+
+async fn upload_parts(
+    client: &S3Client,
+    bucket: &str,
+    key: &str,
+    upload_id: &str,
+    path: &Path,
+) -> Result<(Vec<CompletedPart>, u64), String> {
+    let mut file = tokio::fs::File::open(path)
+        .await
+        .map_err(|e| format!("open {}: {e}", path.display()))?;
+    let mut buf = vec![0u8; MULTIPART_CHUNK];
+    let mut parts: Vec<CompletedPart> = Vec::new();
+    let mut part_number: i32 = 1;
+    let mut total: u64 = 0;
+    loop {
+        // Drain a full chunk's worth (or the trailing remainder) from
+        // the file. Tokio's read may not fill the buffer in one call.
+        let mut filled = 0usize;
+        loop {
+            match file.read(&mut buf[filled..]).await {
+                Ok(0) => break,
+                Ok(n) => {
+                    filled += n;
+                    if filled == buf.len() {
+                        break;
+                    }
+                }
+                Err(e) => return Err(format!("read {}: {e}", path.display())),
+            }
+        }
+        if filled == 0 {
+            break;
+        }
+        total += filled as u64;
+        let body = ByteStream::from(buf[..filled].to_vec());
+        let resp = client
+            .upload_part()
+            .bucket(bucket)
+            .key(key)
+            .upload_id(upload_id)
+            .part_number(part_number)
+            .body(body)
+            .send()
+            .await
+            .map_err(|e| format!("UploadPart#{part_number}: {}", aws_sdk_err(&e)))?;
+        parts.push(
+            CompletedPart::builder()
+                .set_e_tag(resp.e_tag().map(|s| s.to_string()))
+                .part_number(part_number)
+                .build(),
+        );
+        part_number += 1;
+    }
+    Ok((parts, total))
+}
+
+/// Stringify an aws-sdk error in a way that surfaces the upstream
+/// message (HTTP status, S3 code) without dragging in the entire
+/// SdkError debug representation.
+fn aws_sdk_err<E: std::fmt::Display>(e: &E) -> String {
+    e.to_string()
 }
 
 /// Returns (success, archive_uri, bytes, log, error).
@@ -152,10 +309,12 @@ pub async fn run_backup(
             (true, archive_path.display().to_string(), bytes, log, None)
         }
         Dest::S3 { bucket, prefix } => {
-            // Pipe `tar -czf -` into `aws s3 cp - s3://bucket/prefix/<name>`.
-            // The aws CLI must be installed on the host and configured
-            // (env vars or ~/.aws/credentials). For S3-compatible
-            // backends, set AWS_ENDPOINT_URL on the agent service.
+            // Two-phase: tar to a tempfile, then upload via aws-sdk-s3.
+            // The previous CLI shellout streamed tar→aws so disk
+            // overhead was zero, but `aws s3 cp` couldn't report bytes
+            // back to us and didn't natively retry on connection drops.
+            // The temp file pays one disk pass for accurate byte
+            // tracking + native multipart with retry hooks.
             let key = if prefix.is_empty() {
                 archive_name.clone()
             } else {
@@ -163,83 +322,72 @@ pub async fn run_backup(
             };
             let s3_uri = format!("s3://{bucket}/{key}");
 
+            let tmp = match tempfile::Builder::new()
+                .prefix("sys-manager-backup-")
+                .suffix(".tar.gz")
+                .tempfile()
+            {
+                Ok(t) => t,
+                Err(e) => {
+                    return (false, String::new(), 0, log, Some(format!("tempfile: {e}")));
+                }
+            };
+            let tmp_path = tmp.path().to_path_buf();
+
             let mut tar_cmd = Command::new("tar");
             tar_cmd
                 .arg("--ignore-failed-read")
                 .arg("-czf")
-                .arg("-")
+                .arg(&tmp_path)
                 .args(&existing)
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped());
-            let mut tar = match tar_cmd.spawn() {
-                Ok(c) => c,
+            let tar_out = match tar_cmd.output().await {
+                Ok(o) => o,
                 Err(e) => {
                     return (false, String::new(), 0, log, Some(format!("spawn tar: {e}")));
                 }
             };
-            let tar_stdout = tar.stdout.take().expect("tar stdout piped");
-            let tar_stdout_stdio: Stdio = match tar_stdout.try_into() {
-                Ok(s) => s,
-                Err(e) => {
-                    return (false, String::new(), 0, log, Some(format!("pipe tar->aws: {e}")));
-                }
+            if !tar_out.stderr.is_empty() {
+                log.push_str("--- tar stderr ---\n");
+                log.push_str(&String::from_utf8_lossy(&tar_out.stderr));
+            }
+            truncate(&mut log, LOG_CAP);
+            if !tar_out.status.success() {
+                return (
+                    false,
+                    String::new(),
+                    0,
+                    log,
+                    Some(format!("tar exit {:?}", tar_out.status.code())),
+                );
+            }
+            let local_bytes = std::fs::metadata(&tmp_path).map(|m| m.len()).unwrap_or(0);
+
+            let client = s3_client().await;
+            let upload_result = if local_bytes >= MULTIPART_THRESHOLD {
+                log.push_str(&format!(
+                    "uploading {local_bytes} bytes via multipart ({}-byte chunks)\n",
+                    MULTIPART_CHUNK
+                ));
+                s3_multipart_upload(&client, &bucket, &key, &tmp_path).await
+            } else {
+                log.push_str(&format!("uploading {local_bytes} bytes via PutObject\n"));
+                s3_put_object(&client, &bucket, &key, &tmp_path).await
             };
+            // Tempfile drops here either way (Drop unlinks /tmp file).
+            drop(tmp);
 
-            let mut s3_cmd = Command::new("aws");
-            s3_cmd
-                .arg("s3")
-                .arg("cp")
-                .arg("-")
-                .arg(&s3_uri)
-                .stdin(tar_stdout_stdio)
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped());
-            let s3_output = s3_cmd.output().await;
-
-            // Wait on tar separately so we can capture its stderr.
-            let tar_out = tar.wait_with_output().await;
-
-            match (tar_out, s3_output) {
-                (Ok(t), Ok(s)) => {
-                    if !t.stderr.is_empty() {
-                        log.push_str("--- tar stderr ---\n");
-                        log.push_str(&String::from_utf8_lossy(&t.stderr));
-                    }
-                    if !s.stdout.is_empty() {
-                        log.push_str(&String::from_utf8_lossy(&s.stdout));
-                    }
-                    if !s.stderr.is_empty() {
-                        log.push_str("--- aws stderr ---\n");
-                        log.push_str(&String::from_utf8_lossy(&s.stderr));
-                    }
+            match upload_result {
+                Ok(uploaded) => {
+                    log.push_str(&format!("wrote {s3_uri} ({uploaded} bytes)\n"));
                     truncate(&mut log, LOG_CAP);
-                    if !t.status.success() {
-                        return (
-                            false,
-                            String::new(),
-                            0,
-                            log,
-                            Some(format!("tar exit {:?}", t.status.code())),
-                        );
-                    }
-                    if !s.status.success() {
-                        return (
-                            false,
-                            String::new(),
-                            0,
-                            log,
-                            Some(format!("aws s3 cp exit {:?}", s.status.code())),
-                        );
-                    }
-                    log.push_str(&format!("wrote {s3_uri}\n"));
-                    truncate(&mut log, LOG_CAP);
-                    // We don't easily get the byte count from `aws s3 cp`,
-                    // so leave bytes=0 and let the operator inspect the
-                    // bucket. (Listing later returns the size.)
-                    (true, s3_uri, 0, log, None)
+                    (true, s3_uri, uploaded, log, None)
                 }
-                (Err(e), _) => (false, String::new(), 0, log, Some(format!("tar wait: {e}"))),
-                (_, Err(e)) => (false, String::new(), 0, log, Some(format!("aws spawn: {e}"))),
+                Err(e) => {
+                    truncate(&mut log, LOG_CAP);
+                    (false, String::new(), 0, log, Some(e))
+                }
             }
         }
     }
@@ -294,110 +442,59 @@ pub async fn list_archives(
             (true, out, None)
         }
         Dest::S3 { bucket, prefix } => {
-            let mut cmd = Command::new("aws");
-            cmd.arg("s3api")
-                .arg("list-objects-v2")
-                .arg("--bucket")
-                .arg(&bucket)
-                .arg("--output")
-                .arg("json");
-            if !prefix.is_empty() {
-                cmd.arg("--prefix").arg(format!("{prefix}/"));
-            }
-            cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
-            let output = match cmd.output().await {
-                Ok(o) => o,
-                Err(e) => return (false, Vec::new(), Some(format!("aws spawn: {e}"))),
-            };
-            if !output.status.success() {
-                let err = String::from_utf8_lossy(&output.stderr).into_owned();
-                return (false, Vec::new(), Some(err));
-            }
-            #[derive(serde::Deserialize)]
-            struct ListResp {
-                #[serde(rename = "Contents", default)]
-                contents: Vec<S3Object>,
-            }
-            #[derive(serde::Deserialize)]
-            struct S3Object {
-                #[serde(rename = "Key")]
-                key: String,
-                #[serde(rename = "Size", default)]
-                size: u64,
-                #[serde(rename = "LastModified", default)]
-                last_modified: String,
-            }
-            let parsed: ListResp = match serde_json::from_slice(&output.stdout) {
-                Ok(p) => p,
-                Err(e) => {
-                    // An empty bucket returns "{}" with no Contents key,
-                    // which serde will tolerate via default. If we
-                    // really fail to parse, bubble up.
-                    return (false, Vec::new(), Some(format!("parse aws output: {e}")));
+            let client = s3_client().await;
+            // Paginate through every page so a long-lived bucket
+            // with > 1000 archives still surfaces them all.
+            let mut continuation: Option<String> = None;
+            let mut out: Vec<BackupArchive> = Vec::new();
+            loop {
+                let mut r = client.list_objects_v2().bucket(&bucket);
+                if !prefix.is_empty() {
+                    r = r.prefix(format!("{prefix}/"));
                 }
-            };
-            let mut out: Vec<BackupArchive> = parsed
-                .contents
-                .into_iter()
-                .filter(|o| o.key.ends_with(".tar.gz"))
-                .map(|o| {
-                    let name = o
-                        .key
-                        .rsplit('/')
-                        .next()
-                        .unwrap_or(&o.key)
-                        .to_string();
-                    let mtime = chrono_parse_iso(&o.last_modified);
-                    BackupArchive {
-                        name,
-                        uri: format!("s3://{bucket}/{}", o.key),
-                        bytes: o.size,
-                        mtime,
+                if let Some(t) = continuation.as_ref() {
+                    r = r.continuation_token(t);
+                }
+                let page = match r.send().await {
+                    Ok(p) => p,
+                    Err(e) => {
+                        return (
+                            false,
+                            Vec::new(),
+                            Some(format!("ListObjectsV2: {}", aws_sdk_err(&e))),
+                        );
                     }
-                })
-                .collect();
+                };
+                for obj in page.contents() {
+                    let key = match obj.key() {
+                        Some(k) => k,
+                        None => continue,
+                    };
+                    if !key.ends_with(".tar.gz") {
+                        continue;
+                    }
+                    let name = key.rsplit('/').next().unwrap_or(key).to_string();
+                    let bytes = obj.size().unwrap_or(0).max(0) as u64;
+                    let mtime = obj.last_modified().map(|t| t.secs()).unwrap_or(0);
+                    out.push(BackupArchive {
+                        name,
+                        uri: format!("s3://{bucket}/{key}"),
+                        bytes,
+                        mtime,
+                    });
+                }
+                if !page.is_truncated().unwrap_or(false) {
+                    break;
+                }
+                continuation = page.next_continuation_token().map(|s| s.to_string());
+                if continuation.is_none() {
+                    break;
+                }
+            }
             out.sort_by(|a, b| b.mtime.cmp(&a.mtime));
             (true, out, None)
         }
     }
-}
-
-fn chrono_parse_iso(s: &str) -> i64 {
-    // S3 LastModified is RFC3339, e.g. "2026-04-25T16:34:12.000Z".
-    // Avoid pulling in chrono just for this — parse the digits we need.
-    // YYYY-MM-DDTHH:MM:SS
-    if s.len() < 19 {
-        return 0;
-    }
-    let bytes = s.as_bytes();
-    let parse = |start: usize, end: usize| -> Option<i64> {
-        std::str::from_utf8(&bytes[start..end]).ok()?.parse().ok()
-    };
-    let year = parse(0, 4).unwrap_or(0);
-    let month = parse(5, 7).unwrap_or(0);
-    let day = parse(8, 10).unwrap_or(0);
-    let hour = parse(11, 13).unwrap_or(0);
-    let minute = parse(14, 16).unwrap_or(0);
-    let second = parse(17, 19).unwrap_or(0);
-    // crude but adequate: convert to a sortable epoch-ish without
-    // bringing in chrono. Days-from-epoch via a fixed table per month.
-    if year < 1970 {
-        return 0;
-    }
-    let days_per_month_leap = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-    let days_per_month_normal = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-    let mut days: i64 = 0;
-    for y in 1970..year {
-        let leap = y % 4 == 0 && (y % 100 != 0 || y % 400 == 0);
-        days += if leap { 366 } else { 365 };
-    }
-    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
-    let table = if leap { &days_per_month_leap } else { &days_per_month_normal };
-    for m in 1..month {
-        days += table[(m - 1) as usize];
-    }
-    days += day - 1;
-    days * 86400 + hour * 3600 + minute * 60 + second
 }
 
 /// Restore a single archive (tar.gz) into `dest_root` on the agent.
@@ -420,24 +517,30 @@ pub async fn restore(
     let mut log = String::new();
 
     if let Some(rest) = archive_uri.strip_prefix("s3://") {
-        // aws s3 cp <s3uri> - | tar -xzf - -C dest
-        let s3_uri = format!("s3://{rest}");
-        let mut s3_cmd = Command::new("aws");
-        s3_cmd
-            .arg("s3")
-            .arg("cp")
-            .arg(&s3_uri)
-            .arg("-")
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        let mut s3 = match s3_cmd.spawn() {
-            Ok(c) => c,
-            Err(e) => return (false, log, Some(format!("spawn aws: {e}"))),
-        };
-        let s3_stdout = s3.stdout.take().expect("aws stdout piped");
-        let s3_stdout_stdio: Stdio = match s3_stdout.try_into() {
-            Ok(s) => s,
-            Err(e) => return (false, log, Some(format!("pipe aws->tar: {e}"))),
+        // s3://bucket/key path. Stream GetObject body into tar's
+        // stdin so we don't need 2x archive size on disk during
+        // restore.
+        let mut parts = rest.splitn(2, '/');
+        let bucket = parts.next().unwrap_or("").to_string();
+        let key = parts.next().unwrap_or("").to_string();
+        if bucket.is_empty() || key.is_empty() {
+            return (
+                false,
+                log,
+                Some(format!("malformed archive URI: s3://{rest}")),
+            );
+        }
+
+        let client = s3_client().await;
+        let get = match client
+            .get_object()
+            .bucket(&bucket)
+            .key(&key)
+            .send()
+            .await
+        {
+            Ok(o) => o,
+            Err(e) => return (false, log, Some(format!("GetObject: {}", aws_sdk_err(&e)))),
         };
 
         let mut tar_cmd = Command::new("tar");
@@ -446,38 +549,69 @@ pub async fn restore(
             .arg("-")
             .arg("-C")
             .arg(dest_root_trim)
-            .stdin(s3_stdout_stdio)
+            .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        let tar_output = tar_cmd.output().await;
-        let s3_output = s3.wait_with_output().await;
+        let mut tar = match tar_cmd.spawn() {
+            Ok(c) => c,
+            Err(e) => return (false, log, Some(format!("spawn tar: {e}"))),
+        };
+        let mut tar_stdin = match tar.stdin.take() {
+            Some(s) => s,
+            None => return (false, log, Some("tar stdin not piped".into())),
+        };
 
-        match (s3_output, tar_output) {
-            (Ok(s), Ok(t)) => {
-                if !s.stderr.is_empty() {
-                    log.push_str("--- aws stderr ---\n");
-                    log.push_str(&String::from_utf8_lossy(&s.stderr));
+        // Pump the GetObject body into tar's stdin. Always shut
+        // down tar's stdin (success OR failure) so the wait_with_output
+        // below doesn't hang waiting for an EOF that never comes; if
+        // the body errored we kill tar explicitly and don't await it.
+        let mut body = get.body;
+        let mut pipe_err: Option<String> = None;
+        loop {
+            match body.try_next().await {
+                Ok(Some(chunk)) => {
+                    if let Err(e) = tar_stdin.write_all(&chunk).await {
+                        pipe_err = Some(format!("tar stdin write: {e}"));
+                        break;
+                    }
                 }
-                if !t.stdout.is_empty() {
-                    log.push_str(&String::from_utf8_lossy(&t.stdout));
+                Ok(None) => break,
+                Err(e) => {
+                    pipe_err = Some(format!("S3 body read: {e}"));
+                    break;
                 }
+            }
+        }
+        // Close stdin so tar can exit. Fine if shutdown errors after
+        // a write error — we already have a primary failure to report.
+        let _ = tar_stdin.shutdown().await;
+        drop(tar_stdin);
+
+        if let Some(e) = pipe_err {
+            // Don't wait on tar — kill and skip wait so we don't hang
+            // on a half-extracted archive.
+            let _ = tar.kill().await;
+            return (false, log, Some(e));
+        }
+
+        let tar_out = tar.wait_with_output().await;
+        match tar_out {
+            Ok(t) => {
                 if !t.stderr.is_empty() {
                     log.push_str("--- tar stderr ---\n");
                     log.push_str(&String::from_utf8_lossy(&t.stderr));
                 }
                 truncate(&mut log, LOG_CAP);
-                if !s.status.success() {
-                    return (false, log, Some(format!("aws exit {:?}", s.status.code())));
-                }
                 if !t.status.success() {
                     return (false, log, Some(format!("tar exit {:?}", t.status.code())));
                 }
-                log.push_str(&format!("restored {s3_uri} into {dest_root_trim}\n"));
+                log.push_str(&format!(
+                    "restored s3://{bucket}/{key} into {dest_root_trim}\n"
+                ));
                 truncate(&mut log, LOG_CAP);
                 (true, log, None)
             }
-            (Err(e), _) => (false, log, Some(format!("aws wait: {e}"))),
-            (_, Err(e)) => (false, log, Some(format!("tar wait: {e}"))),
+            Err(e) => (false, log, Some(format!("tar wait: {e}"))),
         }
     } else {
         // Local file path (with or without file:// prefix).
