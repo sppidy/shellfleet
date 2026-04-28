@@ -86,10 +86,13 @@ jobs:
           tailscale status || true
           echo '--- ping harbor ts ip ---'
           ping -c 2 -W 2 "${{ secrets.HARBOR_TS_IP }}" || true
-          echo '--- tcp 443 reach ---'
-          timeout 5 bash -c 'cat </dev/tcp/${{ secrets.HARBOR_TS_IP }}/443' \
-            && echo 'reachable' \
-            || echo 'NOT reachable'
+          # Use nc -zv for a clean SYN/SYNACK probe — `cat </dev/tcp/…`
+          # opens then immediately closes, which TLS servers reject
+          # with RST before any handshake, producing a false negative.
+          echo '--- tcp 443 reach (nc -zv) ---'
+          sudo apt-get install -y --no-install-recommends ncat 2>/dev/null \
+            && nc -zv -w 5 "${{ secrets.HARBOR_TS_IP }}" 443 \
+            || echo 'nc unavailable, skipping'
 
       - name: Pin Harbor hostname to tailnet IP
         shell: bash
