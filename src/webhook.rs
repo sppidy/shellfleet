@@ -6,7 +6,7 @@
 //! background task; failures are audited individually as `webhook.<kind>`
 //! rows so a Discord outage doesn't hide a successful Telegram delivery.
 //!
-//! ## Per-event env prefixes
+//! ## Per-event env prefixes — with a default-prefix fallback
 //!
 //! Each event type reads its own `<PREFIX>_*` env vars so operators can
 //! route them differently (e.g. nightly apt updates to a Slack channel,
@@ -19,6 +19,13 @@
 //! | health probe transition     | `HEALTH_`    | `Message::HealthProbeReport` |
 //! | backup job result           | `BACKUP_`    | `Message::BackupRunResponse` |
 //! | agent disconnect            | `DISCONNECT_`| WS receive-loop tear-down    |
+//!
+//! **Want one config for everything?** Set the prefix-less vars
+//! (`WEBHOOK_URL`, `WEBHOOK_FORMAT`, `SLACK_WEBHOOK_URL`,
+//! `DISCORD_WEBHOOK_URL`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`).
+//! Every event falls back to those when its own `<PREFIX>_*` is unset.
+//! Per-event vars still override when both are set, so you can route
+//! one event differently while leaving the rest on the default.
 //!
 //! ## Sink suffixes (per prefix)
 //!
@@ -199,31 +206,46 @@ fn env_or_empty(name: &str) -> String {
     std::env::var(name).unwrap_or_default()
 }
 
+/// Read a prefixed var, falling back to the bare (default) var when
+/// the prefixed one is unset or empty. Lets operators set one
+/// `WEBHOOK_URL` for everything and selectively override per event.
+fn env_with_fallback(prefix: &str, suffix: &str) -> String {
+    let prefixed = env_or_empty(&format!("{prefix}{suffix}"));
+    if !prefixed.is_empty() {
+        return prefixed;
+    }
+    env_or_empty(suffix)
+}
+
 fn configured_sinks(prefix: &str) -> Vec<Sink> {
     let mut sinks = Vec::new();
 
     // Generic webhook. Format chooses between structured JSON and
-    // Slack-style text.
-    let generic_url = env_or_empty(&format!("{prefix}WEBHOOK_URL"));
+    // Slack-style text. Format also falls back to the prefix-less var.
+    let generic_url = env_with_fallback(prefix, "WEBHOOK_URL");
     if !generic_url.is_empty() {
-        let format = std::env::var(format!("{prefix}WEBHOOK_FORMAT"))
-            .unwrap_or_else(|_| "json".to_string());
+        let format_specific = env_or_empty(&format!("{prefix}WEBHOOK_FORMAT"));
+        let format = if !format_specific.is_empty() {
+            format_specific
+        } else {
+            std::env::var("WEBHOOK_FORMAT").unwrap_or_else(|_| "json".to_string())
+        };
         if format == "slack" {
             sinks.push(Sink::Slack { url: generic_url });
         } else {
             sinks.push(Sink::GenericJson { url: generic_url });
         }
     }
-    let slack_url = env_or_empty(&format!("{prefix}SLACK_WEBHOOK_URL"));
+    let slack_url = env_with_fallback(prefix, "SLACK_WEBHOOK_URL");
     if !slack_url.is_empty() {
         sinks.push(Sink::Slack { url: slack_url });
     }
-    let discord_url = env_or_empty(&format!("{prefix}DISCORD_WEBHOOK_URL"));
+    let discord_url = env_with_fallback(prefix, "DISCORD_WEBHOOK_URL");
     if !discord_url.is_empty() {
         sinks.push(Sink::Discord { url: discord_url });
     }
-    let token = env_or_empty(&format!("{prefix}TELEGRAM_BOT_TOKEN"));
-    let chat_id = env_or_empty(&format!("{prefix}TELEGRAM_CHAT_ID"));
+    let token = env_with_fallback(prefix, "TELEGRAM_BOT_TOKEN");
+    let chat_id = env_with_fallback(prefix, "TELEGRAM_CHAT_ID");
     if !token.is_empty() && !chat_id.is_empty() {
         sinks.push(Sink::Telegram { bot_token: token, chat_id });
     }
