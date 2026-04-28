@@ -13,6 +13,16 @@ import type {
 } from '@/lib/types';
 
 // ──────────────────────────────────────────────────────────────
+// Describe target shared across subtabs
+// ──────────────────────────────────────────────────────────────
+
+type DescribeTarget = {
+  kind: 'pod' | 'deployment' | 'service' | 'ingress' | 'pvc' | 'event';
+  namespace: string | null;
+  name: string;
+};
+
+// ──────────────────────────────────────────────────────────────
 // Subtab map — kept in lockstep with DockerHub's pattern
 // ──────────────────────────────────────────────────────────────
 
@@ -132,6 +142,194 @@ const tdBase: React.CSSProperties = { padding: '6px 10px' };
 const tdMuted: React.CSSProperties = { ...tdBase, color: 'var(--fg-2)' };
 const thRow: React.CSSProperties = { color: 'var(--fg-3)', textAlign: 'left' };
 
+// Renders a row's name as a button that opens the describe modal.
+// Inline so each subtab table can pass its own kind without
+// threading describe handlers through generic wrappers.
+function NameLink({
+  label,
+  onClick,
+}: {
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      style={{
+        background: 'transparent',
+        border: 0,
+        padding: 0,
+        margin: 0,
+        font: 'inherit',
+        color: 'var(--fg)',
+        cursor: 'pointer',
+        textAlign: 'left',
+        textDecoration: 'underline dotted var(--fg-3)',
+        textUnderlineOffset: 2,
+      }}
+      title="describe"
+    >
+      {label}
+    </button>
+  );
+}
+
+// ──────────────────────────────────────────────────────────────
+// Describe modal — fetches yaml on mount, renders in monospace
+// ──────────────────────────────────────────────────────────────
+
+function DescribeModal({
+  agentId,
+  target,
+  onClose,
+}: {
+  agentId: string;
+  target: DescribeTarget;
+  onClose: () => void;
+}) {
+  const { sendToAgent, onAgentMessage } = useWebSocket();
+  const [yaml, setYaml] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setYaml(null);
+    setError(null);
+    sendToAgent(agentId, {
+      type: 'K8sDescribeRequest',
+      payload: { kind: target.kind, namespace: target.namespace, name: target.name },
+    });
+
+    const unsub = onAgentMessage(agentId, (msg) => {
+      if (msg.type !== 'K8sDescribeResponse') return;
+      // Match on identity in case multiple describe round-trips
+      // overlap. We only care about the one we asked for.
+      if (
+        msg.payload.kind !== target.kind ||
+        msg.payload.namespace !== target.namespace ||
+        msg.payload.name !== target.name
+      )
+        return;
+      if (msg.payload.error) {
+        setError(msg.payload.error);
+      } else {
+        setYaml(msg.payload.yaml);
+      }
+    });
+
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+
+    return () => {
+      unsub();
+      window.removeEventListener('keydown', onKey);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agentId, target.kind, target.namespace, target.name]);
+
+  const copyYaml = async () => {
+    if (!yaml) return;
+    try {
+      await navigator.clipboard.writeText(yaml);
+    } catch {
+      /* clipboard API may be unavailable; ignore */
+    }
+  };
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: 'fixed',
+        inset: 0,
+        background: 'rgba(0, 0, 0, 0.55)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        zIndex: 90,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: 'min(960px, 90vw)',
+          maxHeight: '85vh',
+          display: 'flex',
+          flexDirection: 'column',
+          background: 'var(--bg)',
+          border: '1px solid var(--line)',
+          borderRadius: 4,
+          fontFamily: 'var(--mono)',
+          fontSize: 12,
+          overflow: 'hidden',
+        }}
+      >
+        <div
+          style={{
+            padding: '8px 12px',
+            borderBottom: '1px solid var(--line)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            background: 'var(--bg-1)',
+          }}
+        >
+          <span style={{ color: 'var(--fg-3)' }}>describe</span>
+          <span style={{ color: 'var(--fg-2)' }}>{target.kind}</span>
+          <span style={{ color: 'var(--fg-3)' }}>/</span>
+          {target.namespace && (
+            <>
+              <span style={{ color: 'var(--fg-2)' }}>{target.namespace}</span>
+              <span style={{ color: 'var(--fg-3)' }}>/</span>
+            </>
+          )}
+          <span>{target.name}</span>
+          <div style={{ flex: 1 }} />
+          <button
+            type="button"
+            className="btn sm"
+            onClick={copyYaml}
+            disabled={!yaml}
+            title="copy YAML"
+            style={{ height: 22, fontSize: 11, padding: '0 8px' }}
+          >
+            copy
+          </button>
+          <button
+            type="button"
+            className="btn sm"
+            onClick={onClose}
+            title="close (Esc)"
+            style={{ height: 22, fontSize: 11, padding: '0 8px' }}
+          >
+            ×
+          </button>
+        </div>
+        <div
+          style={{
+            flex: 1,
+            overflow: 'auto',
+            padding: 12,
+            background: '#06090b',
+          }}
+        >
+          {error ? (
+            <pre style={{ margin: 0, color: 'var(--err, #e57373)' }}>{error}</pre>
+          ) : yaml === null ? (
+            <span style={{ color: 'var(--fg-3)' }}>loading…</span>
+          ) : (
+            <pre style={{ margin: 0, color: 'var(--fg)', whiteSpace: 'pre' }}>
+              {yaml}
+            </pre>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function PanelHead({
   title,
   meta,
@@ -193,7 +391,9 @@ const rowStyle: React.CSSProperties = { borderTop: '1px solid var(--line)' };
 // Subtab views
 // ──────────────────────────────────────────────────────────────
 
-function PodsView({ agentId }: { agentId: string }) {
+type ViewProps = { agentId: string; onDescribe: (t: DescribeTarget) => void };
+
+function PodsView({ agentId, onDescribe }: ViewProps) {
   const { data, error, loading } = useK8sList<K8sPod[]>(
     agentId,
     { type: 'K8sListPodsRequest' },
@@ -231,7 +431,14 @@ function PodsView({ agentId }: { agentId: string }) {
               {pods.map((p) => (
                 <tr key={`${p.namespace}/${p.name}`} style={rowStyle}>
                   <td style={tdMuted}>{p.namespace}</td>
-                  <td style={tdBase}>{p.name}</td>
+                  <td style={tdBase}>
+                    <NameLink
+                      label={p.name}
+                      onClick={() =>
+                        onDescribe({ kind: 'pod', namespace: p.namespace, name: p.name })
+                      }
+                    />
+                  </td>
                   <td style={tdBase}>{p.ready}</td>
                   <td style={{ ...tdBase, ...phaseStyle(p.phase) }}>{p.phase}</td>
                   <td style={tdBase}>{p.restarts}</td>
@@ -247,7 +454,7 @@ function PodsView({ agentId }: { agentId: string }) {
   );
 }
 
-function DeploymentsView({ agentId }: { agentId: string }) {
+function DeploymentsView({ agentId, onDescribe }: ViewProps) {
   const { data, error, loading } = useK8sList<K8sDeployment[]>(
     agentId,
     { type: 'K8sListDeploymentsRequest' },
@@ -285,7 +492,14 @@ function DeploymentsView({ agentId }: { agentId: string }) {
               {items.map((d) => (
                 <tr key={`${d.namespace}/${d.name}`} style={rowStyle}>
                   <td style={tdMuted}>{d.namespace}</td>
-                  <td style={tdBase}>{d.name}</td>
+                  <td style={tdBase}>
+                    <NameLink
+                      label={d.name}
+                      onClick={() =>
+                        onDescribe({ kind: 'deployment', namespace: d.namespace, name: d.name })
+                      }
+                    />
+                  </td>
                   <td style={tdBase}>{d.ready}</td>
                   <td style={tdBase}>{d.up_to_date}</td>
                   <td style={tdBase}>{d.available}</td>
@@ -301,7 +515,7 @@ function DeploymentsView({ agentId }: { agentId: string }) {
   );
 }
 
-function ServicesView({ agentId }: { agentId: string }) {
+function ServicesView({ agentId, onDescribe }: ViewProps) {
   const { data, error, loading } = useK8sList<K8sService[]>(
     agentId,
     { type: 'K8sListServicesRequest' },
@@ -339,7 +553,14 @@ function ServicesView({ agentId }: { agentId: string }) {
               {items.map((s) => (
                 <tr key={`${s.namespace}/${s.name}`} style={rowStyle}>
                   <td style={tdMuted}>{s.namespace}</td>
-                  <td style={tdBase}>{s.name}</td>
+                  <td style={tdBase}>
+                    <NameLink
+                      label={s.name}
+                      onClick={() =>
+                        onDescribe({ kind: 'service', namespace: s.namespace, name: s.name })
+                      }
+                    />
+                  </td>
                   <td style={tdBase}>{s.kind}</td>
                   <td style={tdMuted}>{s.cluster_ip ?? '—'}</td>
                   <td style={tdMuted}>
@@ -359,7 +580,7 @@ function ServicesView({ agentId }: { agentId: string }) {
   );
 }
 
-function IngressesView({ agentId }: { agentId: string }) {
+function IngressesView({ agentId, onDescribe }: ViewProps) {
   const { data, error, loading } = useK8sList<K8sIngress[]>(
     agentId,
     { type: 'K8sListIngressesRequest' },
@@ -396,7 +617,14 @@ function IngressesView({ agentId }: { agentId: string }) {
               {items.map((i) => (
                 <tr key={`${i.namespace}/${i.name}`} style={rowStyle}>
                   <td style={tdMuted}>{i.namespace}</td>
-                  <td style={tdBase}>{i.name}</td>
+                  <td style={tdBase}>
+                    <NameLink
+                      label={i.name}
+                      onClick={() =>
+                        onDescribe({ kind: 'ingress', namespace: i.namespace, name: i.name })
+                      }
+                    />
+                  </td>
                   <td style={tdMuted}>{i.class ?? '—'}</td>
                   <td style={tdMuted}>
                     {i.hosts.length > 0 ? i.hosts.join(', ') : '—'}
@@ -415,7 +643,7 @@ function IngressesView({ agentId }: { agentId: string }) {
   );
 }
 
-function PvcsView({ agentId }: { agentId: string }) {
+function PvcsView({ agentId, onDescribe }: ViewProps) {
   const { data, error, loading } = useK8sList<K8sPvc[]>(
     agentId,
     { type: 'K8sListPvcsRequest' },
@@ -454,7 +682,14 @@ function PvcsView({ agentId }: { agentId: string }) {
               {items.map((p) => (
                 <tr key={`${p.namespace}/${p.name}`} style={rowStyle}>
                   <td style={tdMuted}>{p.namespace}</td>
-                  <td style={tdBase}>{p.name}</td>
+                  <td style={tdBase}>
+                    <NameLink
+                      label={p.name}
+                      onClick={() =>
+                        onDescribe({ kind: 'pvc', namespace: p.namespace, name: p.name })
+                      }
+                    />
+                  </td>
                   <td style={{ ...tdBase, ...phaseStyle(p.status) }}>{p.status}</td>
                   <td style={tdMuted}>{p.volume_name ?? '—'}</td>
                   <td style={tdBase}>{p.capacity ?? '—'}</td>
@@ -473,6 +708,10 @@ function PvcsView({ agentId }: { agentId: string }) {
   );
 }
 
+// Events don't have a `name` field of their own — operators usually
+// want to describe the involved object, not the event row itself.
+// We keep events read-only for now; describe affordance lands when
+// we fold a kind/name parser onto event.object.
 function EventsView({ agentId }: { agentId: string }) {
   const { data, error, loading } = useK8sList<K8sEvent[]>(
     agentId,
@@ -539,6 +778,7 @@ type Props = {
 };
 
 export default function KubernetesHub({ agentId, subtab, onSubtabChange }: Props) {
+  const [describeTarget, setDescribeTarget] = useState<DescribeTarget | null>(null);
   return (
     <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
       <nav
@@ -607,13 +847,21 @@ export default function KubernetesHub({ agentId, subtab, onSubtabChange }: Props
       </nav>
 
       <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
-        {subtab === 'pods'        && <PodsView        agentId={agentId} />}
-        {subtab === 'deployments' && <DeploymentsView agentId={agentId} />}
-        {subtab === 'services'    && <ServicesView    agentId={agentId} />}
-        {subtab === 'ingresses'   && <IngressesView   agentId={agentId} />}
-        {subtab === 'pvcs'        && <PvcsView        agentId={agentId} />}
+        {subtab === 'pods'        && <PodsView        agentId={agentId} onDescribe={setDescribeTarget} />}
+        {subtab === 'deployments' && <DeploymentsView agentId={agentId} onDescribe={setDescribeTarget} />}
+        {subtab === 'services'    && <ServicesView    agentId={agentId} onDescribe={setDescribeTarget} />}
+        {subtab === 'ingresses'   && <IngressesView   agentId={agentId} onDescribe={setDescribeTarget} />}
+        {subtab === 'pvcs'        && <PvcsView        agentId={agentId} onDescribe={setDescribeTarget} />}
         {subtab === 'events'      && <EventsView      agentId={agentId} />}
       </div>
+
+      {describeTarget && (
+        <DescribeModal
+          agentId={agentId}
+          target={describeTarget}
+          onClose={() => setDescribeTarget(null)}
+        />
+      )}
     </div>
   );
 }

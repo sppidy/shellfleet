@@ -501,6 +501,20 @@ export type AgentMessagePayload =
       type: 'K8sListEventsResponse';
       payload: { events: K8sEvent[]; error: string | null };
     }
+  | {
+      type: 'K8sDescribeRequest';
+      payload: { kind: string; namespace: string | null; name: string };
+    }
+  | {
+      type: 'K8sDescribeResponse';
+      payload: {
+        kind: string;
+        namespace: string | null;
+        name: string;
+        yaml: string;
+        error: string | null;
+      };
+    }
   | { type: 'StartTerminalRequest'; payload: { session_id: string } }
   | { type: 'TerminalData'; payload: { session_id: string; data: number[] } }
   | { type: 'TerminalResize'; payload: { session_id: string; cols: number; rows: number } }
