@@ -8,6 +8,13 @@ on:
       - "shared/**"
       - "Dockerfile.agent.k8s"
       - "helm/**"
+      # Bare submodule-pointer files. A super-repo commit that only
+      # bumps these has no `agent/**` content change in the super
+      # tree (submodules are 160000-mode entries, not directories),
+      # so without these patterns the workflow wouldn't fire on a
+      # slice-N pointer bump.
+      - "agent"
+      - "shared"
       - ".github/workflows/agent-k8s-image.yml"
   workflow_dispatch:
   release:

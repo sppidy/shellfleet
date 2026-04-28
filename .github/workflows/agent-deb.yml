@@ -6,6 +6,11 @@ on:
     paths:
       - "agent/**"
       - "shared/**"
+      # Submodule-pointer entries (160000 mode) — without these,
+      # super-repo bumps that only change submodule SHAs don't
+      # trigger this workflow.
+      - "agent"
+      - "shared"
       - ".github/workflows/agent-deb.yml"
   workflow_dispatch:
   release:
