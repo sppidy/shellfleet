@@ -4,9 +4,14 @@ use serde::{Deserialize, Serialize};
 /// the wire format changes in a way the server needs to reject older agents
 /// for. Value `0` means "legacy agent that predates this field" — those
 /// still connect, just without the version-aware fast paths.
+/// v15: Register gains `capabilities: Vec<String>` so the dashboard
+/// can hide tabs the agent can't serve. Standard caps: `"systemd"`,
+/// `"docker"`, `"swarm"`, `"k8s"`. Empty / missing = legacy v14
+/// agent; UI falls back to showing every tab.
+///
 /// v14: terminal variants gain `session_id` for multi-PTY per host.
 /// Empty string = the singleton container-exec session (DockerExec*).
-pub const PROTOCOL_VERSION: u32 = 14;
+pub const PROTOCOL_VERSION: u32 = 15;
 
 fn default_protocol_version() -> u32 {
     0
@@ -58,6 +63,12 @@ pub enum Message {
         hostname: String,
         #[serde(default = "default_protocol_version")]
         protocol_version: u32,
+        /// What this agent can serve. Used by the dashboard to hide
+        /// tabs the host can't satisfy (e.g. no Docker tab on a
+        /// k8s-only Pod). Empty for pre-v15 agents — UI treats that
+        /// as "show every tab" so legacy agents still work.
+        #[serde(default)]
+        capabilities: Vec<String>,
     },
 
     /// Server acknowledging registration
@@ -942,8 +953,16 @@ pub enum UiMessage {
     /// UI asking for online agents
     ListAgentsRequest,
 
-    /// Server telling UI about online agents
-    ListAgentsResponse { agents: Vec<String> },
+    /// Server telling UI about online agents. `capabilities` is keyed
+    /// by agent_id and lists what each can serve (`"systemd"`,
+    /// `"docker"`, `"swarm"`, `"k8s"`). Pre-v15 agents register
+    /// without capabilities and appear in `agents` with no entry in
+    /// `capabilities` — UI treats absence as "show every tab".
+    ListAgentsResponse {
+        agents: Vec<String>,
+        #[serde(default)]
+        capabilities: std::collections::HashMap<String, Vec<String>>,
+    },
 
     /// UI sending a message to a specific agent
     SendToAgent { agent_id: String, message: Message },
