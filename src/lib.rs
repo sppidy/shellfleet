@@ -246,6 +246,57 @@ pub enum Message {
         error: Option<String>,
     },
 
+    /// Slice 6 (v2) — mutating API. All admin-only on the server
+    /// side; the in-cluster Helm chart needs `rbac.write=true` to
+    /// have the corresponding apiserver permissions.
+
+    /// Server-side apply of one or more YAML documents. Multi-doc
+    /// (`---` separated) is supported; the agent applies each doc
+    /// in order and returns the per-doc result joined with blank
+    /// lines. `dry_run = true` runs `--server-side --dry-run`.
+    K8sApplyRequest {
+        yaml: String,
+        #[serde(default)]
+        dry_run: bool,
+        #[serde(default)]
+        force: bool,
+    },
+    K8sApplyResponse {
+        result: String,
+        error: Option<String>,
+    },
+
+    /// Scale a Deployment / StatefulSet / ReplicaSet via the
+    /// `/scale` subresource. `kind` is lowercase as in describe.
+    K8sScaleRequest {
+        kind: String,
+        namespace: String,
+        name: String,
+        replicas: i32,
+    },
+    K8sScaleResponse {
+        kind: String,
+        namespace: String,
+        name: String,
+        success: bool,
+        error: Option<String>,
+    },
+
+    /// Delete a single pod. `grace_period_secs = Some(0)` is the
+    /// equivalent of `kubectl delete pod --force --grace-period=0`.
+    K8sDeletePodRequest {
+        namespace: String,
+        name: String,
+        #[serde(default)]
+        grace_period_secs: Option<i64>,
+    },
+    K8sDeletePodResponse {
+        namespace: String,
+        name: String,
+        success: bool,
+        error: Option<String>,
+    },
+
     /// Request to read a configuration file
     ReadConfigRequest { path: String },
 
