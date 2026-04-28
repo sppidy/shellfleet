@@ -1,0 +1,47 @@
+sys-manager-agent installed.
+
+A Pod is running in namespace `{{ .Release.Namespace }}`:
+
+  kubectl -n {{ .Release.Namespace }} get pod -l app.kubernetes.io/instance={{ .Release.Name }}
+
+{{- if not .Values.token.existingSecret }}
+
+⚡ First-run pairing
+The agent is waiting for a pairing code. Tail its logs and paste the
+code into your dashboard at /device:
+
+  kubectl -n {{ .Release.Namespace }} logs -f deploy/{{ include "sys-manager-agent.fullname" . }}
+
+The line you want looks like:
+
+  Visit https://your-dashboard.example.com/device
+  And enter the code: ABCD-EFGH
+
+After approval, the agent appears in the dashboard's Kubernetes tab
+on the agent named `{{ include "sys-manager-agent.fullname" . }}-id`.
+
+⚠ The pairing token is stored at /etc/sys-manager/agent-token INSIDE
+the running container. A Pod restart wipes it. Once you've paired,
+copy the token into a Kubernetes Secret and re-install with
+`token.existingSecret` set so the binding survives restarts:
+
+  kubectl -n {{ .Release.Namespace }} exec deploy/{{ include "sys-manager-agent.fullname" . }} \
+    -- cat /etc/sys-manager/agent-token > /tmp/agent-token
+  kubectl -n {{ .Release.Namespace }} create secret generic {{ include "sys-manager-agent.fullname" . }}-token \
+    --from-file=agent-token=/tmp/agent-token
+  helm upgrade {{ .Release.Name }} sys-manager-agent \
+    --set token.existingSecret={{ include "sys-manager-agent.fullname" . }}-token
+
+{{- else }}
+
+🔑 Token wired from existing Secret `{{ .Values.token.existingSecret }}`.
+{{- end }}
+
+📊 RBAC posture: read{{ if .Values.rbac.exec }} + exec{{ end }}{{ if .Values.rbac.write }} + write{{ end }}
+{{- if not .Values.rbac.exec }}
+
+ℹ Pod exec is disabled. Re-install with `--set rbac.exec=true` to enable
+the dashboard's "exec" button on pod rows.
+{{- end }}
+
+See docs/KUBERNETES.md and docs/HELM.md for the full reference.

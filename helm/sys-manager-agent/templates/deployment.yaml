@@ -1,0 +1,84 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "sys-manager-agent.fullname" . }}
+  labels:
+    {{- include "sys-manager-agent.labels" . | nindent 4 }}
+spec:
+  # Singleton — multi-replica gives no benefit, the agent multiplexes
+  # requests on a single WS connection back to the dashboard.
+  replicas: {{ .Values.replicaCount }}
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "sys-manager-agent.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "sys-manager-agent.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "sys-manager-agent.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: agent
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: SERVER_API_URL
+              value: {{ .Values.server.apiUrl | quote }}
+            - name: SERVER_WS_URL
+              value: {{ .Values.server.wsUrl | quote }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- with .Values.extraEnvFrom }}
+          envFrom:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- if .Values.token.existingSecret }}
+          volumeMounts:
+            - name: agent-token
+              mountPath: /etc/sys-manager
+              readOnly: true
+          {{- end }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            runAsNonRoot: false   # systemd-unit pattern expects root; harmless inside the Pod
+            capabilities:
+              drop: ["ALL"]
+      {{- if .Values.token.existingSecret }}
+      volumes:
+        - name: agent-token
+          secret:
+            secretName: {{ .Values.token.existingSecret }}
+            items:
+              - key: agent-token
+                path: agent-token
+                mode: 0400
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

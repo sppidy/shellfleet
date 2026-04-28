@@ -1,9 +1,11 @@
 # sys-manager
 
-A self-hosted, terminal-flavoured fleet dashboard. One Rust agent per host, one
-axum/SQLite server, one Next.js dashboard. Manages systemd services, Docker
-containers + swarm, apt updates, health probes, backups, fan-out commands, and
-remote shells across every host you connect.
+A self-hosted, terminal-flavoured fleet dashboard. One Rust agent per host (or
+Pod), one axum/SQLite server, one Next.js dashboard. Manages systemd services,
+Docker containers + swarm, **Kubernetes** (pods / deployments / services /
+ingresses / pvcs / events + describe + live-tail logs + pod exec), apt updates,
+health probes, backups, fan-out commands, and remote shells across every host
+you connect.
 
 Apt repo: <https://sys-mgr-repo.sppidy.in/>  ·  Container images: <https://hrbr.sppidy.in/sys-manager>
 
@@ -92,6 +94,10 @@ Top-level files in this superproject:
 | `docs/CLOUDFLARE.md`       | Edge configuration: WAF rate-limit rules, headers, origin cert     |
 | `docs/METRICS.md`          | Metrics plugin — point the dashboard at your existing Prometheus    |
 | `metrics.example.yaml`     | Drop-in starter config for the metrics plugin                       |
+| `docs/KUBERNETES.md`       | K8s support — install paths, RBAC posture, limitations              |
+| `docs/HELM.md`             | Helm chart reference — every value + upgrade / uninstall            |
+| `helm/sys-manager-agent/`  | In-cluster install chart for the k8s flavor of the agent            |
+| `Dockerfile.agent.k8s`     | Build the k8s-flavor agent image (used by the Helm chart)           |
 | `CONTRIBUTING.md`, `CLA.md`| Contribution flow + Individual Contributor License Agreement        |
 
 ## Deploy
@@ -222,6 +228,37 @@ config is at [`metrics.example.yaml`](metrics.example.yaml).
 > (2) it would force the agent to run a continuous scrape loop, breaking
 > the "be cheap when nobody's looking" rule. Delegating keeps the agent
 > at ~4 MB idle and lets operators reuse infrastructure they already run.
+
+## Kubernetes
+
+The `sys-manager-agent-k8s` flavor talks to a kube-apiserver instead of (or
+alongside) the host's docker / systemd. One agent = one cluster. Read-mostly:
+list pods / deployments / services / ingresses / pvcs / events, describe any
+of them as YAML, live-tail logs from any pod, and (opt-in) `kubectl exec`
+into any container.
+
+Two install shapes:
+
+```bash
+# In-cluster (recommended) — Helm chart deploys a Deployment + ClusterRole
+helm install sysmgr ./helm/sys-manager-agent \
+  --namespace sys-manager --create-namespace \
+  --set server.apiUrl=https://dashboard.example.com \
+  --set server.wsUrl=wss://dashboard.example.com/agent/ws
+
+# Out-of-cluster — .deb on a Linux host with KUBECONFIG
+sudo apt install sys-manager-agent-k8s
+echo 'KUBECONFIG=/etc/sys-manager/kubeconfig' | sudo tee -a /etc/sys-manager/env
+```
+
+CE ships single-cluster + read + exec/logs. Multi-cluster federation, Helm
+releases UI, and namespace-scoped RBAC overlays are EE. See
+[`docs/KUBERNETES.md`](docs/KUBERNETES.md) for the operator walkthrough and
+[`docs/HELM.md`](docs/HELM.md) for every chart value.
+
+> **CE/EE rule of thumb:** in-cluster Pod, kubeconfig-on-a-host, single
+> kube-apiserver, read + exec/logs — **CE**. Multi-cluster, namespace-scoped
+> RBAC, Helm releases, Operator-with-CRDs — **EE**.
 
 ## Wire format
 

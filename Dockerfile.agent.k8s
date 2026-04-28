@@ -1,0 +1,36 @@
+# Multi-stage build for the sys-manager-agent k8s flavor.
+# Same source as the host-agent .deb, just with `--features kube` so
+# the binary advertises the `"k8s"` capability and handles the
+# K8sList* / K8sDescribe / K8sLogs* / K8sExec* variants.
+
+FROM rust:1-bookworm AS builder
+
+WORKDIR /src
+COPY agent/  /src/agent/
+COPY shared/ /src/shared/
+
+# Trim the workspace to what we actually build.
+RUN cat > /src/Cargo.toml <<'EOF'
+[workspace]
+members = ["agent", "shared"]
+resolver = "2"
+EOF
+
+WORKDIR /src/agent
+RUN cargo build --release --features kube
+RUN strip /src/target/release/sys-manager-agent
+
+# ─────────────────────────────────────────────────────────────────
+FROM debian:bookworm-slim AS runtime
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /src/target/release/sys-manager-agent /usr/bin/sys-manager-agent
+
+# Token directory — pre-create with mode 0700 so the agent can write
+# the bearer token after pairing without touching /etc permissions.
+RUN install -d -m 0700 /etc/sys-manager
+
+ENTRYPOINT ["/usr/bin/sys-manager-agent"]

@@ -1,0 +1,90 @@
+{{- if .Values.rbac.read -}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "sys-manager-agent.fullname" . }}-read
+  labels:
+    {{- include "sys-manager-agent.labels" . | nindent 4 }}
+rules:
+  # Core read surface — what the dashboard's Kubernetes subtabs
+  # consume. Pods includes /log subresource for live tail.
+  - apiGroups: [""]
+    resources:
+      - pods
+      - pods/log
+      - services
+      - persistentvolumeclaims
+      - events
+      - namespaces
+      - nodes
+      - configmaps
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources:
+      - deployments
+      - statefulsets
+      - daemonsets
+      - replicasets
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["networking.k8s.io"]
+    resources:
+      - ingresses
+      - networkpolicies
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["batch"]
+    resources:
+      - jobs
+      - cronjobs
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["events.k8s.io"]
+    resources:
+      - events
+    verbs: ["get", "list", "watch"]
+{{- end }}
+{{- if .Values.rbac.exec }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "sys-manager-agent.fullname" . }}-exec
+  labels:
+    {{- include "sys-manager-agent.labels" . | nindent 4 }}
+rules:
+  # `kubectl exec` permissions. Off by default — flipping this on
+  # gives the agent a shell on every pod in every namespace.
+  - apiGroups: [""]
+    resources:
+      - pods/exec
+      - pods/attach
+      - pods/portforward
+    verbs: ["create", "get"]
+{{- end }}
+{{- if .Values.rbac.write }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "sys-manager-agent.fullname" . }}-write
+  labels:
+    {{- include "sys-manager-agent.labels" . | nindent 4 }}
+rules:
+  # Reserved for slice 6 (apply / scale / delete). The agent does not
+  # currently send mutating requests; this exists so flipping it on
+  # later doesn't require a separate Helm upgrade for the binding.
+  - apiGroups: [""]
+    resources: ["pods", "services", "persistentvolumeclaims", "configmaps"]
+    verbs: ["create", "update", "patch", "delete"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets", "daemonsets"]
+    verbs: ["create", "update", "patch", "delete"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses"]
+    verbs: ["create", "update", "patch", "delete"]
+  - apiGroups: ["batch"]
+    resources: ["jobs", "cronjobs"]
+    verbs: ["create", "update", "patch", "delete"]
+  # /scale subresource for HPA-friendly replica adjustments.
+  - apiGroups: ["apps"]
+    resources: ["deployments/scale", "statefulsets/scale", "replicasets/scale"]
+    verbs: ["update", "patch"]
+{{- end }}

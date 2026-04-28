@@ -1,0 +1,50 @@
+{{- if .Values.rbac.read -}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "sys-manager-agent.fullname" . }}-read
+  labels:
+    {{- include "sys-manager-agent.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "sys-manager-agent.fullname" . }}-read
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "sys-manager-agent.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}
+{{- if .Values.rbac.exec }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "sys-manager-agent.fullname" . }}-exec
+  labels:
+    {{- include "sys-manager-agent.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "sys-manager-agent.fullname" . }}-exec
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "sys-manager-agent.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}
+{{- if .Values.rbac.write }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "sys-manager-agent.fullname" . }}-write
+  labels:
+    {{- include "sys-manager-agent.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "sys-manager-agent.fullname" . }}-write
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "sys-manager-agent.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}

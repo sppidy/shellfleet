@@ -1,0 +1,22 @@
+apiVersion: v2
+name: sys-manager-agent
+description: |
+  In-cluster install of the sys-manager k8s agent (`sys-manager-agent-k8s`).
+  Adds the cluster as a target in the dashboard's Kubernetes tab — pods,
+  deployments, services, ingresses, PVCs, events, describe, logs, and
+  pod exec, all read-mostly by default.
+type: application
+version: 0.1.0
+appVersion: 1.1.0
+keywords:
+  - sys-manager
+  - kubernetes
+  - dashboard
+  - agent
+home: https://github.com/sppidy/sys-manager
+sources:
+  - https://github.com/sppidy/sys-manager
+  - https://github.com/sppidy/sys-mngr-agent
+maintainers:
+  - name: sppidy
+    email: sppidytg@gmail.com

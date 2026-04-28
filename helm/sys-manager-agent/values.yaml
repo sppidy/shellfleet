@@ -1,0 +1,80 @@
+# sys-manager-agent — Helm values
+#
+# CE chart. The defaults install a read-only agent that can list pods,
+# describe resources, and tail logs. Flip `rbac.exec` for `kubectl exec`,
+# `rbac.write` once slice 6 / EE adds apply+scale.
+
+# Container image. Build locally via `docker build -f Dockerfile.agent.k8s`
+# at the super-repo root, push to your registry, and point this here.
+# A pre-built image at hrbr.sppidy.in is the maintained reference.
+image:
+  repository: hrbr.sppidy.in/sys-manager/agent-k8s
+  tag: ""           # default to .Chart.appVersion
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+# How the agent reaches the dashboard. Match these to your deploy.
+# `serverApiUrl` is for HTTPS (device-auth pairing); `serverWsUrl` is the
+# WebSocket the agent uses to receive commands. Both are required.
+server:
+  apiUrl: "https://dashboard.example.com"
+  wsUrl:  "wss://dashboard.example.com/agent/ws"
+
+# Pairing token. Two paths, pick one:
+#
+#   1. Bootstrap via device-auth (recommended on first install). Leave
+#      `existingSecret` empty and `token` unset — the agent will print a
+#      one-time pairing code on first start. `kubectl logs deploy/<name>`
+#      to read it, then paste at `/device` in the dashboard. The agent
+#      will write the issued token back to /etc/sys-manager/agent-token
+#      inside the container (lost on Pod restart unless you `--from-literal`
+#      it back into the secret on subsequent installs).
+#
+#   2. Pre-existing token. Create a Secret with key `agent-token`, set
+#      `existingSecret` to its name, and the chart will mount it at
+#      /etc/sys-manager/agent-token (read-only).
+token:
+  existingSecret: ""           # name of an existing Secret with key `agent-token`
+  # value: ""                  # ONLY if you accept committing it to values
+
+# RBAC posture. Read-only is the safety floor — every operator gets
+# this. Flip the toggles below to add capabilities.
+rbac:
+  # Always created — read access to pods, deployments, services,
+  # ingresses, pvcs, events. Logs are also read.
+  read: true
+
+  # `kubectl exec` into pods + their stdin streams. Slice-4 feature.
+  # Off by default because exec is effectively a shell on every pod.
+  exec: false
+
+  # Apply / scale / delete (slice 6 / EE — currently a no-op since
+  # the agent doesn't ship apply handlers yet, but the role survives
+  # to make a future enable a single-flag flip).
+  write: false
+
+# Standard k8s knobs.
+replicaCount: 1
+serviceAccount:
+  create: true
+  annotations: {}
+  # name: ""    # leave empty to derive from .Release.Name
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+podLabels: {}
+podAnnotations: {}
+
+# Optional extra environment for the container — useful for things
+# like RUST_LOG. Don't put secrets here; use envFrom + a Secret.
+extraEnv: []
+extraEnvFrom: []
