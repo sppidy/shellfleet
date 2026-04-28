@@ -37,11 +37,17 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # amd64 — self-hosted on amd64-builder (the Harbor host
+          # itself). Push is local, sub-ms RTT, gigabit.
           - arch: amd64
-            runner: ubuntu-latest
+            runner: [self-hosted, amd64-builder]
             platform: linux/amd64
+          # arm64 — self-hosted on the arm64-builder dashboard host. It's
+          # already on the tailnet and peers DIRECT to amd64-builder
+          # (not DERP), so the push runs at home-network speed
+          # instead of GH-runner-via-DERP ~1 MB/s.
           - arch: arm64
-            runner: ubuntu-24.04-arm
+            runner: [self-hosted, arm64-builder]
             platform: linux/arm64
     outputs:
       sha_short: ${{ steps.tags.outputs.sha_short }}
@@ -64,40 +70,21 @@ jobs:
           fi
           git submodule update --init --recursive --depth 1 agent shared
 
-      # Harbor sits behind Traefik + Cloudflare. CF strips the
-      # `service=` param from WWW-Authenticate, which makes
-      # buildkit's OAuth token fetch return 400 with "Unable to
-      # handle service:". Bring up Tailscale and pin the registry
-      # hostname to the tailnet IP so the push hits Harbor directly,
-      # bypassing both proxies. TLS still validates because Traefik's
-      # cert is for the public hostname.
-      - name: Tailscale up
-        uses: tailscale/github-action@v3
-        with:
-          authkey: ${{ secrets.TS_AUTHKEY }}
-          tags: tag:ci
-          version: latest
-
-      - name: Diagnose tailnet reach
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo '--- tailscale status ---'
-          tailscale status || true
-          echo '--- ping harbor ts ip ---'
-          ping -c 2 -W 2 "${{ secrets.HARBOR_TS_IP }}" || true
-          # Use nc -zv for a clean SYN/SYNACK probe — `cat </dev/tcp/…`
-          # opens then immediately closes, which TLS servers reject
-          # with RST before any handshake, producing a false negative.
-          echo '--- tcp 443 reach (nc -zv) ---'
-          sudo apt-get install -y --no-install-recommends ncat 2>/dev/null \
-            && nc -zv -w 5 "${{ secrets.HARBOR_TS_IP }}" 443 \
-            || echo 'nc unavailable, skipping'
-
+      # Both runners are self-hosted — amd64-builder IS Harbor,
+      # arm64-builder is on the tailnet peering direct to amd64-builder.
+      # Pinning /etc/hosts to HARBOR_TS_IP keeps the push off the
+      # public CF path (which strips the auth `service=` param) and
+      # on the local / direct-tailnet path. Idempotent across runs;
+      # the duplicate-line dedupe avoids polluting /etc/hosts on a
+      # long-lived runner.
       - name: Pin Harbor hostname to tailnet IP
         shell: bash
         run: |
-          echo "${{ secrets.HARBOR_TS_IP }} ${REGISTRY}" | sudo tee -a /etc/hosts
+          set -euo pipefail
+          line="${{ secrets.HARBOR_TS_IP }} ${REGISTRY}"
+          if ! grep -qxF "$line" /etc/hosts; then
+            echo "$line" | sudo tee -a /etc/hosts
+          fi
           getent hosts "${REGISTRY}"
 
       - name: Set up Buildx
@@ -144,21 +131,22 @@ jobs:
 
   manifest:
     name: Multi-arch manifest
+    # Use the amd64-builder runner for the manifest stitch too — it's
+    # local to Harbor, the imagetools API calls don't go over the
+    # public path. Falls back to ubuntu-latest if no self-hosted
+    # runner is available, but at that point the prior build jobs
+    # would have already failed.
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, amd64-builder]
     steps:
-      - name: Tailscale up
-        uses: tailscale/github-action@v3
-        with:
-          authkey: ${{ secrets.TS_AUTHKEY }}
-          tags: tag:ci
-          version: latest
-
-      - name: Pin Harbor hostname to tailnet IP
+      - name: Pin Harbor hostname (idempotent)
         shell: bash
         run: |
-          echo "${{ secrets.HARBOR_TS_IP }} ${REGISTRY}" | sudo tee -a /etc/hosts
-          getent hosts "${REGISTRY}"
+          set -euo pipefail
+          line="${{ secrets.HARBOR_TS_IP }} ${REGISTRY}"
+          if ! grep -qxF "$line" /etc/hosts; then
+            echo "$line" | sudo tee -a /etc/hosts
+          fi
 
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
