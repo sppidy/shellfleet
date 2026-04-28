@@ -1,31 +1,5 @@
 Package: sys-manager-agent-k8s
 Architecture: amd64
-Version: 1.1.0-ci202604280911.ge916213
-Priority: optional
-Section: admin
-Maintainer: sppidy <sppidytg@gmail.com>
-Installed-Size: 38171
-Provides: sys-manager-agent
-Depends: libc6 (>= 2.39), libssl3t64 (>= 3.0.0), systemd
-Conflicts: sys-manager-agent
-Replaces: sys-manager-agent
-Filename: pool/main/sys-manager-agent-k8s_1.1.0-ci202604280911.ge916213_amd64.deb
-Size: 8107220
-MD5sum: 29d13870b1a37a8470bf0eb2b9a93851
-SHA1: 67f86d7da38e1582d13c4a2e46a349d0373447da
-SHA256: 3ecca6824ccd42fa2a97bf6578fe38410a1203367424d468fa0d7d6409eec84e
-SHA512: ed9feecd5c15af4de9e059ff537229c390182f5fd2bba3b499b3201eff2cae533bfc8ba7275d9b8b06646357fbb7ebd98e51d345ec6f93fd04270406945523b2
-Homepage: https://github.com/sppidy/sys-mngr-agent
-Description: Agent for sys-manager: connects a host to a sys-manager server over WebSocket
- and exposes systemd service control, terminal, and config editing.
- Agent for sys-manager — k8s flavor. Same as sys-manager-agent plus a
- compiled-in kube-rs client so the agent can talk to a kube-apiserver
- via in-cluster ServiceAccount or a kubeconfig at $KUBECONFIG. Install
- on hosts that should appear as Kubernetes targets in the dashboard;
- install plain sys-manager-agent everywhere else.
-
-Package: sys-manager-agent-k8s
-Architecture: amd64
 Version: 1.1.0-ci202604281155.gf97b268
 Priority: optional
 Section: admin
@@ -128,28 +102,31 @@ Description: Agent for sys-manager: connects a host to a sys-manager server over
  on hosts that should appear as Kubernetes targets in the dashboard;
  install plain sys-manager-agent everywhere else.
 
-Package: sys-manager-agent
+Package: sys-manager-agent-k8s
 Architecture: amd64
-Version: 1.1.0-ci202604280911.ge916213
+Version: 1.1.0-ci202604281429.gd65477c
 Priority: optional
 Section: admin
 Maintainer: sppidy <sppidytg@gmail.com>
-Installed-Size: 28832
+Installed-Size: 37432
+Provides: sys-manager-agent
 Depends: libc6 (>= 2.39), libssl3t64 (>= 3.0.0), systemd
-Filename: pool/main/sys-manager-agent_1.1.0-ci202604280911.ge916213_amd64.deb
-Size: 6264072
-MD5sum: c572428cc80e9ca0f8434f5e890bd470
-SHA1: 403ba19c7293677783453c39e491c637f81fdcee
-SHA256: 3d14560962df092dd1152f4e666021875ba8b3db51148ae7c36f2a4c53daf57a
-SHA512: 8687d507e3fcdc283c8d3e65a01aeb09056c41ec6050e3d0f6128c7291e11bbf0d8393420421076716f72efa844c39fb0d847986edbb0fa2fb295e90b48b04cb
+Conflicts: sys-manager-agent
+Replaces: sys-manager-agent
+Filename: pool/main/sys-manager-agent-k8s_1.1.0-ci202604281429.gd65477c_amd64.deb
+Size: 7690624
+MD5sum: cf7cdc071e8e08bdf3d226a341d13454
+SHA1: 486de21e7e765ae9febd9e84c6c5f157fa6a4da7
+SHA256: 13f77c6ff6783faccc68ccababe6120e23c927b475d9f8ed2a79e072c0496d3e
+SHA512: 3c871c99432c5f7be9d5283a51f98e1fccf300203dc09331dac64ee847f538d91dab49b648d6454637bdc117e461bb93d07839c5da8b57369f84611a90495081
 Homepage: https://github.com/sppidy/sys-mngr-agent
 Description: Agent for sys-manager: connects a host to a sys-manager server over WebSocket
  and exposes systemd service control, terminal, and config editing.
- Agent for sys-manager. Connects a Linux host to a sys-manager server over a
- TLS WebSocket and exposes systemd service control, an interactive terminal,
- and remote read/write of configuration files. Pairing happens through the
- server's device-auth flow; the resulting token is cached at
- /etc/sys-manager/agent-token.txt.
+ Agent for sys-manager — k8s flavor. Same as sys-manager-agent plus a
+ compiled-in kube-rs client so the agent can talk to a kube-apiserver
+ via in-cluster ServiceAccount or a kubeconfig at $KUBECONFIG. Install
+ on hosts that should appear as Kubernetes targets in the dashboard;
+ install plain sys-manager-agent everywhere else.
 
 Package: sys-manager-agent
 Architecture: amd64
@@ -234,6 +211,29 @@ MD5sum: 8dd9418d835089cc8e9b40211d16a6e7
 SHA1: 5b8cb8c9b8df095e8f1b631852ab9ad2ac6abc77
 SHA256: a9e1e8ea33858b5b6ae20645bd6240b1822a722e479a2972923ba99e37c634c9
 SHA512: b67c24ca6592a31ec9bfa704c9d153bb11b747a201da921f6ee4c18518ca370ad11ec014c7ab9912ab1ea76d0e1055d65b0415403b3f75d0c09de837e003559d
+Homepage: https://github.com/sppidy/sys-mngr-agent
+Description: Agent for sys-manager: connects a host to a sys-manager server over WebSocket
+ and exposes systemd service control, terminal, and config editing.
+ Agent for sys-manager. Connects a Linux host to a sys-manager server over a
+ TLS WebSocket and exposes systemd service control, an interactive terminal,
+ and remote read/write of configuration files. Pairing happens through the
+ server's device-auth flow; the resulting token is cached at
+ /etc/sys-manager/agent-token.txt.
+
+Package: sys-manager-agent
+Architecture: amd64
+Version: 1.1.0-ci202604281429.gd65477c
+Priority: optional
+Section: admin
+Maintainer: sppidy <sppidytg@gmail.com>
+Installed-Size: 28112
+Depends: libc6 (>= 2.39), libssl3t64 (>= 3.0.0), systemd
+Filename: pool/main/sys-manager-agent_1.1.0-ci202604281429.gd65477c_amd64.deb
+Size: 5828432
+MD5sum: 56c20e10d5c67967d71eb21d88cb8fe8
+SHA1: ce5c4b42380deb4a50e3dc3c9f72f88f4986060f
+SHA256: fcb65a68e0d59f4a1541768bb14da9649c710f511aa7e63a5622894c02557071
+SHA512: 2a13b2ee7f700b59b0fd1d498f304339a9e5826e4c559ad8e7a2431c6dd75dd07591c23430263a162773a342a127c09a14489fb126a9a7a6666d3cbec28936aa
 Homepage: https://github.com/sppidy/sys-mngr-agent
 Description: Agent for sys-manager: connects a host to a sys-manager server over WebSocket
  and exposes systemd service control, terminal, and config editing.
