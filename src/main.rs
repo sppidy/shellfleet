@@ -140,6 +140,15 @@ async fn get_agent_token(api_url: &str) -> String {
 
 #[tokio::main]
 async fn main() {
+    // rustls 0.23 demands the binary install a process-level default
+    // CryptoProvider before any TLS handshake. kube-rs (and anything
+    // else linking rustls 0.23) panics otherwise. `.ok()` because a
+    // second install_default() call would error harmlessly.
+    #[cfg(feature = "kube")]
+    {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    }
+
     let api_url = std::env::var("SERVER_API_URL").unwrap_or_else(|_| "https://dashboard.example.com".to_string());
     
     // Perform Tailscale-like auth
