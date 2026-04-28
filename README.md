@@ -353,7 +353,7 @@ extension API and adds the **scale ceiling**:
   (Datadog, New Relic, Grafana Cloud) on top of CE's single-Prometheus
   metrics plugin.
 - **AI log analysis.** "Summarize the last hour of journal entries on
-  amd64-builder", "what's anomalous in this output?", "explain this
+  host-a", "what's anomalous in this output?", "explain this
   error". Configurable via OpenAI-compatible env vars
   (`EE_AI_API_URL`, `EE_AI_API_KEY`, `EE_AI_MODEL`) so it works
   with OpenAI, Ollama, vLLM, OpenRouter, or any drop-in.

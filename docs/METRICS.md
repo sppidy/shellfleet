@@ -42,7 +42,7 @@ prometheus:
   timeout_secs: 10                       # default 10
 
 agent_instance_map:                      # optional
-  amd64-builder-id: amd64-builder.internal:9100
+  host-a-id: host-a.internal:9100
 
 panels:
   - id: cpu_percent
@@ -61,20 +61,20 @@ upstream:
 
 | Placeholder    | Becomes |
 |----------------|---------|
-| `{agent_id}`   | the raw sys-manager agent id, e.g. `amd64-builder-id` |
+| `{agent_id}`   | the raw sys-manager agent id, e.g. `host-a-id` |
 | `{instance}`   | resolved from `agent_instance_map` if set, else `agent_id` with the trailing `-id` stripped |
 | `{hostname}`   | alias for `{instance}` |
 
 So `node_cpu_seconds_total{instance="{instance}"}` running for the
-`amd64-builder-id` agent becomes
-`node_cpu_seconds_total{instance="amd64-builder"}` — assuming your
-node_exporter labels the host as `amd64-builder`. If your Prometheus
-labels the same host as `amd64-builder.internal:9100`, add the
+`host-a-id` agent becomes
+`node_cpu_seconds_total{instance="host-a"}` — assuming your
+node_exporter labels the host as `host-a`. If your Prometheus
+labels the same host as `host-a.internal:9100`, add the
 mapping:
 
 ```yaml
 agent_instance_map:
-  amd64-builder-id: amd64-builder.internal:9100
+  host-a-id: host-a.internal:9100
 ```
 
 ### Env-var expansion
@@ -118,9 +118,9 @@ scrape_configs:
   - job_name: process_exporter
     static_configs:
       - targets:
-          - amd64-builder:9256
-          - worker-a:9256
-          - worker-b:9256
+          - host-a:9256
+          - host-b:9256
+          - host-c:9256
         labels:
           instance: <hostname>   # match your sys-manager agent label
 ```

@@ -27,14 +27,14 @@ prometheus:
   # timeout_secs: 10
 
 # Optional: explicit map from agent_id → Prometheus instance label.
-# By default the server takes the agent_id (e.g. `amd64-builder-id`)
-# and strips the trailing `-id` to get the instance label. If your
+# By default the server takes the agent_id (e.g. `host-a-id`) and
+# strips the trailing `-id` to get the instance label. If your
 # Prometheus uses something different (e.g. `host:9100` or an FQDN),
 # map it here.
 #
 # agent_instance_map:
-#   amd64-builder-id:   amd64-builder.internal:9100
-#   worker-a-id: worker-a:9100
+#   host-a-id: host-a.internal:9100
+#   host-b-id: host-b:9100
 
 # Panels rendered on the per-agent Metrics tab. `{agent_id}` and
 # `{instance}` (and `{hostname}` as an alias) are substituted into

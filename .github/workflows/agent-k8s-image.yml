@@ -44,22 +44,22 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # amd64 — self-hosted on amd64-builder (the Harbor host
-          # itself). Push is local via the public hostname → Traefik
-          # → harbor-nginx; sub-ms RTT, no proxy overhead matters.
+          # amd64 — runs on the registry-co-located runner so the
+          # push goes over loopback / the public hostname →
+          # Traefik → harbor-nginx with negligible RTT.
           - arch: amd64
             runner: [self-hosted, amd64-builder]
             platform: linux/amd64
             push_registry: hrbr.sppidy.in
             push_scheme: https
-          # arm64 — self-hosted on the arm64-builder dashboard host. Both
-          # arm64-builder and amd64-builder are behind NAT that doesn't
-          # allow Tailscale UDP punching, so the tailnet path
-          # bounces through a DERP relay (~700 KB/s, 50 ms). Pushing
-          # to harbor-nginx's direct host port (192.0.2.99:18080)
-          # over plain HTTP skips Traefik AND TLS overhead — small
-          # win on top of the DERP cap, and timeouts no longer
-          # double up across two proxies.
+          # arm64 — runs on a remote runner that reaches the
+          # registry over the tailnet via a DERP-relayed path
+          # (~700 KB/s, 50 ms). Pushing to harbor-nginx's
+          # direct host port over plain HTTP skips Traefik
+          # AND TLS overhead, which avoids double-stacked
+          # timeouts under the relay cap. The direct port is
+          # reached via /etc/hosts pinned to the secret-stored
+          # tailnet IP (see "Pin Harbor hostname" step below).
           - arch: arm64
             runner: [self-hosted, arm64-builder]
             platform: linux/arm64
@@ -86,13 +86,11 @@ jobs:
           fi
           git submodule update --init --recursive --depth 1 agent shared
 
-      # Both runners are self-hosted — amd64-builder IS Harbor,
-      # arm64-builder is on the tailnet peering direct to amd64-builder.
-      # Pinning /etc/hosts to HARBOR_TS_IP keeps the push off the
-      # public CF path (which strips the auth `service=` param) and
-      # on the local / direct-tailnet path. Idempotent across runs;
-      # the duplicate-line dedupe avoids polluting /etc/hosts on a
-      # long-lived runner.
+      # Pinning /etc/hosts to the secret-stored tailnet IP keeps
+      # the push off the public CF path (which strips the auth
+      # `service=` param) and on the local / direct-tailnet path.
+      # Idempotent across runs; the duplicate-line dedupe avoids
+      # polluting /etc/hosts on a long-lived runner.
       - name: Pin Harbor hostname to tailnet IP
         shell: bash
         run: |
@@ -156,7 +154,7 @@ jobs:
           # Each arch pushes a single arch-suffixed tag; the merge job
           # below stitches them into multi-arch tags afterwards.
           # Note that the registry portion can be a direct-port URL
-          # (arm64-builder) or the public Traefik hostname (amd64-builder) —
+          # (arm64 leg) or the public Traefik hostname (amd64 leg) —
           # Harbor stores by image name regardless, the manifest job
           # then references the canonical hostname when stitching.
           echo "tag=${{ matrix.push_registry }}/${IMAGE_NAME}:sha-${SHA_SHORT}-${{ matrix.arch }}" >> "$GITHUB_OUTPUT"
@@ -180,11 +178,10 @@ jobs:
 
   manifest:
     name: Multi-arch manifest
-    # Use the amd64-builder runner for the manifest stitch too — it's
-    # local to Harbor, the imagetools API calls don't go over the
-    # public path. Falls back to ubuntu-latest if no self-hosted
-    # runner is available, but at that point the prior build jobs
-    # would have already failed.
+    # Stitch on the registry-co-located runner so the imagetools
+    # API calls stay off the public path. Falls back to
+    # ubuntu-latest if no self-hosted runner is available, but at
+    # that point the prior build jobs would have already failed.
     needs: build
     runs-on: [self-hosted, amd64-builder]
     steps:

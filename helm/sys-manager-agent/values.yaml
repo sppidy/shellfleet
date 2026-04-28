@@ -127,9 +127,10 @@ networkPolicy:
   # explicit rule on most CNIs).
   apiServerCidr: ""
   # Pin the dashboard's reachable IP(s) here for tightest
-  # egress. Example: ["203.0.113.10/32"] for a Tailscale-only
-  # dashboard. Empty = allow TCP/443 to 0.0.0.0/0 minus the
-  # cluster CIDRs below.
+  # egress. Example: ["203.0.113.10/32"] for a single-IP dashboard
+  # (replace with your actual dashboard IP — RFC 5737 docs range).
+  # Empty = allow TCP/443 to 0.0.0.0/0 minus the cluster CIDRs
+  # below.
   dashboardCidrs: []
   # The cluster's pod + service CIDRs. Defaults match k3s
   # (10.42.0.0/16 pods, 10.43.0.0/16 services). Override for

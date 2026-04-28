@@ -88,7 +88,7 @@ SLACK_WEBHOOK_URL=https://hooks.slack.com/services/T0/B0/xxxxx
 
 Slack post on a probe transition:
 ```
-:x: *sys-manager health probe `#7`* on `amd64-builder-id` → *red*
+:x: *sys-manager health probe `#7`* on `host-a-id` → *red*
 > error: …
 ```
 ```
@@ -103,7 +103,7 @@ DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/.../...
 
 Discord post on backup success:
 ```
-✅ **sys-manager backup `etc-nightly`** on `amd64-builder-id` → **success**
+✅ **sys-manager backup `etc-nightly`** on `host-a-id` → **success**
 ```
 ```
 1234567 bytes → /var/backups/sys-manager/etc-nightly-1730000000.tar.gz
@@ -130,7 +130,7 @@ Receives:
 ```json
 {
   "event": "update_result",
-  "agent_id": "amd64-builder-id",
+  "agent_id": "host-a-id",
   "status": "success",
   "log": "…tail of apt-get output…",
   "error": null,
