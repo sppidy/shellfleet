@@ -913,6 +913,9 @@ fn is_mutating_agent_message(msg: &Message) -> bool {
         // but the closer matches the existing pattern of treating
         // *Stop signals as read-only.
         | StopTerminalRequest { .. }
+        // K8sExecRequest is the open-shell call. Same posture as
+        // host-side StartTerminalRequest — admin-only, NOT in this
+        // viewer-OK list. Falls through to the default mutating arm.
         | SwarmServiceInspectRequest { .. }
         | BackupListArchivesRequest { .. }
         | DockerImageListRequest
