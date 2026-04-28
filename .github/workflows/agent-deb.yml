@@ -211,7 +211,27 @@ jobs:
           mkdir -p "$REPO/pool/$COMP"
           mkdir -p "$REPO/dists/$DIST/$COMP/binary-amd64"
           mkdir -p "$REPO/dists/$DIST/$COMP/binary-arm64"
-          cp incoming/*.deb "$REPO/pool/$COMP/"
+
+          # Whitelist .deb filenames before they land in the public
+          # pool. The artifact step uses a fixed pattern, but a
+          # compromised build job could rename a file; a name check
+          # here is defense-in-depth before we commit to gh-pages.
+          shopt -s nullglob
+          for f in incoming/*.deb; do
+            base="$(basename "$f")"
+            case "$base" in
+              sys-manager-agent_*_amd64.deb \
+              | sys-manager-agent_*_arm64.deb \
+              | sys-manager-agent-k8s_*_amd64.deb \
+              | sys-manager-agent-k8s_*_arm64.deb)
+                cp "$f" "$REPO/pool/$COMP/"
+                ;;
+              *)
+                echo "::error::artifact $base does not match whitelist; aborting publish"
+                exit 1
+                ;;
+            esac
+          done
 
           # Trim old revisions per package + arch — keep the highest 5
           # of each so the pool doesn't grow unbounded across CI runs.

@@ -1,0 +1,84 @@
+{{- if .Values.networkPolicy.enabled -}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "sys-manager-agent.fullname" . }}
+  labels:
+    {{- include "sys-manager-agent.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "sys-manager-agent.selectorLabels" . | nindent 6 }}
+  # Agent makes outbound WS connections only — no service exposes
+  # it from outside, so deny all ingress unless an operator opts in
+  # via `networkPolicy.extraIngress`.
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    {{- with .Values.networkPolicy.extraIngress }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  egress:
+    # DNS is required for the WS handshake (resolving the dashboard
+    # hostname) and for the kube-apiserver if it's published under
+    # an in-cluster Service. CoreDNS lives in kube-system.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # kube-apiserver. The chart can't know the apiserver's CIDR
+    # without operator input, so allow TCP/443 to any peer here;
+    # the apiserver typically lives at the cluster IP block. Tighten
+    # via `networkPolicy.apiServerCidr` if your cluster has a
+    # well-known pinned address.
+    {{- if .Values.networkPolicy.apiServerCidr }}
+    - to:
+        - ipBlock:
+            cidr: {{ .Values.networkPolicy.apiServerCidr | quote }}
+      ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 6443
+    {{- end }}
+    # Outbound to the dashboard. The hostname behind
+    # `.Values.server.wsUrl` is the canonical destination; the
+    # chart can't resolve hostnames, so allow TCP/443 to any peer
+    # by default and let the operator pin via
+    # `networkPolicy.dashboardCidrs` (e.g. the dashboard's
+    # public IP, a Tailscale 100.x range, etc.).
+    - to:
+        {{- with .Values.networkPolicy.dashboardCidrs }}
+        {{- range . }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+        {{- else }}
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              # Don't accidentally allow the agent to reach pods/
+              # services in the cluster — egress to in-cluster CIDRs
+              # should go through the explicit kube-apiserver rule
+              # above. These defaults match k3s; override via
+              # `networkPolicy.clusterCidrs`.
+              {{- with .Values.networkPolicy.clusterCidrs }}
+              {{- toYaml . | nindent 14 }}
+              {{- else }}
+              - 10.42.0.0/16
+              - 10.43.0.0/16
+              {{- end }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: 443
+    {{- with .Values.networkPolicy.extraEgress }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+{{- end }}
