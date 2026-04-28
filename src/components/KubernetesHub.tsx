@@ -1,7 +1,11 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import { Terminal as XTerm } from '@xterm/xterm';
+import { FitAddon } from '@xterm/addon-fit';
+import '@xterm/xterm/css/xterm.css';
 import { useWebSocket } from './providers/WebSocketProvider';
+import { useCanWrite } from './providers/SessionProvider';
 import type {
   K8sPod,
   K8sDeployment,
@@ -23,6 +27,12 @@ type DescribeTarget = {
 };
 
 type LogsTarget = {
+  namespace: string;
+  podName: string;
+  containers: string[];
+};
+
+type ExecTarget = {
   namespace: string;
   podName: string;
   containers: string[];
@@ -645,13 +655,261 @@ function LogsModal({
 }
 
 // ──────────────────────────────────────────────────────────────
+// Exec modal — kube exec PTY in xterm.js
+// ──────────────────────────────────────────────────────────────
+
+function ExecModal({
+  agentId,
+  target,
+  onClose,
+}: {
+  agentId: string;
+  target: ExecTarget;
+  onClose: () => void;
+}) {
+  const { sendToAgent, onAgentMessage } = useWebSocket();
+  const canWrite = useCanWrite();
+  const [container, setContainer] = useState<string>(target.containers[0] ?? '');
+  const sessionIdRef = useRef<string>(newStreamId());
+  const termHostRef = useRef<HTMLDivElement>(null);
+  const xtermRef = useRef<XTerm | null>(null);
+  const fitRef = useRef<FitAddon | null>(null);
+  const [status, setStatus] = useState<'opening' | 'open' | 'closed'>('opening');
+  const [error, setError] = useState<string | null>(null);
+
+  // Build the xterm + open the kube exec session. Re-opens whenever
+  // the container picker changes — the prior session_id is stopped
+  // via the unmount cleanup of the previous effect run.
+  useEffect(() => {
+    if (!canWrite) return;
+    if (!termHostRef.current) return;
+
+    const sid = newStreamId();
+    sessionIdRef.current = sid;
+    setStatus('opening');
+    setError(null);
+
+    const term = new XTerm({
+      cursorBlink: true,
+      fontFamily: "JetBrains Mono, ui-monospace, 'SF Mono', Menlo, monospace",
+      fontSize: 12,
+      scrollback: 5000,
+      theme: {
+        background: '#06090b',
+        foreground: '#c8d3dc',
+        cursor: '#7fb069',
+      },
+    });
+    const fit = new FitAddon();
+    term.loadAddon(fit);
+    term.open(termHostRef.current);
+    fit.fit();
+    xtermRef.current = term;
+    fitRef.current = fit;
+
+    term.onData((data) => {
+      const bytes = Array.from(new TextEncoder().encode(data));
+      sendToAgent(agentId, {
+        type: 'TerminalData',
+        payload: { session_id: sid, data: bytes },
+      });
+    });
+
+    const sendSize = () => {
+      try {
+        fit.fit();
+      } catch {
+        /* size 0 during a transition */
+      }
+      sendToAgent(agentId, {
+        type: 'TerminalResize',
+        payload: { session_id: sid, cols: term.cols, rows: term.rows },
+      });
+    };
+    const ro = new ResizeObserver(() => sendSize());
+    ro.observe(termHostRef.current);
+    window.addEventListener('resize', sendSize);
+
+    sendToAgent(agentId, {
+      type: 'K8sExecRequest',
+      payload: {
+        session_id: sid,
+        namespace: target.namespace,
+        pod_name: target.podName,
+        container: container || null,
+        command: ['/bin/sh'],
+      },
+    });
+
+    const unsub = onAgentMessage(agentId, (msg) => {
+      if (msg.type === 'K8sExecResponse' && msg.payload.session_id === sid) {
+        if (msg.payload.success) {
+          setStatus('open');
+          setTimeout(sendSize, 80);
+        } else {
+          setStatus('closed');
+          setError(msg.payload.error ?? 'exec failed');
+        }
+      } else if (msg.type === 'TerminalData' && msg.payload.session_id === sid) {
+        xtermRef.current?.write(new Uint8Array(msg.payload.data));
+      }
+    });
+
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && (e.target as HTMLElement)?.tagName !== 'INPUT') {
+        // Esc only escapes when focus isn't in an input — otherwise xterm
+        // would never see the Esc key. Close button still works.
+      }
+    };
+    window.addEventListener('keydown', onKey);
+
+    return () => {
+      sendToAgent(agentId, {
+        type: 'StopTerminalRequest',
+        payload: { session_id: sid },
+      });
+      unsub();
+      ro.disconnect();
+      window.removeEventListener('resize', sendSize);
+      window.removeEventListener('keydown', onKey);
+      term.dispose();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agentId, target.namespace, target.podName, container, canWrite]);
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: 'fixed',
+        inset: 0,
+        background: 'rgba(0, 0, 0, 0.55)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        zIndex: 90,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: 'min(1100px, 92vw)',
+          height: 'min(720px, 85vh)',
+          display: 'flex',
+          flexDirection: 'column',
+          background: 'var(--bg)',
+          border: '1px solid var(--line)',
+          borderRadius: 4,
+          fontFamily: 'var(--mono)',
+          fontSize: 12,
+          overflow: 'hidden',
+        }}
+      >
+        <div
+          style={{
+            padding: '8px 12px',
+            borderBottom: '1px solid var(--line)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            background: 'var(--bg-1)',
+            flexShrink: 0,
+          }}
+        >
+          <span style={{ color: 'var(--fg-3)' }}>exec</span>
+          <span style={{ color: 'var(--fg-2)' }}>{target.namespace}</span>
+          <span style={{ color: 'var(--fg-3)' }}>/</span>
+          <span>{target.podName}</span>
+
+          {target.containers.length > 1 && (
+            <select
+              value={container}
+              onChange={(e) => setContainer(e.target.value)}
+              style={{
+                marginLeft: 8,
+                background: 'var(--bg)',
+                color: 'var(--fg)',
+                border: '1px solid var(--line)',
+                borderRadius: 3,
+                fontFamily: 'var(--mono)',
+                fontSize: 11,
+                padding: '2px 6px',
+              }}
+            >
+              {target.containers.map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
+            </select>
+          )}
+
+          <span
+            style={{
+              color:
+                status === 'open'
+                  ? 'var(--ok, #7fb069)'
+                  : status === 'closed'
+                    ? 'var(--err, #e57373)'
+                    : 'var(--warn, #e6b450)',
+              fontSize: 11,
+            }}
+          >
+            {status === 'open'
+              ? 'connected'
+              : status === 'closed'
+                ? error
+                  ? `closed: ${error}`
+                  : 'closed'
+                : 'opening…'}
+          </span>
+
+          <div style={{ flex: 1 }} />
+
+          <button
+            type="button"
+            className="btn sm"
+            onClick={onClose}
+            title="close"
+            style={{ height: 22, fontSize: 11, padding: '0 8px' }}
+          >
+            ×
+          </button>
+        </div>
+
+        {!canWrite ? (
+          <div
+            style={{
+              flex: 1,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: 'var(--warn)',
+              padding: 24,
+              textAlign: 'center',
+            }}
+          >
+            viewer role: interactive shells are admin-only.
+          </div>
+        ) : (
+          <div ref={termHostRef} style={{ flex: 1, overflow: 'hidden', padding: 8 }} />
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ──────────────────────────────────────────────────────────────
 // Subtab views
 // ──────────────────────────────────────────────────────────────
 
 type ViewProps = { agentId: string; onDescribe: (t: DescribeTarget) => void };
-type PodViewProps = ViewProps & { onLogs: (t: LogsTarget) => void };
+type PodViewProps = ViewProps & {
+  onLogs: (t: LogsTarget) => void;
+  onExec: (t: ExecTarget) => void;
+};
 
-function PodsView({ agentId, onDescribe, onLogs }: PodViewProps) {
+function PodsView({ agentId, onDescribe, onLogs, onExec }: PodViewProps) {
   const { data, error, loading } = useK8sList<K8sPod[]>(
     agentId,
     { type: 'K8sListPodsRequest' },
@@ -704,29 +962,54 @@ function PodsView({ agentId, onDescribe, onLogs }: PodViewProps) {
                   <td style={tdBase}>{fmtAge(p.age_secs)}</td>
                   <td style={tdMuted}>{p.node ?? '—'}</td>
                   <td style={tdBase}>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        onLogs({
-                          namespace: p.namespace,
-                          podName: p.name,
-                          containers: p.containers,
-                        })
-                      }
-                      style={{
-                        background: 'transparent',
-                        border: '1px solid var(--line)',
-                        borderRadius: 3,
-                        color: 'var(--fg-2)',
-                        cursor: 'pointer',
-                        fontFamily: 'var(--mono)',
-                        fontSize: 10,
-                        padding: '2px 6px',
-                      }}
-                      title="tail logs"
-                    >
-                      logs
-                    </button>
+                    <div style={{ display: 'inline-flex', gap: 4 }}>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          onLogs({
+                            namespace: p.namespace,
+                            podName: p.name,
+                            containers: p.containers,
+                          })
+                        }
+                        style={{
+                          background: 'transparent',
+                          border: '1px solid var(--line)',
+                          borderRadius: 3,
+                          color: 'var(--fg-2)',
+                          cursor: 'pointer',
+                          fontFamily: 'var(--mono)',
+                          fontSize: 10,
+                          padding: '2px 6px',
+                        }}
+                        title="tail logs"
+                      >
+                        logs
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          onExec({
+                            namespace: p.namespace,
+                            podName: p.name,
+                            containers: p.containers,
+                          })
+                        }
+                        style={{
+                          background: 'transparent',
+                          border: '1px solid var(--line)',
+                          borderRadius: 3,
+                          color: 'var(--fg-2)',
+                          cursor: 'pointer',
+                          fontFamily: 'var(--mono)',
+                          fontSize: 10,
+                          padding: '2px 6px',
+                        }}
+                        title="open shell (kubectl exec)"
+                      >
+                        exec
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -1064,6 +1347,7 @@ type Props = {
 export default function KubernetesHub({ agentId, subtab, onSubtabChange }: Props) {
   const [describeTarget, setDescribeTarget] = useState<DescribeTarget | null>(null);
   const [logsTarget, setLogsTarget] = useState<LogsTarget | null>(null);
+  const [execTarget, setExecTarget] = useState<ExecTarget | null>(null);
   return (
     <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
       <nav
@@ -1132,7 +1416,7 @@ export default function KubernetesHub({ agentId, subtab, onSubtabChange }: Props
       </nav>
 
       <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
-        {subtab === 'pods'        && <PodsView        agentId={agentId} onDescribe={setDescribeTarget} onLogs={setLogsTarget} />}
+        {subtab === 'pods'        && <PodsView        agentId={agentId} onDescribe={setDescribeTarget} onLogs={setLogsTarget} onExec={setExecTarget} />}
         {subtab === 'deployments' && <DeploymentsView agentId={agentId} onDescribe={setDescribeTarget} />}
         {subtab === 'services'    && <ServicesView    agentId={agentId} onDescribe={setDescribeTarget} />}
         {subtab === 'ingresses'   && <IngressesView   agentId={agentId} onDescribe={setDescribeTarget} />}
@@ -1152,6 +1436,13 @@ export default function KubernetesHub({ agentId, subtab, onSubtabChange }: Props
           agentId={agentId}
           target={logsTarget}
           onClose={() => setLogsTarget(null)}
+        />
+      )}
+      {execTarget && (
+        <ExecModal
+          agentId={agentId}
+          target={execTarget}
+          onClose={() => setExecTarget(null)}
         />
       )}
     </div>

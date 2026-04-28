@@ -529,6 +529,20 @@ export type AgentMessagePayload =
   | { type: 'K8sLogsChunk'; payload: { stream_id: string; lines: string[] } }
   | { type: 'K8sLogsStop'; payload: { stream_id: string } }
   | { type: 'K8sLogsEnd'; payload: { stream_id: string; error: string | null } }
+  | {
+      type: 'K8sExecRequest';
+      payload: {
+        session_id: string;
+        namespace: string;
+        pod_name: string;
+        container?: string | null;
+        command?: string[];
+      };
+    }
+  | {
+      type: 'K8sExecResponse';
+      payload: { session_id: string; success: boolean; error: string | null };
+    }
   | { type: 'StartTerminalRequest'; payload: { session_id: string } }
   | { type: 'TerminalData'; payload: { session_id: string; data: number[] } }
   | { type: 'TerminalResize'; payload: { session_id: string; cols: number; rows: number } }
