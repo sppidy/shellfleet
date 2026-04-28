@@ -4,13 +4,10 @@ on:
   push:
     branches: [main]
     paths:
-      # Anything that changes the k8s-flavor binary.
       - "agent/**"
       - "shared/**"
       - "Dockerfile.agent.k8s"
-      # Bumps the chart's appVersion / pinned image tag.
       - "helm/**"
-      # The workflow itself.
       - ".github/workflows/agent-k8s-image.yml"
   workflow_dispatch:
   release:
@@ -28,9 +25,26 @@ env:
   IMAGE_NAME: sys-manager/agent-k8s
 
 jobs:
-  build-and-push:
-    name: Build + push (multi-arch)
-    runs-on: ubuntu-latest
+  build:
+    # Per-arch native build. The previous attempt at multi-arch via
+    # QEMU emulation was 30+ min per run because kube-rs +
+    # k8s-openapi don't compile in any reasonable time under x86 →
+    # aarch64 emulation. Mirroring the .deb workflow's matrix —
+    # native runners per arch — gets us back into the ~5 min budget.
+    name: Build (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+            platform: linux/amd64
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            platform: linux/arm64
+    outputs:
+      sha_short: ${{ steps.tags.outputs.sha_short }}
     steps:
       - name: Checkout main repo
         uses: actions/checkout@v4
@@ -50,9 +64,6 @@ jobs:
           fi
           git submodule update --init --recursive --depth 1 agent shared
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -69,34 +80,21 @@ jobs:
         run: |
           set -euo pipefail
           SHA_SHORT=$(echo "$GITHUB_SHA" | cut -c1-7)
-          TAGS=("${REGISTRY}/${IMAGE_NAME}:sha-${SHA_SHORT}")
-          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
-            VER="${GITHUB_REF##refs/tags/}"
-            TAGS+=("${REGISTRY}/${IMAGE_NAME}:${VER}")
-            TAGS+=("${REGISTRY}/${IMAGE_NAME}:latest")
-          elif [[ "${GITHUB_REF}" == refs/heads/main ]]; then
-            TAGS+=("${REGISTRY}/${IMAGE_NAME}:main")
-            TAGS+=("${REGISTRY}/${IMAGE_NAME}:latest")
-          fi
-          # docker/build-push-action wants newline-separated tags.
-          {
-            echo 'tags<<EOF'
-            for t in "${TAGS[@]}"; do echo "$t"; done
-            echo 'EOF'
-          } >> "$GITHUB_OUTPUT"
+          echo "sha_short=${SHA_SHORT}" >> "$GITHUB_OUTPUT"
+          # Each arch pushes a single arch-suffixed tag; the merge job
+          # below stitches them into multi-arch tags afterwards.
+          echo "tag=${REGISTRY}/${IMAGE_NAME}:sha-${SHA_SHORT}-${{ matrix.arch }}" >> "$GITHUB_OUTPUT"
 
-      - name: Build + push
+      - name: Build + push (${{ matrix.arch }})
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ./Dockerfile.agent.k8s
-          platforms: linux/amd64,linux/arm64
+          platforms: ${{ matrix.platform }}
           push: true
-          tags: ${{ steps.tags.outputs.tags }}
-          # Build cache: registry-backed so amd64 + arm64 share layers
-          # across runs. The cache image is small and cheap to keep.
-          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache
-          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache,mode=max
+          tags: ${{ steps.tags.outputs.tag }}
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache-${{ matrix.arch }}
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache-${{ matrix.arch }},mode=max
           provenance: false
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
@@ -104,17 +102,69 @@ jobs:
             org.opencontainers.image.title=sys-manager-agent-k8s
             org.opencontainers.image.description=sys-manager k8s agent — kube-rs client behind the same WS protocol as the host agent
 
+  manifest:
+    name: Multi-arch manifest
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Harbor
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.HARBOR_ROBOT_USER }}
+          password: ${{ secrets.HARBOR_ROBOT_SECRET }}
+
+      - name: Compose multi-arch tags
+        id: tags
+        shell: bash
+        run: |
+          set -euo pipefail
+          SHA_SHORT="${{ needs.build.outputs.sha_short }}"
+          AMD="${REGISTRY}/${IMAGE_NAME}:sha-${SHA_SHORT}-amd64"
+          ARM="${REGISTRY}/${IMAGE_NAME}:sha-${SHA_SHORT}-arm64"
+          # Always: pin to commit. main pushes also retag :main + :latest.
+          # Tag releases retag :vX.Y.Z + :latest.
+          DEST=("${REGISTRY}/${IMAGE_NAME}:sha-${SHA_SHORT}")
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            VER="${GITHUB_REF##refs/tags/}"
+            DEST+=("${REGISTRY}/${IMAGE_NAME}:${VER}")
+            DEST+=("${REGISTRY}/${IMAGE_NAME}:latest")
+          elif [[ "${GITHUB_REF}" == refs/heads/main ]]; then
+            DEST+=("${REGISTRY}/${IMAGE_NAME}:main")
+            DEST+=("${REGISTRY}/${IMAGE_NAME}:latest")
+          fi
+          echo "amd=${AMD}" >> "$GITHUB_OUTPUT"
+          echo "arm=${ARM}" >> "$GITHUB_OUTPUT"
+          {
+            echo 'dest<<EOF'
+            for t in "${DEST[@]}"; do echo "$t"; done
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create + push manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          AMD='${{ steps.tags.outputs.amd }}'
+          ARM='${{ steps.tags.outputs.arm }}'
+          while IFS= read -r dest; do
+            [ -z "$dest" ] && continue
+            echo "→ ${dest}"
+            docker buildx imagetools create --tag "$dest" "$AMD" "$ARM"
+          done <<EOF
+          ${{ steps.tags.outputs.dest }}
+          EOF
+
       - name: Summary
         shell: bash
         run: |
           {
-            echo "## Pushed tags"
+            echo "## Pushed manifests"
             echo
             echo '```'
-            echo "${{ steps.tags.outputs.tags }}"
+            echo "${{ steps.tags.outputs.dest }}"
             echo '```'
-            echo
-            echo "Pull with:"
-            echo
-            echo "    docker pull ${REGISTRY}/${IMAGE_NAME}:latest"
           } >> "$GITHUB_STEP_SUMMARY"
