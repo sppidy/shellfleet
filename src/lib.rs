@@ -219,6 +219,33 @@ pub enum Message {
         error: Option<String>,
     },
 
+    /// Open a `kubectl exec`-equivalent PTY into a container. The
+    /// agent attaches to the pod's container via kube-rs's
+    /// AttachedProcess and re-uses the v14 TerminalData /
+    /// TerminalResize / StopTerminalRequest variants for the byte
+    /// stream — `session_id` is the same wire-level key, so the
+    /// dashboard's existing xterm.js plumbing works unchanged.
+    ///
+    /// `command` defaults to `/bin/sh` when empty. `container` is
+    /// required when the pod has more than one container.
+    K8sExecRequest {
+        session_id: String,
+        namespace: String,
+        pod_name: String,
+        container: Option<String>,
+        #[serde(default)]
+        command: Vec<String>,
+    },
+    /// Synchronous ack for the open. `success=false` means the agent
+    /// could not attach (e.g. pod not running, container picker
+    /// missing on a multi-container pod). Subsequent TerminalData
+    /// frames flow under the same session_id.
+    K8sExecResponse {
+        session_id: String,
+        success: bool,
+        error: Option<String>,
+    },
+
     /// Request to read a configuration file
     ReadConfigRequest { path: String },
 
