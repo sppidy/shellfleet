@@ -23,12 +23,54 @@ services:
       # Leave unset to disable; do NOT set it to "legacy_secret_off".
       - AGENT_SECRET=${AGENT_SECRET:-}
       - TOKENS_PATH=/data/approved_tokens.json
-      # Optional outbound webhook on auto-update window results.
-      # Leave UPDATE_WEBHOOK_URL unset to disable. UPDATE_WEBHOOK_FORMAT is
-      # "json" (default) or "slack" — Slack-shaped payload is compatible
-      # with both Slack incoming webhooks and Discord webhooks.
+      # ─── Outbound webhook fan-out ──────────────────────────────
+      # Four event types × four sink types. The *bare* (no prefix)
+      # vars are the default-fallback — set them once and every
+      # event flows to that sink. The per-event *_PREFIX_ vars
+      # override the default only for that event.
+      #
+      # See docs/WEBHOOKS.md for the full reference.
+
+      # Default-prefix (covers all events unless an event-specific
+      # override is set). Operators usually only need this block.
+      - WEBHOOK_URL=${WEBHOOK_URL:-}
+      - WEBHOOK_FORMAT=${WEBHOOK_FORMAT:-json}
+      - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL:-}
+      - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL:-}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
+
+      # UPDATE_* — apt-update window results.
       - UPDATE_WEBHOOK_URL=${UPDATE_WEBHOOK_URL:-}
       - UPDATE_WEBHOOK_FORMAT=${UPDATE_WEBHOOK_FORMAT:-json}
+      - UPDATE_SLACK_WEBHOOK_URL=${UPDATE_SLACK_WEBHOOK_URL:-}
+      - UPDATE_DISCORD_WEBHOOK_URL=${UPDATE_DISCORD_WEBHOOK_URL:-}
+      - UPDATE_TELEGRAM_BOT_TOKEN=${UPDATE_TELEGRAM_BOT_TOKEN:-}
+      - UPDATE_TELEGRAM_CHAT_ID=${UPDATE_TELEGRAM_CHAT_ID:-}
+
+      # HEALTH_* — health probe green↔red transitions.
+      - HEALTH_WEBHOOK_URL=${HEALTH_WEBHOOK_URL:-}
+      - HEALTH_WEBHOOK_FORMAT=${HEALTH_WEBHOOK_FORMAT:-json}
+      - HEALTH_SLACK_WEBHOOK_URL=${HEALTH_SLACK_WEBHOOK_URL:-}
+      - HEALTH_DISCORD_WEBHOOK_URL=${HEALTH_DISCORD_WEBHOOK_URL:-}
+      - HEALTH_TELEGRAM_BOT_TOKEN=${HEALTH_TELEGRAM_BOT_TOKEN:-}
+      - HEALTH_TELEGRAM_CHAT_ID=${HEALTH_TELEGRAM_CHAT_ID:-}
+
+      # BACKUP_* — backup job results.
+      - BACKUP_WEBHOOK_URL=${BACKUP_WEBHOOK_URL:-}
+      - BACKUP_WEBHOOK_FORMAT=${BACKUP_WEBHOOK_FORMAT:-json}
+      - BACKUP_SLACK_WEBHOOK_URL=${BACKUP_SLACK_WEBHOOK_URL:-}
+      - BACKUP_DISCORD_WEBHOOK_URL=${BACKUP_DISCORD_WEBHOOK_URL:-}
+      - BACKUP_TELEGRAM_BOT_TOKEN=${BACKUP_TELEGRAM_BOT_TOKEN:-}
+      - BACKUP_TELEGRAM_CHAT_ID=${BACKUP_TELEGRAM_CHAT_ID:-}
+
+      # DISCONNECT_* — agent WS teardown.
+      - DISCONNECT_WEBHOOK_URL=${DISCONNECT_WEBHOOK_URL:-}
+      - DISCONNECT_WEBHOOK_FORMAT=${DISCONNECT_WEBHOOK_FORMAT:-json}
+      - DISCONNECT_SLACK_WEBHOOK_URL=${DISCONNECT_SLACK_WEBHOOK_URL:-}
+      - DISCONNECT_DISCORD_WEBHOOK_URL=${DISCONNECT_DISCORD_WEBHOOK_URL:-}
+      - DISCONNECT_TELEGRAM_BOT_TOKEN=${DISCONNECT_TELEGRAM_BOT_TOKEN:-}
+      - DISCONNECT_TELEGRAM_CHAT_ID=${DISCONNECT_TELEGRAM_CHAT_ID:-}
       # Comma-separated extra origins permitted to upgrade /ui/ws.
       # The UI_URL origin is always allowed automatically. Use this if
       # you have additional dashboards (e.g. dev tunnels) that need the
