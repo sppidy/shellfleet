@@ -322,6 +322,10 @@ Per-event override prefixes (each takes the same five suffixes):
 `UPDATE_*` (apt scheduler), `HEALTH_*` (probe transitions),
 `BACKUP_*` (backup job result), `DISCONNECT_*` (agent dropped off).
 
+See [`WEBHOOKS.md`](WEBHOOKS.md) for the full reference: when each
+event fires, what each sink renders, the audit-row format, and
+worked examples for Slack / Discord / Telegram / generic JSON.
+
 ### Per-agent S3 backup destination
 
 When a backup job's `dest` is `s3://bucket/prefix`, the agent uploads via
@@ -367,4 +371,5 @@ This is automatic — nothing to configure.
   - [`KUBERNETES.md`](KUBERNETES.md) — k8s install paths, RBAC posture
   - [`HELM.md`](HELM.md) — chart reference + every value
   - [`METRICS.md`](METRICS.md) — Prometheus plugin schema + worked example
+  - [`WEBHOOKS.md`](WEBHOOKS.md) — outbound notification fan-out reference
   - [`CLOUDFLARE.md`](CLOUDFLARE.md) — WAF rate-limit rules in front of the stack

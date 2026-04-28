@@ -96,6 +96,7 @@ Top-level files in this superproject:
 | `metrics.example.yaml`     | Drop-in starter config for the metrics plugin                       |
 | `docs/KUBERNETES.md`       | K8s support — install paths, RBAC posture, limitations              |
 | `docs/HELM.md`             | Helm chart reference — every value + upgrade / uninstall            |
+| `docs/WEBHOOKS.md`         | Outbound webhook fan-out — events, sinks, env-var matrix            |
 | `helm/sys-manager-agent/`  | In-cluster install chart for the k8s flavor of the agent            |
 | `Dockerfile.agent.k8s`     | Build the k8s-flavor agent image (used by the Helm chart)           |
 | `CONTRIBUTING.md`, `CLA.md`| Contribution flow + Individual Contributor License Agreement        |
