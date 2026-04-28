@@ -39,7 +39,7 @@ agent named `<release>-sys-manager-agent-id`.
 
 | key                          | default                                  |
 | ---------------------------- | ---------------------------------------- |
-| `image.repository`           | `hrbr.sppidy.in/sys-manager/agent-k8s`   |
+| `image.repository`           | `ghcr.io/sppidy/sys-manager-agent-k8s`   |
 | `image.tag`                  | `""` → falls back to `.Chart.appVersion` |
 | `image.pullPolicy`           | `IfNotPresent`                           |
 | `imagePullSecrets`           | `[]`                                     |
