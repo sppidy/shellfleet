@@ -543,6 +543,41 @@ export type AgentMessagePayload =
       type: 'K8sExecResponse';
       payload: { session_id: string; success: boolean; error: string | null };
     }
+  | {
+      type: 'K8sApplyRequest';
+      payload: { yaml: string; dry_run?: boolean; force?: boolean };
+    }
+  | {
+      type: 'K8sApplyResponse';
+      payload: { result: string; error: string | null };
+    }
+  | {
+      type: 'K8sScaleRequest';
+      payload: { kind: string; namespace: string; name: string; replicas: number };
+    }
+  | {
+      type: 'K8sScaleResponse';
+      payload: {
+        kind: string;
+        namespace: string;
+        name: string;
+        success: boolean;
+        error: string | null;
+      };
+    }
+  | {
+      type: 'K8sDeletePodRequest';
+      payload: { namespace: string; name: string; grace_period_secs?: number | null };
+    }
+  | {
+      type: 'K8sDeletePodResponse';
+      payload: {
+        namespace: string;
+        name: string;
+        success: boolean;
+        error: string | null;
+      };
+    }
   | { type: 'StartTerminalRequest'; payload: { session_id: string } }
   | { type: 'TerminalData'; payload: { session_id: string; data: number[] } }
   | { type: 'TerminalResize'; payload: { session_id: string; cols: number; rows: number } }

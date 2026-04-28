@@ -48,7 +48,8 @@ export type K8sSubtab =
   | 'services'
   | 'ingresses'
   | 'pvcs'
-  | 'events';
+  | 'events'
+  | 'apply';
 
 export const K8S_SUBTABS: K8sSubtab[] = [
   'pods',
@@ -57,6 +58,7 @@ export const K8S_SUBTABS: K8sSubtab[] = [
   'ingresses',
   'pvcs',
   'events',
+  'apply',
 ];
 
 const SUBTAB_DEFS: { id: K8sSubtab; label: string; hint?: string }[] = [
@@ -66,6 +68,7 @@ const SUBTAB_DEFS: { id: K8sSubtab; label: string; hint?: string }[] = [
   { id: 'ingresses',   label: 'ingresses',   hint: 'http routing' },
   { id: 'pvcs',        label: 'pvcs',        hint: 'persistent volumes' },
   { id: 'events',      label: 'events',      hint: 'recent activity' },
+  { id: 'apply',       label: 'apply',       hint: 'kubectl apply -f' },
 ];
 
 // ──────────────────────────────────────────────────────────────
@@ -900,6 +903,172 @@ function ExecModal({
 }
 
 // ──────────────────────────────────────────────────────────────
+// Apply view — paste YAML, dry-run / force toggles, server-side
+// apply via the agent. Multi-doc (--- separated) supported.
+// ──────────────────────────────────────────────────────────────
+
+const APPLY_DRAFT_KEY = 'k8s.apply.draft';
+
+function ApplyView({ agentId }: { agentId: string }) {
+  const { sendToAgent, onAgentMessage } = useWebSocket();
+  const canWrite = useCanWrite();
+  const [yaml, setYaml] = useState<string>('');
+  const [dryRun, setDryRun] = useState<boolean>(true);
+  const [force, setForce] = useState<boolean>(false);
+  const [pending, setPending] = useState(false);
+  const [result, setResult] = useState<string>('');
+  const [error, setError] = useState<string | null>(null);
+
+  // Restore the operator's last-typed YAML across tab switches /
+  // reloads. Per-agent so cluster A's kustomize-output doesn't
+  // accidentally land in cluster B.
+  const draftKey = `${APPLY_DRAFT_KEY}.${agentId}`;
+  useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem(draftKey);
+      if (saved) setYaml(saved);
+    } catch {
+      /* ignore — sessionStorage / localStorage may be disabled */
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draftKey]);
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(draftKey, yaml);
+    } catch {
+      /* ignore */
+    }
+  }, [yaml, draftKey]);
+
+  const submit = () => {
+    if (!yaml.trim()) return;
+    setPending(true);
+    setError(null);
+    setResult('');
+    sendToAgent(agentId, {
+      type: 'K8sApplyRequest',
+      payload: { yaml, dry_run: dryRun, force },
+    });
+  };
+
+  useEffect(() => {
+    const unsub = onAgentMessage(agentId, (msg) => {
+      if (msg.type !== 'K8sApplyResponse') return;
+      setPending(false);
+      setError(msg.payload.error);
+      setResult(msg.payload.result);
+    });
+    return unsub;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agentId]);
+
+  return (
+    <>
+      <PanelHead
+        title="KUBERNETES · apply"
+        meta={
+          dryRun
+            ? 'dry-run · server-side'
+            : force
+              ? 'live · force'
+              : 'live · server-side'
+        }
+      />
+      <div
+        style={{
+          flex: 1,
+          display: 'flex',
+          flexDirection: 'column',
+          padding: 'var(--pad, 12px)',
+          gap: 12,
+          minHeight: 0,
+        }}
+      >
+        {!canWrite ? (
+          <EmptyPane label="viewer role: applying YAML is admin-only." />
+        ) : (
+          <>
+            <textarea
+              value={yaml}
+              onChange={(e) => setYaml(e.target.value)}
+              placeholder={`# kubectl apply -f equivalent\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: example\n  namespace: default\ndata:\n  hello: world`}
+              spellCheck={false}
+              style={{
+                flex: 1,
+                minHeight: 200,
+                background: '#06090b',
+                color: 'var(--fg)',
+                border: '1px solid var(--line)',
+                borderRadius: 3,
+                padding: 8,
+                fontFamily: 'var(--mono)',
+                fontSize: 12,
+                resize: 'none',
+                outline: 'none',
+              }}
+            />
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, fontSize: 11 }}>
+              <label
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}
+              >
+                <input
+                  type="checkbox"
+                  checked={dryRun}
+                  onChange={(e) => setDryRun(e.target.checked)}
+                />
+                dry-run
+              </label>
+              <label
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}
+                title="--force-conflicts: take ownership of fields previously managed elsewhere"
+              >
+                <input
+                  type="checkbox"
+                  checked={force}
+                  onChange={(e) => setForce(e.target.checked)}
+                />
+                force
+              </label>
+              <button
+                type="button"
+                className="btn sm"
+                onClick={submit}
+                disabled={pending || !yaml.trim()}
+                style={{ height: 24, fontSize: 11, padding: '0 12px' }}
+              >
+                {pending ? 'applying…' : dryRun ? 'dry-run' : 'apply'}
+              </button>
+              <span style={{ color: 'var(--fg-3)' }}>
+                multi-doc supported (separate with `---`)
+              </span>
+            </div>
+            {(result || error) && (
+              <pre
+                style={{
+                  margin: 0,
+                  padding: 8,
+                  background: '#06090b',
+                  border: '1px solid var(--line)',
+                  borderRadius: 3,
+                  fontFamily: 'var(--mono)',
+                  fontSize: 12,
+                  color: error ? 'var(--err, #e57373)' : 'var(--fg)',
+                  whiteSpace: 'pre-wrap',
+                  maxHeight: 200,
+                  overflow: 'auto',
+                }}
+              >
+                {error ?? result}
+              </pre>
+            )}
+          </>
+        )}
+      </div>
+    </>
+  );
+}
+
+// ──────────────────────────────────────────────────────────────
 // Subtab views
 // ──────────────────────────────────────────────────────────────
 
@@ -910,6 +1079,8 @@ type PodViewProps = ViewProps & {
 };
 
 function PodsView({ agentId, onDescribe, onLogs, onExec }: PodViewProps) {
+  const { sendToAgent, onAgentMessage } = useWebSocket();
+  const canWrite = useCanWrite();
   const { data, error, loading } = useK8sList<K8sPod[]>(
     agentId,
     { type: 'K8sListPodsRequest' },
@@ -919,12 +1090,51 @@ function PodsView({ agentId, onDescribe, onLogs, onExec }: PodViewProps) {
         : null,
   );
   const pods = data ?? [];
+
+  // Same toast pattern as DeploymentsView for the delete response.
+  const [toast, setToast] = useState<{ kind: 'ok' | 'err'; msg: string } | null>(null);
+  useEffect(() => {
+    const unsub = onAgentMessage(agentId, (msg) => {
+      if (msg.type !== 'K8sDeletePodResponse') return;
+      const tag = `${msg.payload.namespace}/${msg.payload.name}`;
+      setToast(
+        msg.payload.success
+          ? { kind: 'ok', msg: `deleted ${tag}` }
+          : { kind: 'err', msg: `${tag}: ${msg.payload.error ?? 'failed'}` },
+      );
+      setTimeout(() => setToast(null), 4000);
+    });
+    return unsub;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agentId]);
+
+  const askDelete = (p: K8sPod) => {
+    if (!window.confirm(`Delete pod ${p.namespace}/${p.name}?`)) return;
+    sendToAgent(agentId, {
+      type: 'K8sDeletePodRequest',
+      payload: { namespace: p.namespace, name: p.name, grace_period_secs: null },
+    });
+  };
   return (
     <>
       <PanelHead
         title="KUBERNETES · pods"
         meta={loading && !data ? 'loading…' : `${pods.length} pod${pods.length === 1 ? '' : 's'}`}
       />
+      {toast && (
+        <div
+          style={{
+            padding: '4px 12px',
+            fontFamily: 'var(--mono)',
+            fontSize: 11,
+            color: toast.kind === 'ok' ? 'var(--ok, #7fb069)' : 'var(--err, #e57373)',
+            borderBottom: '1px solid var(--line)',
+            flexShrink: 0,
+          }}
+        >
+          {toast.msg}
+        </div>
+      )}
       <div style={{ flex: 1, overflow: 'auto', padding: 'var(--pad, 12px)' }}>
         {error ? (
           <ErrorPane error={error} />
@@ -1009,6 +1219,25 @@ function PodsView({ agentId, onDescribe, onLogs, onExec }: PodViewProps) {
                       >
                         exec
                       </button>
+                      {canWrite && (
+                        <button
+                          type="button"
+                          onClick={() => askDelete(p)}
+                          style={{
+                            background: 'transparent',
+                            border: '1px solid var(--line)',
+                            borderRadius: 3,
+                            color: 'var(--err, #e57373)',
+                            cursor: 'pointer',
+                            fontFamily: 'var(--mono)',
+                            fontSize: 10,
+                            padding: '2px 6px',
+                          }}
+                          title="delete pod"
+                        >
+                          delete
+                        </button>
+                      )}
                     </div>
                   </td>
                 </tr>
@@ -1022,6 +1251,8 @@ function PodsView({ agentId, onDescribe, onLogs, onExec }: PodViewProps) {
 }
 
 function DeploymentsView({ agentId, onDescribe }: ViewProps) {
+  const { sendToAgent, onAgentMessage } = useWebSocket();
+  const canWrite = useCanWrite();
   const { data, error, loading } = useK8sList<K8sDeployment[]>(
     agentId,
     { type: 'K8sListDeploymentsRequest' },
@@ -1031,12 +1262,61 @@ function DeploymentsView({ agentId, onDescribe }: ViewProps) {
         : null,
   );
   const items = data ?? [];
+
+  // Toast for the most recent scale-response: shows under the
+  // header for ~4s. Rows don't track per-row toast state because
+  // the polling refresh would clobber it.
+  const [toast, setToast] = useState<{ kind: 'ok' | 'err'; msg: string } | null>(null);
+  useEffect(() => {
+    const unsub = onAgentMessage(agentId, (msg) => {
+      if (msg.type !== 'K8sScaleResponse') return;
+      const tag = `${msg.payload.namespace}/${msg.payload.name}`;
+      setToast(
+        msg.payload.success
+          ? { kind: 'ok', msg: `scaled ${tag}` }
+          : { kind: 'err', msg: `${tag}: ${msg.payload.error ?? 'failed'}` },
+      );
+      setTimeout(() => setToast(null), 4000);
+    });
+    return unsub;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agentId]);
+
+  const askScale = (d: K8sDeployment) => {
+    const m = d.ready.match(/^(\d+)\/(\d+)/);
+    const current = m ? m[2] : '1';
+    const raw = window.prompt(`Scale ${d.namespace}/${d.name} to:`, current);
+    if (raw === null) return;
+    const n = parseInt(raw, 10);
+    if (!Number.isFinite(n) || n < 0) {
+      window.alert('replicas must be a non-negative integer');
+      return;
+    }
+    sendToAgent(agentId, {
+      type: 'K8sScaleRequest',
+      payload: { kind: 'deployment', namespace: d.namespace, name: d.name, replicas: n },
+    });
+  };
   return (
     <>
       <PanelHead
         title="KUBERNETES · deployments"
         meta={loading && !data ? 'loading…' : `${items.length} deployment${items.length === 1 ? '' : 's'}`}
       />
+      {toast && (
+        <div
+          style={{
+            padding: '4px 12px',
+            fontFamily: 'var(--mono)',
+            fontSize: 11,
+            color: toast.kind === 'ok' ? 'var(--ok, #7fb069)' : 'var(--err, #e57373)',
+            borderBottom: '1px solid var(--line)',
+            flexShrink: 0,
+          }}
+        >
+          {toast.msg}
+        </div>
+      )}
       <div style={{ flex: 1, overflow: 'auto', padding: 'var(--pad, 12px)' }}>
         {error ? (
           <ErrorPane error={error} />
@@ -1053,6 +1333,7 @@ function DeploymentsView({ agentId, onDescribe }: ViewProps) {
                 <th style={tdBase}>available</th>
                 <th style={tdBase}>age</th>
                 <th style={tdBase}>image</th>
+                <th style={tdBase}></th>
               </tr>
             </thead>
             <tbody>
@@ -1072,6 +1353,27 @@ function DeploymentsView({ agentId, onDescribe }: ViewProps) {
                   <td style={tdBase}>{d.available}</td>
                   <td style={tdBase}>{fmtAge(d.age_secs)}</td>
                   <td style={tdMuted}>{d.image ?? '—'}</td>
+                  <td style={tdBase}>
+                    {canWrite && (
+                      <button
+                        type="button"
+                        onClick={() => askScale(d)}
+                        title="scale replicas"
+                        style={{
+                          background: 'transparent',
+                          border: '1px solid var(--line)',
+                          borderRadius: 3,
+                          color: 'var(--fg-2)',
+                          cursor: 'pointer',
+                          fontFamily: 'var(--mono)',
+                          fontSize: 10,
+                          padding: '2px 6px',
+                        }}
+                      >
+                        scale
+                      </button>
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -1422,6 +1724,7 @@ export default function KubernetesHub({ agentId, subtab, onSubtabChange }: Props
         {subtab === 'ingresses'   && <IngressesView   agentId={agentId} onDescribe={setDescribeTarget} />}
         {subtab === 'pvcs'        && <PvcsView        agentId={agentId} onDescribe={setDescribeTarget} />}
         {subtab === 'events'      && <EventsView      agentId={agentId} />}
+        {subtab === 'apply'       && <ApplyView       agentId={agentId} />}
       </div>
 
       {describeTarget && (
