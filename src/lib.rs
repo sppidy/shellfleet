@@ -4,6 +4,10 @@ use serde::{Deserialize, Serialize};
 /// the wire format changes in a way the server needs to reject older agents
 /// for. Value `0` means "legacy agent that predates this field" — those
 /// still connect, just without the version-aware fast paths.
+/// v16: k8s read API — `K8sListPodsRequest` / `K8sListPodsResponse`
+/// for the slice-1 Pods view. Only k8s-feature agents (advertising
+/// the `"k8s"` capability) handle these; others return an error.
+///
 /// v15: Register gains `capabilities: Vec<String>` so the dashboard
 /// can hide tabs the agent can't serve. Standard caps: `"systemd"`,
 /// `"docker"`, `"swarm"`, `"k8s"`. Empty / missing = legacy v14
@@ -11,7 +15,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// v14: terminal variants gain `session_id` for multi-PTY per host.
 /// Empty string = the singleton container-exec session (DockerExec*).
-pub const PROTOCOL_VERSION: u32 = 15;
+pub const PROTOCOL_VERSION: u32 = 16;
 
 fn default_protocol_version() -> u32 {
     0
@@ -123,6 +127,15 @@ pub enum Message {
         session_id: String,
         cols: u16,
         rows: u16,
+    },
+
+    /// List pods across every namespace the agent's k8s identity can
+    /// see. Only agents with the `"k8s"` capability handle this; the
+    /// non-k8s .deb returns `K8sListPodsResponse { error: Some(...) }`.
+    K8sListPodsRequest,
+    K8sListPodsResponse {
+        pods: Vec<K8sPod>,
+        error: Option<String>,
     },
 
     /// Request to read a configuration file
@@ -935,6 +948,27 @@ pub struct AptUpgradable {
     pub current_version: String,
     pub new_version: String,
     pub source: String,
+}
+
+/// One row in the dashboard's k8s Pods table. The agent collapses
+/// the kube-apiserver `Pod` object down to the fields the UI renders;
+/// the rest stays on the cluster and is fetched via Describe later.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct K8sPod {
+    pub namespace: String,
+    pub name: String,
+    /// `Running` / `Pending` / `Succeeded` / `Failed` / `Unknown`.
+    pub phase: String,
+    /// `<ready_containers>/<total_containers>`, e.g. `2/3`.
+    pub ready: String,
+    /// Sum of restartCount across all container statuses.
+    pub restarts: u32,
+    /// Seconds since `metadata.creationTimestamp`. UI formats as a
+    /// human "5m" / "3h" / "2d".
+    pub age_secs: i64,
+    pub node: Option<String>,
+    /// Just the container names — image / cmd lives behind Describe.
+    pub containers: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
