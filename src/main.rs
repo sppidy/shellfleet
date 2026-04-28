@@ -11,6 +11,9 @@ mod stats;
 mod systemd;
 mod terminal;
 
+#[cfg(feature = "kube")]
+mod k8s;
+
 /// Write the bearer token to disk with mode 0600. Tries the operator
 /// path first; on permission failure (e.g. the agent isn't running as
 /// root and `/etc/sys-manager` doesn't exist) falls back to a CWD-
@@ -183,6 +186,10 @@ async fn main() {
             }
             shared::SwarmRole::NotInSwarm => {}
         }
+    }
+    #[cfg(feature = "kube")]
+    if k8s::k8s_available().await {
+        capabilities.push("k8s".into());
     }
     println!("agent capabilities: {capabilities:?}");
 
@@ -509,6 +516,22 @@ async fn main() {
                                         containers,
                                         error,
                                     });
+                                });
+                            }
+                            Message::K8sListPodsRequest => {
+                                let tx_clone = tx.clone();
+                                tokio::spawn(async move {
+                                    #[cfg(feature = "kube")]
+                                    let (pods, error) = match k8s::list_pods().await {
+                                        Ok(p) => (p, None),
+                                        Err(e) => (Vec::new(), Some(e)),
+                                    };
+                                    #[cfg(not(feature = "kube"))]
+                                    let (pods, error) = (
+                                        Vec::new(),
+                                        Some("agent built without k8s support".into()),
+                                    );
+                                    let _ = tx_clone.send(Message::K8sListPodsResponse { pods, error });
                                 });
                             }
                             Message::SwarmServiceActionRequest { name, action } => {

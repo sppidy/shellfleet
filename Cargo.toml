@@ -10,6 +10,13 @@ repository = "https://github.com/sppidy/sys-mngr-agent"
 name = "sys-manager-agent"
 path = "src/main.rs"
 
+[features]
+# Default build is the lean host-agent .deb. Turn on the `kube` feature
+# for the sys-manager-agent-k8s package, which adds kube-rs + k8s-openapi
+# (~2 MB of crypto deps) so the agent can talk to a kube-apiserver.
+default = []
+kube = ["dep:kube", "dep:k8s-openapi", "dep:chrono"]
+
 [dependencies]
 crossbeam-channel = "0.5.15"
 futures-util = "0.3.32"
@@ -22,6 +29,16 @@ shared = { version = "0.1.0", path = "../shared" }
 tokio = { version = "1.52.1", features = ["macros", "process", "rt-multi-thread", "sync"] }
 tokio-tungstenite = { version = "0.29.0", features = ["native-tls"] }
 url = "2.5.8"
+
+# Optional — only compiled when `--features kube` (i.e. the
+# sys-manager-agent-k8s package). Uses rustls so we don't drag a second
+# TLS stack in alongside reqwest's native-tls.
+chrono = { version = "0.4", default-features = false, features = ["clock"], optional = true }
+kube = { version = "1.1", default-features = false, features = ["client", "rustls-tls", "ws"], optional = true }
+# k8s-openapi requires a concrete v1_* feature pinning the API surface
+# the binary supports. v1_32 covers k3s 1.34 / kubernetes 1.32 (current
+# LTS / latest). Bump in lockstep when targeting newer clusters.
+k8s-openapi = { version = "0.25", default-features = false, features = ["v1_32"], optional = true }
 
 # cargo-deb metadata. Used by the .github/workflows/agent-deb.yml job in the
 # superproject to publish .deb packages to https://sppidy.github.io/sys-manager.
@@ -64,3 +81,18 @@ unit-name = "sys-manager-agent"
 enable = true
 start = true
 restart-after-upgrade = true
+
+# Variant: sys-manager-agent-k8s. Built with `cargo deb --variant k8s
+# --features kube` in CI. Same binary path + systemd unit as the
+# standard package, so the two are mutually exclusive at install time.
+[package.metadata.deb.variants.k8s]
+name = "sys-manager-agent-k8s"
+conflicts = "sys-manager-agent"
+provides = "sys-manager-agent"
+replaces = "sys-manager-agent"
+extended-description = """\
+Agent for sys-manager — k8s flavor. Same as sys-manager-agent plus a
+compiled-in kube-rs client so the agent can talk to a kube-apiserver
+via in-cluster ServiceAccount or a kubeconfig at $KUBECONFIG. Install
+on hosts that should appear as Kubernetes targets in the dashboard;
+install plain sys-manager-agent everywhere else."""
