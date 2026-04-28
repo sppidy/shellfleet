@@ -134,6 +134,11 @@ function HomeBody() {
   const dockerAvailable = caps === null || caps.includes('docker') || caps.includes('swarm');
   const swarmAvailable = caps === null || caps.includes('swarm');
   const k8sAvailable = caps !== null && caps.includes('k8s');
+  // systemd gates the apt-update, journalctl, and service-list surfaces.
+  // Pre-v15 agents (caps null) keep showing them — only k8s-only Pod
+  // agents that explicitly advertise without "systemd" hide the
+  // matching UI.
+  const systemdAvailable = caps === null || caps.includes('systemd');
   const [unreadCount, setUnreadCount] = useState<number>(0);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [backupsEnabled, setBackupsEnabled] = useState(false);
@@ -179,6 +184,18 @@ function HomeBody() {
       setActiveTab('dashboard');
     }
   }, [activeTab, caps, k8sAvailable]);
+
+  // Same fallback for the apt-update / journal tabs on a no-systemd
+  // (k8s-only Pod) agent.
+  useEffect(() => {
+    if (
+      (activeTab === 'updates' || activeTab === 'journal') &&
+      caps !== null &&
+      !systemdAvailable
+    ) {
+      setActiveTab('dashboard');
+    }
+  }, [activeTab, caps, systemdAvailable]);
 
   // If swarm goes away while the operator is on the stacks subtab,
   // fall back to containers instead of rendering an empty pane.
@@ -296,6 +313,9 @@ function HomeBody() {
     // Pre-v15 agents (caps null) still shouldn't see it; this is the
     // one tab where "show on absence" would be wrong.
     if (t.id === 'kubernetes' && !k8sAvailable) return false;
+    // systemd-driven surfaces: apt update window + journalctl
+    // streaming. K8s-only Pod agents skip these.
+    if ((t.id === 'updates' || t.id === 'journal') && !systemdAvailable) return false;
     return true;
   });
 
@@ -585,9 +605,11 @@ function HomeBody() {
                       <div style={{ padding: 'var(--pad)', borderBottom: '1px solid var(--line)' }}>
                         <SystemStats agentId={selectedAgent} />
                       </div>
-                      <div style={{ flex: 1, padding: 'var(--pad)', overflowY: 'auto' }}>
-                        <ServiceList agentId={selectedAgent} />
-                      </div>
+                      {systemdAvailable && (
+                        <div style={{ flex: 1, padding: 'var(--pad)', overflowY: 'auto' }}>
+                          <ServiceList agentId={selectedAgent} />
+                        </div>
+                      )}
                     </>
                   }
                   right={
