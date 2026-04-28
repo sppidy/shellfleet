@@ -169,6 +169,25 @@ pub enum Message {
         error: Option<String>,
     },
 
+    /// Describe a single resource — agent fetches the typed object and
+    /// serializes it to YAML so the dashboard can render it in a modal
+    /// without re-implementing kubectl's section formatter. `kind` is
+    /// lowercase: `"pod"` / `"deployment"` / `"service"` / `"ingress"` /
+    /// `"pvc"` / `"event"`. `namespace = None` is valid for cluster-
+    /// scoped resources but every supported kind is namespaced today.
+    K8sDescribeRequest {
+        kind: String,
+        namespace: Option<String>,
+        name: String,
+    },
+    K8sDescribeResponse {
+        kind: String,
+        namespace: Option<String>,
+        name: String,
+        yaml: String,
+        error: Option<String>,
+    },
+
     /// Request to read a configuration file
     ReadConfigRequest { path: String },
 
