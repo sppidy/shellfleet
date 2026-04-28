@@ -14,6 +14,9 @@ mod terminal;
 #[cfg(feature = "kube")]
 mod k8s;
 
+#[cfg(feature = "kube")]
+mod k8s_logs;
+
 /// Write the bearer token to disk with mode 0600. Tries the operator
 /// path first; on permission failure (e.g. the agent isn't running as
 /// root and `/etc/sys-manager` doesn't exist) falls back to a CWD-
@@ -232,6 +235,8 @@ async fn main() {
     let log_streams = logs::LogStreams::default();
     let journal_streams = journal::JournalStreams::default();
     let journal_stream_mgr = journal_stream::JournalStreams::default();
+    #[cfg(feature = "kube")]
+    let k8s_log_streams = k8s_logs::K8sLogStreams::default();
     let health_probes = health::HealthProbes::default();
 
     // Watchdog: if the WebSocket goes silent for 75s the connection is
@@ -634,6 +639,45 @@ async fn main() {
                                         error,
                                     });
                                 });
+                            }
+                            Message::K8sLogsRequest {
+                                stream_id,
+                                namespace,
+                                pod_name,
+                                container,
+                                tail_lines,
+                                follow,
+                            } => {
+                                #[cfg(feature = "kube")]
+                                {
+                                    let args = k8s_logs::LogArgs {
+                                        stream_id,
+                                        namespace,
+                                        pod_name,
+                                        container,
+                                        tail_lines,
+                                        follow,
+                                    };
+                                    k8s_log_streams.start(args, tx.clone()).await;
+                                }
+                                #[cfg(not(feature = "kube"))]
+                                {
+                                    let _ = (namespace, pod_name, container, tail_lines, follow);
+                                    let _ = tx.send(Message::K8sLogsEnd {
+                                        stream_id,
+                                        error: Some("agent built without k8s support".into()),
+                                    });
+                                }
+                            }
+                            Message::K8sLogsStop { stream_id } => {
+                                #[cfg(feature = "kube")]
+                                {
+                                    k8s_log_streams.stop(&stream_id).await;
+                                }
+                                #[cfg(not(feature = "kube"))]
+                                {
+                                    let _ = stream_id;
+                                }
                             }
                             Message::K8sDescribeRequest { kind, namespace, name } => {
                                 let tx_clone = tx.clone();
