@@ -682,6 +682,19 @@ async fn handle_agent_socket(socket: WebSocket, state: Arc<AppState>, token: Str
                                             Some(&r.detail),
                                         )
                                         .await;
+                                        // Outbound webhook fan-out for the
+                                        // green↔red transition. Reads
+                                        // HEALTH_* env (independent from
+                                        // UPDATE_* / BACKUP_* / DISCONNECT_*).
+                                        // No-op when nothing's configured.
+                                        webhook::fire_health_probe_transition(
+                                            state.db.clone(),
+                                            agent_id.to_string(),
+                                            format!("#{probe_id}"),
+                                            r.state,
+                                            r.detail.clone(),
+                                            now_unix(),
+                                        );
                                     }
                                 }
                             }
@@ -768,6 +781,24 @@ async fn handle_agent_socket(socket: WebSocket, state: Arc<AppState>, token: Str
                                     Some(&body_summary),
                                 )
                                 .await;
+                                // Outbound webhook fan-out (BACKUP_* env).
+                                // Sends the full combined log so a
+                                // chat sink shows the tail of failed
+                                // backups; on success the bytes/archive
+                                // summary rides in the body.
+                                webhook::fire_backup_result(
+                                    state.db.clone(),
+                                    agent_id.to_string(),
+                                    name.clone(),
+                                    *success,
+                                    if *success {
+                                        body_summary.clone()
+                                    } else {
+                                        combined.clone()
+                                    },
+                                    error.clone(),
+                                    now_unix(),
+                                );
                             }
                         }
                         // Fan-out attribution: if a fan_out_run is
@@ -873,6 +904,11 @@ async fn handle_agent_socket(socket: WebSocket, state: Arc<AppState>, token: Str
         state.agent_capabilities.lock().await.remove(&id);
         tracing::info!(agent_id = %id, "agent disconnected");
         broadcast_agent_list(&state).await;
+        // Outbound webhook fan-out (DISCONNECT_* env). Useful for
+        // "the amd64-builder fell off the network at 03:14" alerts.
+        // Independent prefix so this can route to a more urgent
+        // sink than the daily apt-update channel.
+        webhook::fire_agent_disconnect(state.db.clone(), id, now_unix());
     }
 }
 

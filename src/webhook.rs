@@ -1,37 +1,37 @@
-//! Outbound notification fan-out on update-window result.
+//! Outbound notification fan-out for operationally-significant events.
 //!
-//! Up to four sinks can be configured via env. Each sink is
-//! independent — set the ones you want, leave the rest unset. All
-//! configured sinks are dispatched in parallel from a single
-//! background task; failures are audited individually as
-//! `webhook.update_result` rows so a Discord outage doesn't hide a
-//! successful Telegram delivery.
+//! Up to four sink types per event can be configured via env. Each
+//! sink is independent — set the ones you want, leave the rest unset.
+//! All configured sinks are dispatched in parallel from a single
+//! background task; failures are audited individually as `webhook.<kind>`
+//! rows so a Discord outage doesn't hide a successful Telegram delivery.
 //!
-//! Supported sinks:
+//! ## Per-event env prefixes
 //!
-//!   UPDATE_WEBHOOK_URL     — generic POST target. The body shape is
-//!   UPDATE_WEBHOOK_FORMAT     controlled by `UPDATE_WEBHOOK_FORMAT`:
-//!                             "json" (default, structured event) or
-//!                             "slack" (Slack-attachment text). Useful
-//!                             for Mattermost, n8n, custom receivers.
+//! Each event type reads its own `<PREFIX>_*` env vars so operators can
+//! route them differently (e.g. nightly apt updates to a Slack channel,
+//! red probe transitions to a more urgent Telegram bot, agent
+//! disconnects to a phone-pinging webhook).
 //!
-//!   UPDATE_SLACK_WEBHOOK_URL  — alias for the generic + format=slack
-//!                             pair. Set this if you only need Slack.
+//! | Event                       | Prefix       | Triggered by                 |
+//! |-----------------------------|--------------|------------------------------|
+//! | apt update window result    | `UPDATE_`    | `Message::AptUpgradeResponse`|
+//! | health probe transition     | `HEALTH_`    | `Message::HealthProbeReport` |
+//! | backup job result           | `BACKUP_`    | `Message::BackupRunResponse` |
+//! | agent disconnect            | `DISCONNECT_`| WS receive-loop tear-down    |
 //!
-//!   UPDATE_DISCORD_WEBHOOK_URL — Discord-native `content` payload.
-//!                             Posts plain Markdown that renders
-//!                             cleanly in Discord (Slack-style
-//!                             payloads at Discord URLs lose the code
-//!                             block and emoji). Append /slack to the
-//!                             URL only if you intentionally want
-//!                             Slack-compat.
+//! ## Sink suffixes (per prefix)
 //!
-//!   UPDATE_TELEGRAM_BOT_TOKEN  — bot token from @BotFather
-//!   UPDATE_TELEGRAM_CHAT_ID    — chat / channel / user id (numeric or
-//!                             "@channelname"). Posted via the Bot API
-//!                             with HTML parse_mode so log tails ride
-//!                             inside <pre> without escaping every
-//!                             markdown char.
+//! | Suffix                      | Format                                |
+//! |-----------------------------|---------------------------------------|
+//! | `WEBHOOK_URL`               | Generic POST. `<PREFIX>_WEBHOOK_FORMAT`|
+//! |                             | picks `json` (default, structured) or  |
+//! |                             | `slack` (Slack-attachment text). Good  |
+//! |                             | for Mattermost, n8n, custom receivers. |
+//! | `SLACK_WEBHOOK_URL`         | Slack-format alias.                    |
+//! | `DISCORD_WEBHOOK_URL`       | Discord-native `content` payload.      |
+//! | `TELEGRAM_BOT_TOKEN` +      | Bot API `sendMessage` with HTML        |
+//! | `TELEGRAM_CHAT_ID`          | parse_mode and `<pre>` log tail.       |
 
 use serde::Serialize;
 use sqlx::SqlitePool;
@@ -91,9 +91,15 @@ fn last_n_lines(log: &str, n: usize) -> String {
         .join("\n")
 }
 
-fn slack_text(agent_id: &str, status: &str, error: Option<&str>, log: &str) -> String {
-    let icon = if status == "success" { ":white_check_mark:" } else { ":x:" };
-    let mut text = format!("{icon} *sys-manager apt upgrade* on `{agent_id}` → *{status}*");
+fn slack_text(headline: &str, agent_id: &str, status: &str, error: Option<&str>, log: &str) -> String {
+    let icon = if matches!(status, "success" | "green") {
+        ":white_check_mark:"
+    } else if status == "disconnected" {
+        ":warning:"
+    } else {
+        ":x:"
+    };
+    let mut text = format!("{icon} *{headline}* on `{agent_id}` → *{status}*");
     if let Some(e) = error.filter(|s| !s.is_empty()) {
         text.push_str(&format!("\n> error: {e}"));
     }
@@ -104,9 +110,15 @@ fn slack_text(agent_id: &str, status: &str, error: Option<&str>, log: &str) -> S
     text
 }
 
-fn discord_text(agent_id: &str, status: &str, error: Option<&str>, log: &str) -> String {
-    let icon = if status == "success" { "✅" } else { "❌" };
-    let mut text = format!("{icon} **sys-manager apt upgrade** on `{agent_id}` → **{status}**");
+fn discord_text(headline: &str, agent_id: &str, status: &str, error: Option<&str>, log: &str) -> String {
+    let icon = if matches!(status, "success" | "green") {
+        "✅"
+    } else if status == "disconnected" {
+        "⚠️"
+    } else {
+        "❌"
+    };
+    let mut text = format!("{icon} **{headline}** on `{agent_id}` → **{status}**");
     if let Some(e) = error.filter(|s| !s.is_empty()) {
         text.push_str(&format!("\n> error: {e}"));
     }
@@ -132,10 +144,17 @@ fn html_escape(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
 }
 
-fn telegram_text(agent_id: &str, status: &str, error: Option<&str>, log: &str) -> String {
-    let icon = if status == "success" { "✅" } else { "❌" };
+fn telegram_text(headline: &str, agent_id: &str, status: &str, error: Option<&str>, log: &str) -> String {
+    let icon = if matches!(status, "success" | "green") {
+        "✅"
+    } else if status == "disconnected" {
+        "⚠️"
+    } else {
+        "❌"
+    };
     let mut text = format!(
-        "{icon} <b>sys-manager apt upgrade</b> on <code>{}</code> → <b>{}</b>",
+        "{icon} <b>{}</b> on <code>{}</code> → <b>{}</b>",
+        html_escape(headline),
         html_escape(agent_id),
         html_escape(status),
     );
@@ -153,12 +172,10 @@ fn telegram_text(agent_id: &str, status: &str, error: Option<&str>, log: &str) -
 /// One configured destination. Each variant carries everything the
 /// task needs to POST without re-reading env later.
 enum Sink {
-    /// Generic JSON event — used by the legacy UPDATE_WEBHOOK_URL with
-    /// UPDATE_WEBHOOK_FORMAT=json.
+    /// Generic JSON event.
     GenericJson { url: String },
-    /// Slack-format text. Backed by either UPDATE_WEBHOOK_URL with
-    /// UPDATE_WEBHOOK_FORMAT=slack, or the dedicated
-    /// UPDATE_SLACK_WEBHOOK_URL.
+    /// Slack-format text. Backed by either the generic `*_WEBHOOK_URL`
+    /// with format=slack, or the dedicated `*_SLACK_WEBHOOK_URL`.
     Slack { url: String },
     /// Discord webhook with native `content` field.
     Discord { url: String },
@@ -178,75 +195,83 @@ impl Sink {
     }
 }
 
-fn configured_sinks() -> Vec<Sink> {
+fn env_or_empty(name: &str) -> String {
+    std::env::var(name).unwrap_or_default()
+}
+
+fn configured_sinks(prefix: &str) -> Vec<Sink> {
     let mut sinks = Vec::new();
 
-    // Legacy generic webhook. Format chooses between structured JSON
-    // (good for Mattermost / n8n / custom) and Slack-style text.
-    if let Ok(url) = std::env::var("UPDATE_WEBHOOK_URL") {
-        if !url.is_empty() {
-            let format = std::env::var("UPDATE_WEBHOOK_FORMAT")
-                .unwrap_or_else(|_| "json".to_string());
-            if format == "slack" {
-                sinks.push(Sink::Slack { url });
-            } else {
-                sinks.push(Sink::GenericJson { url });
-            }
+    // Generic webhook. Format chooses between structured JSON and
+    // Slack-style text.
+    let generic_url = env_or_empty(&format!("{prefix}WEBHOOK_URL"));
+    if !generic_url.is_empty() {
+        let format = std::env::var(format!("{prefix}WEBHOOK_FORMAT"))
+            .unwrap_or_else(|_| "json".to_string());
+        if format == "slack" {
+            sinks.push(Sink::Slack { url: generic_url });
+        } else {
+            sinks.push(Sink::GenericJson { url: generic_url });
         }
     }
-    // Dedicated Slack URL (only added if distinct from the generic).
-    if let Ok(url) = std::env::var("UPDATE_SLACK_WEBHOOK_URL") {
-        if !url.is_empty() {
-            sinks.push(Sink::Slack { url });
-        }
+    let slack_url = env_or_empty(&format!("{prefix}SLACK_WEBHOOK_URL"));
+    if !slack_url.is_empty() {
+        sinks.push(Sink::Slack { url: slack_url });
     }
-    if let Ok(url) = std::env::var("UPDATE_DISCORD_WEBHOOK_URL") {
-        if !url.is_empty() {
-            sinks.push(Sink::Discord { url });
-        }
+    let discord_url = env_or_empty(&format!("{prefix}DISCORD_WEBHOOK_URL"));
+    if !discord_url.is_empty() {
+        sinks.push(Sink::Discord { url: discord_url });
     }
-    if let (Ok(token), Ok(chat_id)) = (
-        std::env::var("UPDATE_TELEGRAM_BOT_TOKEN"),
-        std::env::var("UPDATE_TELEGRAM_CHAT_ID"),
-    ) {
-        if !token.is_empty() && !chat_id.is_empty() {
-            sinks.push(Sink::Telegram { bot_token: token, chat_id });
-        }
+    let token = env_or_empty(&format!("{prefix}TELEGRAM_BOT_TOKEN"));
+    let chat_id = env_or_empty(&format!("{prefix}TELEGRAM_CHAT_ID"));
+    if !token.is_empty() && !chat_id.is_empty() {
+        sinks.push(Sink::Telegram { bot_token: token, chat_id });
     }
 
     sinks
 }
 
-/// Fire all configured webhooks (if any). Spawns ONE task that
-/// dispatches to every sink in parallel and audits each result
-/// independently.
-pub fn fire_update_result(
-    db: SqlitePool,
+/// Per-event payload. Pre-rendered headline + status + optional log
+/// gives every sink the same data; each sink formatter chooses how
+/// to render it.
+#[derive(Clone)]
+struct Event {
+    /// Audit-row kind suffix. The audit row will be
+    /// `webhook.<kind>` so callers and `/activity` can filter by it.
+    kind: &'static str,
+    /// Used in the JSON sink as the `event` field, and templated into
+    /// every chat-format body.
+    headline: String,
     agent_id: String,
     status: String,
     log: String,
     error: Option<String>,
     at: i64,
-) {
-    let sinks = configured_sinks();
+}
+
+/// Fire all sinks configured under `prefix` for `event`. No-op when
+/// no sinks are configured. Spawns ONE task that dispatches to every
+/// sink in parallel and audits each result independently.
+fn fire(db: SqlitePool, prefix: &'static str, event: Event) {
+    let sinks = configured_sinks(prefix);
     if sinks.is_empty() {
         return;
     }
     tokio::spawn(async move {
-        let truncated = truncate(&log, LOG_CAP);
+        let truncated = truncate(&event.log, LOG_CAP);
         let client = match reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(10))
             .build()
         {
             Ok(c) => c,
             Err(e) => {
-                tracing::warn!(error = %e, "webhook: client build failed");
+                tracing::warn!(error = %e, kind = %event.kind, "webhook: client build failed");
                 let _ = db::record_audit(
                     &db,
                     crate::now_unix(),
                     Some("webhook"),
-                    Some(&agent_id),
-                    "webhook.update_result",
+                    Some(&event.agent_id),
+                    &format!("webhook.{}", event.kind),
                     false,
                     Some(&format!("client: {e}")),
                 )
@@ -255,28 +280,14 @@ pub fn fire_update_result(
             }
         };
 
-        // Dispatch every sink as its own task; await them all so we
-        // don't drop the pool reference before the requests finish.
         let mut handles = Vec::with_capacity(sinks.len());
         for sink in sinks {
             let client = client.clone();
             let db = db.clone();
-            let agent_id = agent_id.clone();
-            let status = status.clone();
-            let error = error.clone();
-            let truncated = truncated.clone();
+            let mut event = event.clone();
+            event.log = truncated.clone();
             handles.push(tokio::spawn(async move {
-                deliver(
-                    &client,
-                    db,
-                    sink,
-                    agent_id,
-                    status,
-                    error,
-                    truncated,
-                    at,
-                )
-                .await
+                deliver(&client, db, sink, event).await
             }));
         }
         for h in handles {
@@ -285,38 +296,42 @@ pub fn fire_update_result(
     });
 }
 
-async fn deliver(
-    client: &reqwest::Client,
-    db: SqlitePool,
-    sink: Sink,
-    agent_id: String,
-    status: String,
-    error: Option<String>,
-    log: String,
-    at: i64,
-) {
+async fn deliver(client: &reqwest::Client, db: SqlitePool, sink: Sink, event: Event) {
     let label = sink.label();
+    let audit_kind = format!("webhook.{}", event.kind);
     let req = match &sink {
         Sink::GenericJson { url } => {
             let body = JsonPayload {
-                event: "update_window.result",
-                agent_id: &agent_id,
-                status: &status,
-                log: &log,
-                error: error.as_deref(),
-                at,
+                event: event.kind,
+                agent_id: &event.agent_id,
+                status: &event.status,
+                log: &event.log,
+                error: event.error.as_deref(),
+                at: event.at,
             };
             client.post(url).json(&body)
         }
         Sink::Slack { url } => {
             let body = SlackPayload {
-                text: slack_text(&agent_id, &status, error.as_deref(), &log),
+                text: slack_text(
+                    &event.headline,
+                    &event.agent_id,
+                    &event.status,
+                    event.error.as_deref(),
+                    &event.log,
+                ),
             };
             client.post(url).json(&body)
         }
         Sink::Discord { url } => {
             let body = DiscordPayload {
-                content: discord_text(&agent_id, &status, error.as_deref(), &log),
+                content: discord_text(
+                    &event.headline,
+                    &event.agent_id,
+                    &event.status,
+                    event.error.as_deref(),
+                    &event.log,
+                ),
             };
             client.post(url).json(&body)
         }
@@ -324,7 +339,13 @@ async fn deliver(
             let url = format!("https://api.telegram.org/bot{bot_token}/sendMessage");
             let body = TelegramPayload {
                 chat_id,
-                text: telegram_text(&agent_id, &status, error.as_deref(), &log),
+                text: telegram_text(
+                    &event.headline,
+                    &event.agent_id,
+                    &event.status,
+                    event.error.as_deref(),
+                    &event.log,
+                ),
                 parse_mode: "HTML",
                 disable_web_page_preview: true,
             };
@@ -335,15 +356,19 @@ async fn deliver(
     match req.send().await {
         Ok(resp) if resp.status().is_success() => {
             tracing::info!(
-                %agent_id, %status, sink = %label, code = resp.status().as_u16(),
+                agent_id = %event.agent_id,
+                status = %event.status,
+                kind = %event.kind,
+                sink = %label,
+                code = resp.status().as_u16(),
                 "webhook delivered"
             );
             db::record_audit(
                 &db,
                 crate::now_unix(),
                 Some("webhook"),
-                Some(&agent_id),
-                "webhook.update_result",
+                Some(&event.agent_id),
+                &audit_kind,
                 true,
                 Some(&format!("sink={label} code={}", resp.status().as_u16())),
             )
@@ -353,30 +378,145 @@ async fn deliver(
             let code = resp.status().as_u16();
             let body = resp.text().await.unwrap_or_default();
             let snippet = body.chars().take(200).collect::<String>();
-            tracing::warn!(%agent_id, sink = %label, code, body = %snippet, "webhook non-2xx");
+            tracing::warn!(
+                agent_id = %event.agent_id,
+                kind = %event.kind,
+                sink = %label,
+                code,
+                body = %snippet,
+                "webhook non-2xx"
+            );
             db::record_audit(
                 &db,
                 crate::now_unix(),
                 Some("webhook"),
-                Some(&agent_id),
-                "webhook.update_result",
+                Some(&event.agent_id),
+                &audit_kind,
                 false,
                 Some(&format!("sink={label} code={code} body={snippet}")),
             )
             .await;
         }
         Err(e) => {
-            tracing::warn!(%agent_id, sink = %label, error = %e, "webhook send failed");
+            tracing::warn!(
+                agent_id = %event.agent_id,
+                kind = %event.kind,
+                sink = %label,
+                error = %e,
+                "webhook send failed"
+            );
             db::record_audit(
                 &db,
                 crate::now_unix(),
                 Some("webhook"),
-                Some(&agent_id),
-                "webhook.update_result",
+                Some(&event.agent_id),
+                &audit_kind,
                 false,
                 Some(&format!("sink={label} send: {e}")),
             )
             .await;
         }
     }
+}
+
+// ─── public fires ──────────────────────────────────────────────
+
+/// `update_window.result` — apt-upgrade scheduler outcome.
+/// Reads `UPDATE_*` env. Original event, kept for backwards compat.
+pub fn fire_update_result(
+    db: SqlitePool,
+    agent_id: String,
+    status: String,
+    log: String,
+    error: Option<String>,
+    at: i64,
+) {
+    fire(
+        db,
+        "UPDATE_",
+        Event {
+            kind: "update_result",
+            headline: "sys-manager apt upgrade".into(),
+            agent_id,
+            status,
+            log,
+            error,
+            at,
+        },
+    );
+}
+
+/// `health_probe.transition` — fired only on green↔red flips, not
+/// every report. Reads `HEALTH_*` env. `probe_name` rides in the
+/// headline so the chat preview shows which probe transitioned.
+pub fn fire_health_probe_transition(
+    db: SqlitePool,
+    agent_id: String,
+    probe_name: String,
+    state: shared::HealthProbeState,
+    detail: String,
+    at: i64,
+) {
+    let status = match state {
+        shared::HealthProbeState::Green => "green",
+        shared::HealthProbeState::Red => "red",
+    };
+    fire(
+        db,
+        "HEALTH_",
+        Event {
+            kind: "health_probe.transition",
+            headline: format!("sys-manager health probe `{probe_name}`"),
+            agent_id,
+            status: status.into(),
+            log: detail,
+            error: None,
+            at,
+        },
+    );
+}
+
+/// `backup_job.result` — finished backup run. Reads `BACKUP_*` env.
+/// `name` (the operator's job name) goes into the headline.
+pub fn fire_backup_result(
+    db: SqlitePool,
+    agent_id: String,
+    name: String,
+    success: bool,
+    log: String,
+    error: Option<String>,
+    at: i64,
+) {
+    fire(
+        db,
+        "BACKUP_",
+        Event {
+            kind: "backup_job.result",
+            headline: format!("sys-manager backup `{name}`"),
+            agent_id,
+            status: if success { "success".into() } else { "failed".into() },
+            log,
+            error,
+            at,
+        },
+    );
+}
+
+/// `agent.disconnect` — fired when an agent's WS read loop exits and
+/// the server removes it from the live agents map. Reads `DISCONNECT_*`
+/// env. No log body; the chat formatters will skip the code block.
+pub fn fire_agent_disconnect(db: SqlitePool, agent_id: String, at: i64) {
+    fire(
+        db,
+        "DISCONNECT_",
+        Event {
+            kind: "agent.disconnect",
+            headline: "sys-manager agent".into(),
+            agent_id,
+            status: "disconnected".into(),
+            log: String::new(),
+            error: None,
+            at,
+        },
+    );
 }
