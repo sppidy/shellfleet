@@ -35,8 +35,14 @@ url = "2.5.8"
 # the agent doesn't depend on the CLI being installed on every host
 # AND we get exact byte counts + native multipart on the way back to
 # the operator. ~3 MB binary cost vs the prior CLI-shellout zero.
+# Disable aws-sdk-s3's `rustls` default feature: it pulls
+# `aws-smithy-runtime/tls-rustls` → `aws-smithy-http-client/legacy-rustls-ring`
+# → `rustls v0.21` → `rustls-webpki v0.101.7` (DoS via malformed CRL +
+# name-constraint bypasses). The kept `default-https-client` feature
+# uses the modern `rustls-aws-lc` path → `rustls v0.23` + `rustls-webpki
+# v0.103.13` which has those advisories patched.
 aws-config = { version = "1", features = ["behavior-version-latest"] }
-aws-sdk-s3 = { version = "1" }
+aws-sdk-s3 = { version = "1", default-features = false, features = ["sigv4a", "http-1x", "default-https-client", "rt-tokio"] }
 
 # Optional — only compiled when `--features kube` (i.e. the
 # sys-manager-agent-k8s package). Uses rustls so we don't drag a second
