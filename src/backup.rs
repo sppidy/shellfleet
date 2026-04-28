@@ -18,6 +18,19 @@ const LOG_CAP: usize = 8_000;
 /// less round-trip and safer on small files.
 const MULTIPART_THRESHOLD: u64 = 64 * 1024 * 1024;
 const MULTIPART_CHUNK: usize = 16 * 1024 * 1024;
+/// Hard ceiling for S3 GetObject body size during restore. The
+/// streaming loop aborts past this point so a malicious or
+/// runaway upload can't fill the agent's disk while tar happily
+/// extracts. Override with `SYS_MANAGER_S3_RESTORE_MAX_BYTES` (in
+/// bytes); default is 50 GiB.
+const S3_RESTORE_MAX_BYTES_DEFAULT: u64 = 50 * 1024 * 1024 * 1024;
+
+fn s3_restore_max_bytes() -> u64 {
+    std::env::var("SYS_MANAGER_S3_RESTORE_MAX_BYTES")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(S3_RESTORE_MAX_BYTES_DEFAULT)
+}
 
 #[derive(Debug, Clone)]
 pub enum Dest {
@@ -549,6 +562,14 @@ pub async fn restore(
             .arg("-")
             .arg("-C")
             .arg(dest_root_trim)
+            // Hardening: never honor absolute member paths (an
+            // archive could otherwise overwrite /etc/...), don't
+            // try to chown to the recorded uid/gid (the agent runs
+            // as root and would faithfully apply hostile values),
+            // and don't carry over the recorded mode bits.
+            .arg("--no-absolute-names")
+            .arg("--no-same-owner")
+            .arg("--no-same-permissions")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -567,9 +588,18 @@ pub async fn restore(
         // the body errored we kill tar explicitly and don't await it.
         let mut body = get.body;
         let mut pipe_err: Option<String> = None;
+        let max_bytes = s3_restore_max_bytes();
+        let mut total_bytes: u64 = 0;
         loop {
             match body.try_next().await {
                 Ok(Some(chunk)) => {
+                    total_bytes = total_bytes.saturating_add(chunk.len() as u64);
+                    if total_bytes > max_bytes {
+                        pipe_err = Some(format!(
+                            "S3 GetObject body exceeded SYS_MANAGER_S3_RESTORE_MAX_BYTES ({max_bytes} bytes); aborting restore"
+                        ));
+                        break;
+                    }
                     if let Err(e) = tar_stdin.write_all(&chunk).await {
                         pipe_err = Some(format!("tar stdin write: {e}"));
                         break;
@@ -624,6 +654,11 @@ pub async fn restore(
             .arg(local)
             .arg("-C")
             .arg(dest_root_trim)
+            // See the s3 path above for the rationale on these
+            // three flags. Same hardening for local archives.
+            .arg("--no-absolute-names")
+            .arg("--no-same-owner")
+            .arg("--no-same-permissions")
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         let output = match cmd.output().await {
