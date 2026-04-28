@@ -38,17 +38,26 @@ jobs:
       matrix:
         include:
           # amd64 — self-hosted on amd64-builder (the Harbor host
-          # itself). Push is local, sub-ms RTT, gigabit.
+          # itself). Push is local via the public hostname → Traefik
+          # → harbor-nginx; sub-ms RTT, no proxy overhead matters.
           - arch: amd64
             runner: [self-hosted, amd64-builder]
             platform: linux/amd64
-          # arm64 — self-hosted on the arm64-builder dashboard host. It's
-          # already on the tailnet and peers DIRECT to amd64-builder
-          # (not DERP), so the push runs at home-network speed
-          # instead of GH-runner-via-DERP ~1 MB/s.
+            push_registry: hrbr.sppidy.in
+            push_scheme: https
+          # arm64 — self-hosted on the arm64-builder dashboard host. Both
+          # arm64-builder and amd64-builder are behind NAT that doesn't
+          # allow Tailscale UDP punching, so the tailnet path
+          # bounces through a DERP relay (~700 KB/s, 50 ms). Pushing
+          # to harbor-nginx's direct host port (192.0.2.99:18080)
+          # over plain HTTP skips Traefik AND TLS overhead — small
+          # win on top of the DERP cap, and timeouts no longer
+          # double up across two proxies.
           - arch: arm64
             runner: [self-hosted, arm64-builder]
             platform: linux/arm64
+            push_registry: hrbr.sppidy.in:18080
+            push_scheme: http
     outputs:
       sha_short: ${{ steps.tags.outputs.sha_short }}
     steps:
@@ -93,11 +102,19 @@ jobs:
           # Host network so buildkit sees the runner's /etc/hosts.
           driver-opts: |
             network=host
+          # The direct-port path (arm64-builder leg) is plain HTTP, so we
+          # need to mark `hrbr.sppidy.in:18080` as an insecure
+          # registry for buildkit. The amd64 leg uses HTTPS so this
+          # just adds an unused entry — harmless.
+          buildkitd-config-inline: |
+            [registry."hrbr.sppidy.in:18080"]
+              http = true
+              insecure = true
 
       - name: Log in to Harbor
         uses: docker/login-action@v3
         with:
-          registry: ${{ env.REGISTRY }}
+          registry: ${{ matrix.push_registry }}
           username: ${{ secrets.HARBOR_ROBOT_USER }}
           password: ${{ secrets.HARBOR_ROBOT_SECRET }}
 
@@ -110,7 +127,11 @@ jobs:
           echo "sha_short=${SHA_SHORT}" >> "$GITHUB_OUTPUT"
           # Each arch pushes a single arch-suffixed tag; the merge job
           # below stitches them into multi-arch tags afterwards.
-          echo "tag=${REGISTRY}/${IMAGE_NAME}:sha-${SHA_SHORT}-${{ matrix.arch }}" >> "$GITHUB_OUTPUT"
+          # Note that the registry portion can be a direct-port URL
+          # (arm64-builder) or the public Traefik hostname (amd64-builder) —
+          # Harbor stores by image name regardless, the manifest job
+          # then references the canonical hostname when stitching.
+          echo "tag=${{ matrix.push_registry }}/${IMAGE_NAME}:sha-${SHA_SHORT}-${{ matrix.arch }}" >> "$GITHUB_OUTPUT"
 
       - name: Build + push (${{ matrix.arch }})
         uses: docker/build-push-action@v6
@@ -120,8 +141,8 @@ jobs:
           platforms: ${{ matrix.platform }}
           push: true
           tags: ${{ steps.tags.outputs.tag }}
-          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache-${{ matrix.arch }}
-          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache-${{ matrix.arch }},mode=max
+          cache-from: type=registry,ref=${{ matrix.push_registry }}/${{ env.IMAGE_NAME }}:buildcache-${{ matrix.arch }}
+          cache-to: type=registry,ref=${{ matrix.push_registry }}/${{ env.IMAGE_NAME }}:buildcache-${{ matrix.arch }},mode=max
           provenance: false
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
@@ -153,11 +174,25 @@ jobs:
         with:
           driver-opts: |
             network=host
+          # Direct-port URL is plain HTTP — same insecure registry
+          # config as the build legs so imagetools can read the
+          # arm64 source tag.
+          buildkitd-config-inline: |
+            [registry."hrbr.sppidy.in:18080"]
+              http = true
+              insecure = true
 
-      - name: Log in to Harbor
+      - name: Log in to Harbor (canonical)
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.HARBOR_ROBOT_USER }}
+          password: ${{ secrets.HARBOR_ROBOT_SECRET }}
+
+      - name: Log in to Harbor (direct port)
+        uses: docker/login-action@v3
+        with:
+          registry: hrbr.sppidy.in:18080
           username: ${{ secrets.HARBOR_ROBOT_USER }}
           password: ${{ secrets.HARBOR_ROBOT_SECRET }}
 
@@ -167,10 +202,13 @@ jobs:
         run: |
           set -euo pipefail
           SHA_SHORT="${{ needs.build.outputs.sha_short }}"
+          # Source tags reflect where each leg pushed:
+          # amd64 via Traefik (canonical), arm64 via direct port.
           AMD="${REGISTRY}/${IMAGE_NAME}:sha-${SHA_SHORT}-amd64"
-          ARM="${REGISTRY}/${IMAGE_NAME}:sha-${SHA_SHORT}-arm64"
-          # Always: pin to commit. main pushes also retag :main + :latest.
-          # Tag releases retag :vX.Y.Z + :latest.
+          ARM="hrbr.sppidy.in:18080/${IMAGE_NAME}:sha-${SHA_SHORT}-arm64"
+          # Destination tags always use the canonical hostname so
+          # consumers reference Harbor at hrbr.sppidy.in regardless
+          # of how each arch got pushed.
           DEST=("${REGISTRY}/${IMAGE_NAME}:sha-${SHA_SHORT}")
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             VER="${GITHUB_REF##refs/tags/}"
