@@ -52,11 +52,14 @@ metadata:
 rules:
   # `kubectl exec` permissions. Off by default — flipping this on
   # gives the agent a shell on every pod in every namespace.
+  # `pods/portforward` is intentionally NOT here: the agent never
+  # calls it, and granting it would let an attacker who compromised
+  # the agent reach any pod's localhost services without leaving
+  # an exec audit trail.
   - apiGroups: [""]
     resources:
       - pods/exec
       - pods/attach
-      - pods/portforward
     verbs: ["create", "get"]
 {{- end }}
 {{- if .Values.rbac.write }}

@@ -80,3 +80,30 @@ podAnnotations: {}
 # like RUST_LOG. Don't put secrets here; use envFrom + a Secret.
 extraEnv: []
 extraEnvFrom: []
+
+# Pod-level securityContext. The defaults run the agent as a
+# non-root user (UID 65532, the distroless `nonroot` convention)
+# and let the kubelet chown the /etc/sys-manager emptyDir to that
+# group so the agent can write its pairing token there. Override
+# the whole map if you need a different UID/GID for your image.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+# Container-level securityContext. Defaults strip caps and lock
+# the rootfs read-only; the agent only writes to the
+# /etc/sys-manager emptyDir defined in templates/deployment.yaml.
+# If your image bakes in different ownership for /etc/sys-manager,
+# you can flip readOnlyRootFilesystem off here.
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  capabilities:
+    drop: ["ALL"]

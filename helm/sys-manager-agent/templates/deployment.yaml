@@ -37,6 +37,12 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      # Pod-level securityContext. fsGroup makes the emptyDir at
+      # /etc/sys-manager owned by `runAsGroup` so the non-root agent
+      # can write its pairing token there. Override per-deploy via
+      # `.Values.podSecurityContext`.
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
       containers:
         - name: agent
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
@@ -53,23 +59,33 @@ spec:
           envFrom:
             {{- toYaml . | nindent 12 }}
           {{- end }}
-          {{- if .Values.token.existingSecret }}
           volumeMounts:
+            # Writable scratch over /etc/sys-manager. With
+            # readOnlyRootFilesystem: true the rest of the rootfs
+            # is read-only; this is where device-auth pairing
+            # writes the issued bearer token (lost on Pod restart
+            # unless promoted into a Secret + existingSecret).
+            - name: agent-state
+              mountPath: /etc/sys-manager
+            {{- if .Values.token.existingSecret }}
             - name: agent-token
               mountPath: /etc/sys-manager/agent-token.txt
               subPath: agent-token.txt
               readOnly: true
-          {{- end }}
+            {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
+          # Container-level securityContext. Together with the
+          # Pod-level one above this drops to a non-root,
+          # capabilities-stripped, read-only-rootfs posture by
+          # default. Override per-deploy via
+          # `.Values.containerSecurityContext`.
           securityContext:
-            allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: false
-            runAsNonRoot: false   # systemd-unit pattern expects root; harmless inside the Pod
-            capabilities:
-              drop: ["ALL"]
-      {{- if .Values.token.existingSecret }}
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
       volumes:
+        - name: agent-state
+          emptyDir: {}
+        {{- if .Values.token.existingSecret }}
         - name: agent-token
           secret:
             secretName: {{ .Values.token.existingSecret }}
@@ -77,7 +93,7 @@ spec:
               - key: agent-token.txt
                 path: agent-token.txt
                 mode: 0400
-      {{- end }}
+        {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
