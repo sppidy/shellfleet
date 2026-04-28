@@ -188,6 +188,37 @@ pub enum Message {
         error: Option<String>,
     },
 
+    /// Stream a pod's logs. Mirrors the journal-stream pattern:
+    /// `stream_id` is minted by the dashboard so multiple concurrent
+    /// log views from the same operator don't collide on a single
+    /// host. `container` is required when the pod has more than one
+    /// container; otherwise the agent picks the first.
+    K8sLogsRequest {
+        stream_id: String,
+        namespace: String,
+        pod_name: String,
+        container: Option<String>,
+        /// Lines of history to backfill before live tailing. 0 = none.
+        #[serde(default)]
+        tail_lines: i64,
+        #[serde(default)]
+        follow: bool,
+    },
+    /// Batched log lines, flushed every 100 lines or 250 ms.
+    K8sLogsChunk {
+        stream_id: String,
+        lines: Vec<String>,
+    },
+    /// Operator cancels the stream. Aborts the agent-side task; no
+    /// further chunks or End message will arrive for this stream_id.
+    K8sLogsStop { stream_id: String },
+    /// Pod exited / container EOF / stream error. Terminal for the
+    /// stream_id — the agent will not send anything more on it.
+    K8sLogsEnd {
+        stream_id: String,
+        error: Option<String>,
+    },
+
     /// Request to read a configuration file
     ReadConfigRequest { path: String },
 
