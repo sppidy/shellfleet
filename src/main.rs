@@ -17,6 +17,9 @@ mod k8s;
 #[cfg(feature = "kube")]
 mod k8s_logs;
 
+#[cfg(feature = "kube")]
+mod k8s_exec;
+
 /// Write the bearer token to disk with mode 0600. Tries the operator
 /// path first; on permission failure (e.g. the agent isn't running as
 /// root and `/etc/sys-manager` doesn't exist) falls back to a CWD-
@@ -237,6 +240,13 @@ async fn main() {
     let journal_stream_mgr = journal_stream::JournalStreams::default();
     #[cfg(feature = "kube")]
     let k8s_log_streams = k8s_logs::K8sLogStreams::default();
+    // Parallel map for k8s exec PTYs. Keyed by the same session_id
+    // used for host shells, but stored separately because the
+    // teardown shape differs (kube-rs AttachedProcess.join() vs
+    // portable-pty Drop).
+    #[cfg(feature = "kube")]
+    let mut k8s_exec_sessions: std::collections::HashMap<String, k8s_exec::K8sExecSession> =
+        std::collections::HashMap::new();
     let health_probes = health::HealthProbes::default();
 
     // Watchdog: if the WebSocket goes silent for 75s the connection is
@@ -679,6 +689,57 @@ async fn main() {
                                     let _ = stream_id;
                                 }
                             }
+                            Message::K8sExecRequest {
+                                session_id,
+                                namespace,
+                                pod_name,
+                                container,
+                                command,
+                            } => {
+                                #[cfg(feature = "kube")]
+                                {
+                                    // Idempotency: a re-issued session_id supersedes
+                                    // the previous attached process so a transient WS
+                                    // reconnect on the dashboard doesn't strand a
+                                    // stale exec.
+                                    if let Some(prev) = k8s_exec_sessions.remove(&session_id) {
+                                        prev.abort();
+                                    }
+                                    let args = k8s_exec::ExecArgs {
+                                        session_id: session_id.clone(),
+                                        namespace,
+                                        pod_name,
+                                        container,
+                                        command,
+                                    };
+                                    match k8s_exec::spawn_exec(args, tx.clone()).await {
+                                        Ok(s) => {
+                                            k8s_exec_sessions.insert(session_id.clone(), s);
+                                            let _ = tx.send(Message::K8sExecResponse {
+                                                session_id,
+                                                success: true,
+                                                error: None,
+                                            });
+                                        }
+                                        Err(e) => {
+                                            let _ = tx.send(Message::K8sExecResponse {
+                                                session_id,
+                                                success: false,
+                                                error: Some(e),
+                                            });
+                                        }
+                                    }
+                                }
+                                #[cfg(not(feature = "kube"))]
+                                {
+                                    let _ = (namespace, pod_name, container, command);
+                                    let _ = tx.send(Message::K8sExecResponse {
+                                        session_id,
+                                        success: false,
+                                        error: Some("agent built without k8s support".into()),
+                                    });
+                                }
+                            }
                             Message::K8sDescribeRequest { kind, namespace, name } => {
                                 let tx_clone = tx.clone();
                                 tokio::spawn(async move {
@@ -1043,16 +1104,26 @@ async fn main() {
                                 // tx_input sender; the write thread exits;
                                 // the child gets EOF on stdin and reaps.
                                 term_sessions.remove(&session_id);
+                                #[cfg(feature = "kube")]
+                                if let Some(s) = k8s_exec_sessions.remove(&session_id) {
+                                    s.abort();
+                                }
                             }
                             Message::TerminalData { session_id, data } => {
                                 // Empty session_id is the container-exec singleton;
-                                // anything else is a host PTY keyed by id.
+                                // anything else is a host PTY OR a k8s exec PTY
+                                // keyed by id (parallel maps, host wins on collision).
                                 if session_id.is_empty() {
                                     if let Some(session) = &exec_session {
                                         let _ = session.tx_input.send(data);
                                     }
                                 } else if let Some(session) = term_sessions.get(&session_id) {
                                     let _ = session.tx_input.send(data);
+                                } else {
+                                    #[cfg(feature = "kube")]
+                                    if let Some(session) = k8s_exec_sessions.get(&session_id) {
+                                        let _ = session.tx_input.send(data);
+                                    }
                                 }
                             }
                             Message::TerminalResize { session_id, cols, rows } => {
@@ -1062,6 +1133,11 @@ async fn main() {
                                     }
                                 } else if let Some(session) = term_sessions.get(&session_id) {
                                     let _ = session.tx_resize.send((cols, rows));
+                                } else {
+                                    #[cfg(feature = "kube")]
+                                    if let Some(session) = k8s_exec_sessions.get(&session_id) {
+                                        let _ = session.tx_resize.send((cols, rows));
+                                    }
                                 }
                             }
                             Message::DockerExecStartRequest { container_id, shell } => {
