@@ -543,6 +543,98 @@ async fn main() {
                                     let _ = tx_clone.send(Message::K8sListPodsResponse { pods, error });
                                 });
                             }
+                            Message::K8sListDeploymentsRequest => {
+                                let tx_clone = tx.clone();
+                                tokio::spawn(async move {
+                                    #[cfg(feature = "kube")]
+                                    let (deployments, error) = match k8s::list_deployments().await {
+                                        Ok(d) => (d, None),
+                                        Err(e) => (Vec::new(), Some(e)),
+                                    };
+                                    #[cfg(not(feature = "kube"))]
+                                    let (deployments, error) = (
+                                        Vec::new(),
+                                        Some("agent built without k8s support".into()),
+                                    );
+                                    let _ = tx_clone.send(Message::K8sListDeploymentsResponse {
+                                        deployments,
+                                        error,
+                                    });
+                                });
+                            }
+                            Message::K8sListServicesRequest => {
+                                let tx_clone = tx.clone();
+                                tokio::spawn(async move {
+                                    #[cfg(feature = "kube")]
+                                    let (services, error) = match k8s::list_services().await {
+                                        Ok(s) => (s, None),
+                                        Err(e) => (Vec::new(), Some(e)),
+                                    };
+                                    #[cfg(not(feature = "kube"))]
+                                    let (services, error) = (
+                                        Vec::new(),
+                                        Some("agent built without k8s support".into()),
+                                    );
+                                    let _ = tx_clone.send(Message::K8sListServicesResponse {
+                                        services,
+                                        error,
+                                    });
+                                });
+                            }
+                            Message::K8sListIngressesRequest => {
+                                let tx_clone = tx.clone();
+                                tokio::spawn(async move {
+                                    #[cfg(feature = "kube")]
+                                    let (ingresses, error) = match k8s::list_ingresses().await {
+                                        Ok(i) => (i, None),
+                                        Err(e) => (Vec::new(), Some(e)),
+                                    };
+                                    #[cfg(not(feature = "kube"))]
+                                    let (ingresses, error) = (
+                                        Vec::new(),
+                                        Some("agent built without k8s support".into()),
+                                    );
+                                    let _ = tx_clone.send(Message::K8sListIngressesResponse {
+                                        ingresses,
+                                        error,
+                                    });
+                                });
+                            }
+                            Message::K8sListPvcsRequest => {
+                                let tx_clone = tx.clone();
+                                tokio::spawn(async move {
+                                    #[cfg(feature = "kube")]
+                                    let (pvcs, error) = match k8s::list_pvcs().await {
+                                        Ok(p) => (p, None),
+                                        Err(e) => (Vec::new(), Some(e)),
+                                    };
+                                    #[cfg(not(feature = "kube"))]
+                                    let (pvcs, error) = (
+                                        Vec::new(),
+                                        Some("agent built without k8s support".into()),
+                                    );
+                                    let _ = tx_clone.send(Message::K8sListPvcsResponse { pvcs, error });
+                                });
+                            }
+                            Message::K8sListEventsRequest => {
+                                let tx_clone = tx.clone();
+                                tokio::spawn(async move {
+                                    #[cfg(feature = "kube")]
+                                    let (events, error) = match k8s::list_events().await {
+                                        Ok(e) => (e, None),
+                                        Err(e) => (Vec::new(), Some(e)),
+                                    };
+                                    #[cfg(not(feature = "kube"))]
+                                    let (events, error) = (
+                                        Vec::new(),
+                                        Some("agent built without k8s support".into()),
+                                    );
+                                    let _ = tx_clone.send(Message::K8sListEventsResponse {
+                                        events,
+                                        error,
+                                    });
+                                });
+                            }
                             Message::SwarmServiceActionRequest { name, action } => {
                                 let tx_clone = tx.clone();
                                 tokio::spawn(async move {
