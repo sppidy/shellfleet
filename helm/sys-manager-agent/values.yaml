@@ -4,25 +4,15 @@
 # describe resources, and tail logs. Flip `rbac.exec` for `kubectl exec`,
 # `rbac.write` once slice 6 / EE adds apply+scale.
 
-# Container image. CI publishes multi-arch images to GHCR on every
+# Container image. CI publishes multi-arch images to Harbor on every
 # k8s-related commit to main. Build locally via
 # `docker build -f Dockerfile.agent.k8s` at the super-repo root and
 # point this elsewhere if you'd rather host it yourself.
 image:
-  repository: ghcr.io/sppidy/sys-manager-agent-k8s
+  repository: hrbr.sppidy.in/sys-manager/agent-k8s
   tag: ""           # default to .Chart.appVersion (see Chart.yaml)
   pullPolicy: IfNotPresent
-# GHCR images from a private repo need an imagePullSecret. Create one
-# with a PAT that has read:packages, then list the secret here:
-#   kubectl -n sys-manager create secret docker-registry ghcr \
-#     --docker-server=ghcr.io \
-#     --docker-username=<github-user> \
-#     --docker-password=<PAT-with-read:packages> \
-#     --docker-email=<github-email>
 imagePullSecrets: []
-# Example once the secret is created:
-#   imagePullSecrets:
-#     - name: ghcr
 
 # How the agent reaches the dashboard. Match these to your deploy.
 # `serverApiUrl` is for HTTPS (device-auth pairing); `serverWsUrl` is the

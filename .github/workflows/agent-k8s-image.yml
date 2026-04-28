@@ -15,20 +15,14 @@ on:
 
 permissions:
   contents: read
-  packages: write
 
 concurrency:
   group: agent-k8s-image
   cancel-in-progress: false
 
 env:
-  # Pushed to GHCR rather than the swarm Harbor (hrbr.sppidy.in)
-  # because Harbor is fronted by Cloudflare + Traefik and CF strips
-  # the WWW-Authenticate `service=` param, which makes buildkit's
-  # OAuth token fetch return 400. GHCR uses the runner's
-  # GITHUB_TOKEN — zero proxy plumbing, multi-arch native.
-  REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository_owner }}/sys-manager-agent-k8s
+  REGISTRY: hrbr.sppidy.in
+  IMAGE_NAME: sys-manager/agent-k8s
 
 jobs:
   build:
@@ -70,15 +64,52 @@ jobs:
           fi
           git submodule update --init --recursive --depth 1 agent shared
 
+      # Harbor sits behind Traefik + Cloudflare. CF strips the
+      # `service=` param from WWW-Authenticate, which makes
+      # buildkit's OAuth token fetch return 400 with "Unable to
+      # handle service:". Bring up Tailscale and pin the registry
+      # hostname to the tailnet IP so the push hits Harbor directly,
+      # bypassing both proxies. TLS still validates because Traefik's
+      # cert is for the public hostname.
+      - name: Tailscale up
+        uses: tailscale/github-action@v3
+        with:
+          authkey: ${{ secrets.TS_AUTHKEY }}
+          tags: tag:ci
+          version: latest
+
+      - name: Diagnose tailnet reach
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo '--- tailscale status ---'
+          tailscale status || true
+          echo '--- ping harbor ts ip ---'
+          ping -c 2 -W 2 "${{ secrets.HARBOR_TS_IP }}" || true
+          echo '--- tcp 443 reach ---'
+          timeout 5 bash -c 'cat </dev/tcp/${{ secrets.HARBOR_TS_IP }}/443' \
+            && echo 'reachable' \
+            || echo 'NOT reachable'
+
+      - name: Pin Harbor hostname to tailnet IP
+        shell: bash
+        run: |
+          echo "${{ secrets.HARBOR_TS_IP }} ${REGISTRY}" | sudo tee -a /etc/hosts
+          getent hosts "${REGISTRY}"
+
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
+        with:
+          # Host network so buildkit sees the runner's /etc/hosts.
+          driver-opts: |
+            network=host
 
-      - name: Log in to GHCR
+      - name: Log in to Harbor
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          username: ${{ secrets.HARBOR_ROBOT_USER }}
+          password: ${{ secrets.HARBOR_ROBOT_SECRET }}
 
       - name: Compute tags
         id: tags
@@ -113,15 +144,31 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
+      - name: Tailscale up
+        uses: tailscale/github-action@v3
+        with:
+          authkey: ${{ secrets.TS_AUTHKEY }}
+          tags: tag:ci
+          version: latest
+
+      - name: Pin Harbor hostname to tailnet IP
+        shell: bash
+        run: |
+          echo "${{ secrets.HARBOR_TS_IP }} ${REGISTRY}" | sudo tee -a /etc/hosts
+          getent hosts "${REGISTRY}"
+
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
+        with:
+          driver-opts: |
+            network=host
 
-      - name: Log in to GHCR
+      - name: Log in to Harbor
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          username: ${{ secrets.HARBOR_ROBOT_USER }}
+          password: ${{ secrets.HARBOR_ROBOT_SECRET }}
 
       - name: Compose multi-arch tags
         id: tags

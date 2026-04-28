@@ -36,11 +36,8 @@ apply handlers yet, that lands in slice 6 / EE multi-cluster.
 
 ## Image
 
-CI publishes multi-arch images to `ghcr.io/sppidy/sys-manager-agent-k8s`
+CI publishes multi-arch images to `hrbr.sppidy.in/sys-manager/agent-k8s`
 on every k8s-related commit. The chart's default image points there.
-
-If the package is private, create an imagePullSecret (the values.yaml
-header has the exact one-liner) and add it under `imagePullSecrets`.
 
 To roll your own:
 
