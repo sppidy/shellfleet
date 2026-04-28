@@ -68,6 +68,10 @@ pub type PendingBackupRestoreTx =
 
 pub struct AppState {
     pub agents: Mutex<HashMap<String, AgentTx>>,
+    /// agent_id → capability list reported on `Register`. Parallel
+    /// to `agents` so the existing send paths keep their tight type
+    /// (HashMap<String, AgentTx>). Cleared on disconnect.
+    pub agent_capabilities: Mutex<HashMap<String, Vec<String>>>,
     pub ui_clients: Mutex<HashMap<u64, UiTx>>,
     pub ui_id_counter: AtomicU64,
     pub db: SqlitePool,
@@ -104,7 +108,8 @@ pub struct AgentAuth {
 
 async fn broadcast_agent_list(state: &AppState) {
     let agents: Vec<String> = state.agents.lock().await.keys().cloned().collect();
-    let msg = UiMessage::ListAgentsResponse { agents };
+    let capabilities = state.agent_capabilities.lock().await.clone();
+    let msg = UiMessage::ListAgentsResponse { agents, capabilities };
     let mut clients = state.ui_clients.lock().await;
     clients.retain(|_id, tx| tx.send(msg.clone()).is_ok());
 }
@@ -291,6 +296,7 @@ async fn main() {
 
     let state = Arc::new(AppState {
         agents: Mutex::new(HashMap::new()),
+        agent_capabilities: Mutex::new(HashMap::new()),
         ui_clients: Mutex::new(HashMap::new()),
         ui_id_counter: AtomicU64::new(0),
         db: pool,
@@ -560,12 +566,22 @@ async fn handle_agent_socket(socket: WebSocket, state: Arc<AppState>, token: Str
         };
         if let Ok(parsed_msg) = serde_json::from_str::<Message>(&text) {
             match parsed_msg {
-                Message::Register { hostname, protocol_version } => {
+                Message::Register { hostname, protocol_version, capabilities } => {
                     let id = format!("{}-id", hostname);
                     agent_id_opt = Some(id.clone());
 
                     state.agents.lock().await.insert(id.clone(), tx.clone());
-                    tracing::info!(agent_id = %id, %protocol_version, "agent registered");
+                    state
+                        .agent_capabilities
+                        .lock()
+                        .await
+                        .insert(id.clone(), capabilities.clone());
+                    tracing::info!(
+                        agent_id = %id,
+                        %protocol_version,
+                        capabilities = ?capabilities,
+                        "agent registered"
+                    );
 
                     // Stamp the token's hostname + last_seen (and seed
                     // created_at on first contact) for the operator UI.
@@ -854,6 +870,7 @@ async fn handle_agent_socket(socket: WebSocket, state: Arc<AppState>, token: Str
 
     if let Some(id) = agent_id_opt {
         state.agents.lock().await.remove(&id);
+        state.agent_capabilities.lock().await.remove(&id);
         tracing::info!(agent_id = %id, "agent disconnected");
         broadcast_agent_list(&state).await;
     }
@@ -929,7 +946,8 @@ async fn handle_ui_socket(
 
     {
         let agents: Vec<String> = state.agents.lock().await.keys().cloned().collect();
-        let _ = tx.send(UiMessage::ListAgentsResponse { agents });
+        let capabilities = state.agent_capabilities.lock().await.clone();
+        let _ = tx.send(UiMessage::ListAgentsResponse { agents, capabilities });
     }
 
     let send_task = tokio::spawn(async move {
@@ -978,7 +996,8 @@ async fn handle_ui_socket(
                 UiMessage::ListAgentsRequest => {
                     let agents: Vec<String> =
                         state.agents.lock().await.keys().cloned().collect();
-                    let _ = tx.send(UiMessage::ListAgentsResponse { agents });
+                    let capabilities = state.agent_capabilities.lock().await.clone();
+                    let _ = tx.send(UiMessage::ListAgentsResponse { agents, capabilities });
                 }
                 UiMessage::SendToAgent { agent_id, message } => {
                     // CE RBAC over the WebSocket plane. The HTTP rbac
