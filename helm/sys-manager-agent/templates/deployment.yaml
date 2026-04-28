@@ -25,6 +25,13 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
     spec:
+      # Stable hostname so the agent's hostname-derived agent_id
+      # doesn't change on every Pod recreate (default would be the
+      # mutable pod name with the deployment hash). Lets a fixed
+      # Prometheus `instance` label, sys-manager UI bookmarks, and
+      # any cross-references in the dashboard survive rollouts.
+      hostname: {{ include "sys-manager-agent.fullname" . }}
+      subdomain: {{ include "sys-manager-agent.fullname" . }}
       serviceAccountName: {{ include "sys-manager-agent.serviceAccountName" . }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
