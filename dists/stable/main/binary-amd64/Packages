@@ -102,28 +102,31 @@ Description: Agent for sys-manager: connects a host to a sys-manager server over
  on hosts that should appear as Kubernetes targets in the dashboard;
  install plain sys-manager-agent everywhere else.
 
-Package: sys-manager-agent
+Package: sys-manager-agent-k8s
 Architecture: amd64
-Version: 1.1.0-ci202604280240.g7281b89
+Version: 1.1.0-ci202604280350.g7d2c86c
 Priority: optional
 Section: admin
 Maintainer: sppidy <sppidytg@gmail.com>
-Installed-Size: 7293
+Installed-Size: 16407
+Provides: sys-manager-agent
 Depends: libc6 (>= 2.39), libssl3t64 (>= 3.0.0), systemd
-Filename: pool/main/sys-manager-agent_1.1.0-ci202604280240.g7281b89_amd64.deb
-Size: 1691140
-MD5sum: 04bff28dbe83a86ad0ca700ba4c398d1
-SHA1: ff22f3489488b9283918225d992a307e8cfed35e
-SHA256: 07cc185c919e7c81c849f6bff841d2ca2fd644189f1fea4ae1f5a53dcd820d73
-SHA512: 7092f13e57e819c1d0e0b411cf3d02c5503ebdca5d66218531ff04452d54abcc6110a5d73517cbeeac934767fb3e331e42977f5d7d9cc4af97e9aba0fce64df7
+Conflicts: sys-manager-agent
+Replaces: sys-manager-agent
+Filename: pool/main/sys-manager-agent-k8s_1.1.0-ci202604280350.g7d2c86c_amd64.deb
+Size: 3769812
+MD5sum: 7524c04df7ad16b473589b7f7ab8f279
+SHA1: 9890d1fe348249a97abbec11ab052468bab4575c
+SHA256: 5bb56cb01e1f27544d9892b33ea2a50f76128e0b50a8bf2cf4f774a9f134a769
+SHA512: 548d1202b21aaeccc9bc1f48595c9581a061ffb97991387811d3892b5185722f8450ece0f5cbc5389b624bc4935a4ff8ff33e85415763105f42125cb4c3377e3
 Homepage: https://github.com/sppidy/sys-mngr-agent
 Description: Agent for sys-manager: connects a host to a sys-manager server over WebSocket
  and exposes systemd service control, terminal, and config editing.
- Agent for sys-manager. Connects a Linux host to a sys-manager server over a
- TLS WebSocket and exposes systemd service control, an interactive terminal,
- and remote read/write of configuration files. Pairing happens through the
- server's device-auth flow; the resulting token is cached at
- /etc/sys-manager/agent-token.txt.
+ Agent for sys-manager — k8s flavor. Same as sys-manager-agent plus a
+ compiled-in kube-rs client so the agent can talk to a kube-apiserver
+ via in-cluster ServiceAccount or a kubeconfig at $KUBECONFIG. Install
+ on hosts that should appear as Kubernetes targets in the dashboard;
+ install plain sys-manager-agent everywhere else.
 
 Package: sys-manager-agent
 Architecture: amd64
@@ -208,6 +211,29 @@ MD5sum: 5cfbffeec1a28e871f15e5aea6b6d993
 SHA1: 323f4dd202a8e057db46a21bf63ac3f63bc8c5a1
 SHA256: 66b534e8aa4373e96413a1ad0ea5aab0a16545c66f54124ed414e7fe17aa5695
 SHA512: 745f90e5a1e2113c845f06c6049ec6522129b69ccb2636dd1e3bb815cfdbe9a570d60f5f63965e80a56773c3f4f06e98f9d566656fad2798d007189d655d5f72
+Homepage: https://github.com/sppidy/sys-mngr-agent
+Description: Agent for sys-manager: connects a host to a sys-manager server over WebSocket
+ and exposes systemd service control, terminal, and config editing.
+ Agent for sys-manager. Connects a Linux host to a sys-manager server over a
+ TLS WebSocket and exposes systemd service control, an interactive terminal,
+ and remote read/write of configuration files. Pairing happens through the
+ server's device-auth flow; the resulting token is cached at
+ /etc/sys-manager/agent-token.txt.
+
+Package: sys-manager-agent
+Architecture: amd64
+Version: 1.1.0-ci202604280350.g7d2c86c
+Priority: optional
+Section: admin
+Maintainer: sppidy <sppidytg@gmail.com>
+Installed-Size: 7787
+Depends: libc6 (>= 2.39), libssl3t64 (>= 3.0.0), systemd
+Filename: pool/main/sys-manager-agent_1.1.0-ci202604280350.g7d2c86c_amd64.deb
+Size: 1777368
+MD5sum: b53d71568618d347333942acb93a4ea7
+SHA1: e3dc0c4a0665fc0dec3e730f29b1dcd5727a420e
+SHA256: 7720ecf1c577dadab6bb8537faac93e22601d8ea66fe438df140015086d30522
+SHA512: 13e98d1b52b2c7827e4e6255aae76a1a7e7c422fdbcfe192dc68278880feeb4215c41f898bedbbbf9fb5b8dc89d8e639aaa4475c20eab41b0e7b0fb4c21031df
 Homepage: https://github.com/sppidy/sys-mngr-agent
 Description: Agent for sys-manager: connects a host to a sys-manager server over WebSocket
  and exposes systemd service control, terminal, and config editing.
