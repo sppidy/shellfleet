@@ -21,15 +21,28 @@ concurrency:
 
 jobs:
   build:
-    name: Build .deb (${{ matrix.arch }})
+    name: Build .deb (${{ matrix.flavor }} · ${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - arch: amd64
+          # Standard host-agent flavor — lean .deb, no kube deps.
+          - flavor: standard
+            arch: amd64
             runner: ubuntu-latest
-          - arch: arm64
+          - flavor: standard
+            arch: arm64
+            runner: ubuntu-24.04-arm
+          # k8s flavor — `--features kube` adds kube-rs + k8s-openapi
+          # (~2 MB of crypto deps). Cargo-deb variant rewrites the
+          # package name to sys-manager-agent-k8s and sets Conflicts /
+          # Provides / Replaces against the standard package.
+          - flavor: k8s
+            arch: amd64
+            runner: ubuntu-latest
+          - flavor: k8s
+            arch: arm64
             runner: ubuntu-24.04-arm
     steps:
       - name: Checkout main repo
@@ -70,7 +83,7 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
         with:
-          key: ${{ matrix.arch }}
+          key: ${{ matrix.flavor }}-${{ matrix.arch }}
           workspaces: |
             .
             agent
@@ -97,14 +110,21 @@ jobs:
           # cargo-deb infers Architecture from the host triple when no
           # --target is given. Each runner is native to its arch, so a
           # plain build produces a correct .deb for that arch.
-          cargo deb --no-strip -p agent --deb-revision "${{ steps.rev.outputs.rev }}"
-          deb=$(ls target/debian/sys-manager-agent_*.deb | head -n1)
-          echo "deb path: $deb"
+          if [ "${{ matrix.flavor }}" = "k8s" ]; then
+            cargo deb --no-strip -p agent \
+              --variant k8s \
+              --deb-revision "${{ steps.rev.outputs.rev }}" \
+              -- --features kube
+          else
+            cargo deb --no-strip -p agent \
+              --deb-revision "${{ steps.rev.outputs.rev }}"
+          fi
+          ls -la target/debian/
 
       - name: Upload .deb artifact
         uses: actions/upload-artifact@v4
         with:
-          name: sys-manager-agent-deb-${{ matrix.arch }}
+          name: sys-manager-agent-deb-${{ matrix.flavor }}-${{ matrix.arch }}
           path: target/debian/*.deb
           if-no-files-found: error
 
@@ -166,17 +186,15 @@ jobs:
           <p>See <a href="https://github.com/sppidy/sys-manager/blob/main/INSTALL.md">INSTALL.md</a> for full setup.</p>
           HTML
 
-      - name: Download amd64 artifact
+      - name: Download all .deb artifacts
         uses: actions/download-artifact@v4
         with:
-          name: sys-manager-agent-deb-amd64
-          path: incoming-amd64
-
-      - name: Download arm64 artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: sys-manager-agent-deb-arm64
-          path: incoming-arm64
+          # No `name:` filter → grabs every artifact uploaded by the
+          # build matrix. Pattern grabs both flavors and both arches
+          # into a single tree, then we sort by arch below.
+          pattern: sys-manager-agent-deb-*
+          path: incoming
+          merge-multiple: true
 
       - name: Refresh apt repo
         shell: bash
@@ -188,18 +206,21 @@ jobs:
           mkdir -p "$REPO/pool/$COMP"
           mkdir -p "$REPO/dists/$DIST/$COMP/binary-amd64"
           mkdir -p "$REPO/dists/$DIST/$COMP/binary-arm64"
-          cp incoming-amd64/*.deb "$REPO/pool/$COMP/"
-          cp incoming-arm64/*.deb "$REPO/pool/$COMP/"
+          cp incoming/*.deb "$REPO/pool/$COMP/"
 
-          # Trim old revisions per arch — keep the highest 5 per arch so
-          # the pool doesn't grow unbounded across CI runs.
+          # Trim old revisions per package + arch — keep the highest 5
+          # of each so the pool doesn't grow unbounded across CI runs.
+          # Both sys-manager-agent and sys-manager-agent-k8s are tracked
+          # separately.
           (
             cd "$REPO/pool/$COMP"
-            for arch in amd64 arm64; do
-              ls -1 sys-manager-agent_*_${arch}.deb 2>/dev/null \
-                | sort -V \
-                | head -n -5 \
-                | xargs -r rm -f
+            for pkg in sys-manager-agent sys-manager-agent-k8s; do
+              for arch in amd64 arm64; do
+                ls -1 ${pkg}_*_${arch}.deb 2>/dev/null \
+                  | sort -V \
+                  | head -n -5 \
+                  | xargs -r rm -f
+              done
             done
           )
 
