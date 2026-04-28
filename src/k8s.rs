@@ -10,12 +10,13 @@
 //! Deployment-in-a-cluster — without any agent-side config flag.
 
 use chrono::Utc;
-use k8s_openapi::api::apps::v1::Deployment;
+use k8s_openapi::api::apps::v1::{Deployment, ReplicaSet, StatefulSet};
 use k8s_openapi::api::core::v1::{
     Event, PersistentVolumeClaim, Pod, Service,
 };
 use k8s_openapi::api::networking::v1::Ingress;
-use kube::{Api, Client, ResourceExt};
+use kube::api::{DeleteParams, DynamicObject, GroupVersionKind, Patch, PatchParams};
+use kube::{discovery, Api, Client, ResourceExt};
 use shared::{K8sDeployment, K8sEvent, K8sIngress, K8sPod, K8sPvc, K8sService};
 
 /// Cheap availability probe used at agent startup to decide whether
@@ -412,6 +413,145 @@ pub async fn describe(
         other => return Err(format!("unsupported kind: {other}")),
     };
     Ok(yaml)
+}
+
+// ─── slice 6 (v2): apply / scale / delete ──────────────────────
+
+const APPLY_FIELD_MANAGER: &str = "sys-manager";
+
+/// Server-side apply of one or more YAML docs. Multi-doc input
+/// (`---` separated) is supported; each doc is applied in order
+/// and the joined result is returned. The dynamic-object path
+/// uses kube's discovery to resolve the GVK to an `ApiResource`,
+/// so any cluster-known kind works without a per-kind match.
+pub async fn apply(yaml: &str, dry_run: bool, force: bool) -> Result<String, String> {
+    let client = Client::try_default()
+        .await
+        .map_err(|e| format!("kube client: {e}"))?;
+
+    let mut out = String::new();
+
+    for (i, raw) in yaml.split("\n---\n").enumerate() {
+        let raw = raw.trim();
+        if raw.is_empty() {
+            continue;
+        }
+        let obj: DynamicObject = serde_yaml::from_str(raw)
+            .map_err(|e| format!("doc {i}: parse: {e}"))?;
+        let types = obj
+            .types
+            .as_ref()
+            .ok_or_else(|| format!("doc {i}: missing apiVersion/kind"))?;
+        let gvk = GroupVersionKind::try_from(types)
+            .map_err(|e| format!("doc {i}: gvk: {e}"))?;
+
+        let (ar, caps) = discovery::pinned_kind(&client, &gvk)
+            .await
+            .map_err(|e| format!("doc {i}: discovery: {e}"))?;
+
+        let name = obj.name_any();
+        let api: Api<DynamicObject> = if caps.scope == discovery::Scope::Namespaced {
+            let ns = obj
+                .metadata
+                .namespace
+                .clone()
+                .unwrap_or_else(|| "default".into());
+            Api::namespaced_with(client.clone(), &ns, &ar)
+        } else {
+            Api::all_with(client.clone(), &ar)
+        };
+
+        let mut params = PatchParams::apply(APPLY_FIELD_MANAGER);
+        if force {
+            params = params.force();
+        }
+        if dry_run {
+            params.dry_run = true;
+        }
+
+        match api.patch(&name, &params, &Patch::Apply(&obj)).await {
+            Ok(applied) => {
+                out.push_str(&format!(
+                    "{} {}/{} {}\n",
+                    if dry_run { "(dry-run)" } else { "applied" },
+                    gvk.kind,
+                    obj.metadata.namespace.as_deref().unwrap_or("-"),
+                    applied.name_any(),
+                ));
+            }
+            Err(e) => {
+                return Err(format!(
+                    "doc {i} ({} {}/{}): {e}",
+                    gvk.kind,
+                    obj.metadata.namespace.as_deref().unwrap_or("-"),
+                    name,
+                ));
+            }
+        }
+    }
+
+    Ok(out)
+}
+
+/// Scale a Deployment / StatefulSet / ReplicaSet to `replicas` via
+/// the `/scale` subresource. `kind` is matched case-insensitively.
+pub async fn scale(
+    kind: &str,
+    namespace: &str,
+    name: &str,
+    replicas: i32,
+) -> Result<(), String> {
+    let client = Client::try_default()
+        .await
+        .map_err(|e| format!("kube client: {e}"))?;
+
+    let patch = serde_json::json!({ "spec": { "replicas": replicas } });
+    let params = PatchParams::default();
+
+    match kind.to_lowercase().as_str() {
+        "deployment" | "deploy" | "deployments" => {
+            let api: Api<Deployment> = Api::namespaced(client, namespace);
+            api.patch_scale(name, &params, &Patch::Merge(&patch))
+                .await
+                .map_err(|e| format!("scale deployment: {e}"))?;
+        }
+        "statefulset" | "sts" | "statefulsets" => {
+            let api: Api<StatefulSet> = Api::namespaced(client, namespace);
+            api.patch_scale(name, &params, &Patch::Merge(&patch))
+                .await
+                .map_err(|e| format!("scale statefulset: {e}"))?;
+        }
+        "replicaset" | "rs" | "replicasets" => {
+            let api: Api<ReplicaSet> = Api::namespaced(client, namespace);
+            api.patch_scale(name, &params, &Patch::Merge(&patch))
+                .await
+                .map_err(|e| format!("scale replicaset: {e}"))?;
+        }
+        other => return Err(format!("unsupported scale kind: {other}")),
+    }
+
+    Ok(())
+}
+
+/// Delete a single pod. `grace_period_secs = Some(0)` is the
+/// `--force --grace-period=0` equivalent (immediate delete).
+pub async fn delete_pod(
+    namespace: &str,
+    name: &str,
+    grace_period_secs: Option<i64>,
+) -> Result<(), String> {
+    let client = Client::try_default()
+        .await
+        .map_err(|e| format!("kube client: {e}"))?;
+    let api: Api<Pod> = Api::namespaced(client, namespace);
+    let mut params = DeleteParams::default();
+    if let Some(g) = grace_period_secs {
+        params = params.grace_period(g.max(0) as u32);
+    }
+    api.delete(name, &params)
+        .await
+        .map_err(|e| format!("delete pod: {e}"))?;
+    Ok(())
 }
 
 async fn describe_one<K>(

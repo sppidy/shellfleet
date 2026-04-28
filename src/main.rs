@@ -740,6 +740,61 @@ async fn main() {
                                     });
                                 }
                             }
+                            Message::K8sApplyRequest { yaml, dry_run, force } => {
+                                let tx_clone = tx.clone();
+                                tokio::spawn(async move {
+                                    #[cfg(feature = "kube")]
+                                    let (result, error) = match k8s::apply(&yaml, dry_run, force).await {
+                                        Ok(r) => (r, None),
+                                        Err(e) => (String::new(), Some(e)),
+                                    };
+                                    #[cfg(not(feature = "kube"))]
+                                    let (result, error) = {
+                                        let _ = (yaml, dry_run, force);
+                                        (
+                                            String::new(),
+                                            Some("agent built without k8s support".into()),
+                                        )
+                                    };
+                                    let _ = tx_clone.send(Message::K8sApplyResponse { result, error });
+                                });
+                            }
+                            Message::K8sScaleRequest { kind, namespace, name, replicas } => {
+                                let tx_clone = tx.clone();
+                                tokio::spawn(async move {
+                                    #[cfg(feature = "kube")]
+                                    let (success, error) = match k8s::scale(&kind, &namespace, &name, replicas).await {
+                                        Ok(()) => (true, None),
+                                        Err(e) => (false, Some(e)),
+                                    };
+                                    #[cfg(not(feature = "kube"))]
+                                    let (success, error) = {
+                                        let _ = replicas;
+                                        (false, Some("agent built without k8s support".into()))
+                                    };
+                                    let _ = tx_clone.send(Message::K8sScaleResponse {
+                                        kind, namespace, name, success, error,
+                                    });
+                                });
+                            }
+                            Message::K8sDeletePodRequest { namespace, name, grace_period_secs } => {
+                                let tx_clone = tx.clone();
+                                tokio::spawn(async move {
+                                    #[cfg(feature = "kube")]
+                                    let (success, error) = match k8s::delete_pod(&namespace, &name, grace_period_secs).await {
+                                        Ok(()) => (true, None),
+                                        Err(e) => (false, Some(e)),
+                                    };
+                                    #[cfg(not(feature = "kube"))]
+                                    let (success, error) = {
+                                        let _ = grace_period_secs;
+                                        (false, Some("agent built without k8s support".into()))
+                                    };
+                                    let _ = tx_clone.send(Message::K8sDeletePodResponse {
+                                        namespace, name, success, error,
+                                    });
+                                });
+                            }
                             Message::K8sDescribeRequest { kind, namespace, name } => {
                                 let tx_clone = tx.clone();
                                 tokio::spawn(async move {
