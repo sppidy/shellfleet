@@ -58,8 +58,9 @@ helm upgrade sysmgr ./helm/sys-manager-agent \
 
 | key                       | default | notes                                                         |
 | ------------------------- | ------- | ------------------------------------------------------------- |
-| `token.existingSecret`    | `""`    | Name of a Secret with key `agent-token`. Mounted ro at        |
-|                           |         | `/etc/sys-manager/agent-token` so a Pod restart re-uses it.   |
+| `token.existingSecret`    | `""`    | Name of a Secret with key `agent-token.txt`. Mounted ro at    |
+|                           |         | `/etc/sys-manager/agent-token.txt` (subPath) so the rest of   |
+|                           |         | the directory stays writable for runtime state.               |
 
 Two paths:
 
@@ -72,16 +73,20 @@ Two paths:
 2. **Re-install or DR** — pre-create a Secret and reference it:
 
 ```bash
-# After first pairing, capture the token:
+# After first pairing, capture the token (file is .txt-suffixed
+# inside the container — the agent uses write_token_secure which
+# writes to /etc/sys-manager/agent-token.txt by default):
 kubectl -n sys-manager exec deploy/sysmgr-sys-manager-agent \
-  -- cat /etc/sys-manager/agent-token > /tmp/agent-token
+  -- cat /etc/sys-manager/agent-token.txt > /tmp/agent-token.txt
 
-# Save it as a Secret:
+# Save it as a Secret. The key MUST be `agent-token.txt` so the
+# chart's subPath mount lands at the right path inside the Pod:
 kubectl -n sys-manager create secret generic sysmgr-token \
-  --from-file=agent-token=/tmp/agent-token
+  --from-file=agent-token.txt=/tmp/agent-token.txt
 
 # Re-install with the Secret reference so future restarts pick it up:
 helm upgrade sysmgr ./helm/sys-manager-agent \
+  --reuse-values \
   --set token.existingSecret=sysmgr-token
 ```
 

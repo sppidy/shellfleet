@@ -20,15 +20,15 @@ The line you want looks like:
 After approval, the agent appears in the dashboard's Kubernetes tab
 on the agent named `{{ include "sys-manager-agent.fullname" . }}-id`.
 
-⚠ The pairing token is stored at /etc/sys-manager/agent-token INSIDE
+⚠ The pairing token is stored at /etc/sys-manager/agent-token.txt INSIDE
 the running container. A Pod restart wipes it. Once you've paired,
 copy the token into a Kubernetes Secret and re-install with
 `token.existingSecret` set so the binding survives restarts:
 
   kubectl -n {{ .Release.Namespace }} exec deploy/{{ include "sys-manager-agent.fullname" . }} \
-    -- cat /etc/sys-manager/agent-token > /tmp/agent-token
+    -- cat /etc/sys-manager/agent-token.txt > /tmp/agent-token.txt
   kubectl -n {{ .Release.Namespace }} create secret generic {{ include "sys-manager-agent.fullname" . }}-token \
-    --from-file=agent-token=/tmp/agent-token
+    --from-file=agent-token.txt=/tmp/agent-token.txt
   helm upgrade {{ .Release.Name }} sys-manager-agent \
     --set token.existingSecret={{ include "sys-manager-agent.fullname" . }}-token
 

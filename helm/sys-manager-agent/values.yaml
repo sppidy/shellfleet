@@ -27,15 +27,16 @@ server:
 #      `existingSecret` empty and `token` unset — the agent will print a
 #      one-time pairing code on first start. `kubectl logs deploy/<name>`
 #      to read it, then paste at `/device` in the dashboard. The agent
-#      will write the issued token back to /etc/sys-manager/agent-token
+#      will write the issued token back to /etc/sys-manager/agent-token.txt
 #      inside the container (lost on Pod restart unless you `--from-literal`
 #      it back into the secret on subsequent installs).
 #
-#   2. Pre-existing token. Create a Secret with key `agent-token`, set
+#   2. Pre-existing token. Create a Secret with key `agent-token.txt`, set
 #      `existingSecret` to its name, and the chart will mount it at
-#      /etc/sys-manager/agent-token (read-only).
+#      /etc/sys-manager/agent-token.txt (read-only) via subPath so it
+#      coexists with the writable /etc/sys-manager directory.
 token:
-  existingSecret: ""           # name of an existing Secret with key `agent-token`
+  existingSecret: ""           # name of an existing Secret with key `agent-token.txt`
   # value: ""                  # ONLY if you accept committing it to values
 
 # RBAC posture. Read-only is the safety floor — every operator gets

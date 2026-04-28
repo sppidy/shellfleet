@@ -49,7 +49,8 @@ spec:
           {{- if .Values.token.existingSecret }}
           volumeMounts:
             - name: agent-token
-              mountPath: /etc/sys-manager
+              mountPath: /etc/sys-manager/agent-token.txt
+              subPath: agent-token.txt
               readOnly: true
           {{- end }}
           resources:
@@ -66,8 +67,8 @@ spec:
           secret:
             secretName: {{ .Values.token.existingSecret }}
             items:
-              - key: agent-token
-                path: agent-token
+              - key: agent-token.txt
+                path: agent-token.txt
                 mode: 0400
       {{- end }}
       {{- with .Values.nodeSelector }}
