@@ -451,11 +451,18 @@ pub async fn apply(yaml: &str, dry_run: bool, force: bool) -> Result<String, Str
 
         let name = obj.name_any();
         let api: Api<DynamicObject> = if caps.scope == discovery::Scope::Namespaced {
-            let ns = obj
-                .metadata
-                .namespace
-                .clone()
-                .unwrap_or_else(|| "default".into());
+            // No silent "default" fallback: the operator must spell
+            // out the target namespace in the manifest. Otherwise a
+            // forgotten `metadata.namespace:` would route the apply
+            // into `default` without anyone noticing.
+            let ns = obj.metadata.namespace.clone().ok_or_else(|| {
+                format!(
+                    "doc {i} ({} {}): missing metadata.namespace; \
+                     specify it in the manifest (namespaced kind, \
+                     no default fallback)",
+                    gvk.kind, name,
+                )
+            })?;
             Api::namespaced_with(client.clone(), &ns, &ar)
         } else {
             Api::all_with(client.clone(), &ar)
