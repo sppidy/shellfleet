@@ -29,7 +29,7 @@ Once merged, a maintainer will bump the pointer in the super-repo.
 ## Development setup
 
 See [`README.md`](README.md) for the dev quickstart and
-[`dist/QUICKSTART.md`](dist/QUICKSTART.md) for the
+[`docs/QUICKSTART.md`](docs/QUICKSTART.md) for the
 container-based deployment walkthrough.
 
 Minimum tooling:
