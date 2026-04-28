@@ -11,7 +11,7 @@ import Terminal from '@/components/Terminal';
 import ConfigEditor from '@/components/ConfigEditor';
 import SystemStats from '@/components/SystemStats';
 import DockerHub, { DOCKER_SUBTABS, type DockerSubtab } from '@/components/DockerHub';
-import KubernetesHub from '@/components/KubernetesHub';
+import KubernetesHub, { K8S_SUBTABS, type K8sSubtab } from '@/components/KubernetesHub';
 import AptManager from '@/components/AptManager';
 import Metrics from '@/components/Metrics';
 import JournalStream from '@/components/JournalStream';
@@ -95,6 +95,7 @@ function HomeBody() {
   const agentFromUrl = searchParams.get('agent');
   const tabFromUrl = searchParams.get('tab');
   const dockerFromUrl = searchParams.get('docker');
+  const k8sFromUrl = searchParams.get('k8s');
   const initialAgent =
     agentFromUrl && agents.includes(agentFromUrl)
       ? agentFromUrl
@@ -115,10 +116,14 @@ function HomeBody() {
     : DOCKER_SUBTABS.includes(dockerFromUrl as DockerSubtab)
       ? (dockerFromUrl as DockerSubtab)
       : 'containers';
+  const initialK8sSub: K8sSubtab = K8S_SUBTABS.includes(k8sFromUrl as K8sSubtab)
+    ? (k8sFromUrl as K8sSubtab)
+    : 'pods';
 
   const [selectedAgent, setSelectedAgent] = useState<string | null>(initialAgent);
   const [activeTab, setActiveTab] = useState<Tab>(initialTab);
   const [dockerSubtab, setDockerSubtab] = useState<DockerSubtab>(initialDockerSub);
+  const [k8sSubtab, setK8sSubtab] = useState<K8sSubtab>(initialK8sSub);
 
   // Per-agent capabilities reported on Register. Pre-v15 agents don't
   // have an entry here; treat absence as "show every tab" so legacy
@@ -231,8 +236,11 @@ function HomeBody() {
     if (dockerFromUrl && DOCKER_SUBTABS.includes(dockerFromUrl as DockerSubtab)) {
       setDockerSubtab(dockerFromUrl as DockerSubtab);
     }
+    if (k8sFromUrl && K8S_SUBTABS.includes(k8sFromUrl as K8sSubtab)) {
+      setK8sSubtab(k8sFromUrl as K8sSubtab);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [agentFromUrl, tabFromUrl, dockerFromUrl, agents.length]);
+  }, [agentFromUrl, tabFromUrl, dockerFromUrl, k8sFromUrl, agents.length]);
 
   useEffect(() => {
     if (status === 'guest') {
@@ -259,6 +267,9 @@ function HomeBody() {
       if (activeTab === 'docker' && dockerSubtab !== 'containers') {
         params.set('docker', dockerSubtab);
       }
+      if (activeTab === 'kubernetes' && k8sSubtab !== 'pods') {
+        params.set('k8s', k8sSubtab);
+      }
     }
     const next = params.toString();
     const current = searchParams.toString();
@@ -266,7 +277,7 @@ function HomeBody() {
       router.replace(next ? `/?${next}` : '/', { scroll: false });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedAgent, activeTab, dockerSubtab]);
+  }, [selectedAgent, activeTab, dockerSubtab, k8sSubtab]);
 
   if (status !== 'authed') {
     return (
@@ -601,7 +612,11 @@ function HomeBody() {
                   swarmAvailable={swarmAvailable}
                 />
               ) : activeTab === 'kubernetes' ? (
-                <KubernetesHub agentId={selectedAgent} />
+                <KubernetesHub
+                  agentId={selectedAgent}
+                  subtab={k8sSubtab}
+                  onSubtabChange={setK8sSubtab}
+                />
               ) : activeTab === 'metrics' ? (
                 <Metrics agentId={selectedAgent} />
               ) : activeTab === 'journal' ? (

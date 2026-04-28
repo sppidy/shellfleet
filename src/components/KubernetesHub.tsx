@@ -2,11 +2,52 @@
 
 import { useEffect, useState } from 'react';
 import { useWebSocket } from './providers/WebSocketProvider';
-import type { K8sPod } from '@/lib/types';
+import type {
+  K8sPod,
+  K8sDeployment,
+  K8sService,
+  K8sIngress,
+  K8sPvc,
+  K8sEvent,
+  AgentMessagePayload,
+} from '@/lib/types';
 
-type Props = { agentId: string };
+// ──────────────────────────────────────────────────────────────
+// Subtab map — kept in lockstep with DockerHub's pattern
+// ──────────────────────────────────────────────────────────────
+
+export type K8sSubtab =
+  | 'pods'
+  | 'deployments'
+  | 'services'
+  | 'ingresses'
+  | 'pvcs'
+  | 'events';
+
+export const K8S_SUBTABS: K8sSubtab[] = [
+  'pods',
+  'deployments',
+  'services',
+  'ingresses',
+  'pvcs',
+  'events',
+];
+
+const SUBTAB_DEFS: { id: K8sSubtab; label: string; hint?: string }[] = [
+  { id: 'pods',        label: 'pods',        hint: 'live workloads' },
+  { id: 'deployments', label: 'deployments', hint: 'replica sets' },
+  { id: 'services',    label: 'services',    hint: 'cluster-ip / nodeport' },
+  { id: 'ingresses',   label: 'ingresses',   hint: 'http routing' },
+  { id: 'pvcs',        label: 'pvcs',        hint: 'persistent volumes' },
+  { id: 'events',      label: 'events',      hint: 'recent activity' },
+];
+
+// ──────────────────────────────────────────────────────────────
+// Shared helpers
+// ──────────────────────────────────────────────────────────────
 
 function fmtAge(secs: number): string {
+  if (secs < 0) return '—';
   if (secs < 60) return `${secs}s`;
   if (secs < 3600) return `${Math.floor(secs / 60)}m`;
   if (secs < 86400) return `${Math.floor(secs / 3600)}h`;
@@ -16,21 +57,37 @@ function fmtAge(secs: number): string {
 function phaseStyle(phase: string): React.CSSProperties {
   switch (phase) {
     case 'Running':
+    case 'Bound':
+    case 'Normal':
       return { color: 'var(--ok, #7fb069)' };
     case 'Pending':
       return { color: 'var(--warn, #e6b450)' };
     case 'Succeeded':
       return { color: 'var(--fg-2)' };
     case 'Failed':
+    case 'Lost':
+    case 'Warning':
       return { color: 'var(--err, #e57373)' };
     default:
       return { color: 'var(--fg-3)' };
   }
 }
 
-export default function KubernetesHub({ agentId }: Props) {
+// Poll-on-mount helper for the K8sList* round-trips. The caller
+// passes a `pluck` callback that narrows the AgentMessagePayload
+// union and extracts the typed list — that way each view stays
+// fully typesafe without the helper needing to be generic over the
+// union shape.
+type K8sListResult<T> = { data: T | null; error: string | null; loading: boolean };
+
+function useK8sList<T>(
+  agentId: string,
+  reqMessage: AgentMessagePayload,
+  pluck: (msg: AgentMessagePayload) => { data: T; error: string | null } | null,
+  pollMs = 5000,
+): K8sListResult<T> {
   const { sendToAgent, onAgentMessage } = useWebSocket();
-  const [pods, setPods] = useState<K8sPod[]>([]);
+  const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [tick, setTick] = useState(0);
@@ -38,112 +95,524 @@ export default function KubernetesHub({ agentId }: Props) {
   useEffect(() => {
     setLoading(true);
     setError(null);
-    sendToAgent(agentId, { type: 'K8sListPodsRequest' });
+    sendToAgent(agentId, reqMessage);
 
     const unsub = onAgentMessage(agentId, (msg) => {
-      if (msg.type === 'K8sListPodsResponse') {
-        setLoading(false);
-        if (msg.payload.error) {
-          setError(msg.payload.error);
-          setPods([]);
-        } else {
-          setError(null);
-          setPods(msg.payload.pods);
-        }
+      const matched = pluck(msg);
+      if (!matched) return;
+      setLoading(false);
+      if (matched.error) {
+        setError(matched.error);
+        setData(null);
+      } else {
+        setError(null);
+        setData(matched.data);
       }
     });
 
-    // Auto-refresh every 5s. K8sListPodsRequest is cheap on the agent
-    // side (one apiserver list call, no agent-side polling cost).
-    const t = setInterval(() => setTick((n) => n + 1), 5000);
+    const t = setInterval(() => setTick((n) => n + 1), pollMs);
     return () => {
       unsub();
       clearInterval(t);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [agentId]);
+  }, [agentId, reqMessage.type]);
 
   useEffect(() => {
     if (tick === 0) return;
-    sendToAgent(agentId, { type: 'K8sListPodsRequest' });
+    sendToAgent(agentId, reqMessage);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tick]);
 
+  return { data, error, loading };
+}
+
+// Matching dark-monospace table style across all subtabs.
+const tdBase: React.CSSProperties = { padding: '6px 10px' };
+const tdMuted: React.CSSProperties = { ...tdBase, color: 'var(--fg-2)' };
+const thRow: React.CSSProperties = { color: 'var(--fg-3)', textAlign: 'left' };
+
+function PanelHead({
+  title,
+  meta,
+}: {
+  title: string;
+  meta?: string;
+}) {
   return (
-    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-      <div className="panel-head" style={{ flexShrink: 0 }}>
-        <div className="panel-title">
-          <span className="ico">⎈</span> KUBERNETES · pods
-          <span className="meta">
-            {loading ? 'loading…' : `${pods.length} pod${pods.length === 1 ? '' : 's'}`}
-          </span>
-        </div>
+    <div className="panel-head" style={{ flexShrink: 0 }}>
+      <div className="panel-title">
+        <span className="ico">⎈</span> {title}
+        {meta && <span className="meta">{meta}</span>}
       </div>
+    </div>
+  );
+}
+
+function ErrorPane({ error }: { error: string }) {
+  return (
+    <div
+      style={{
+        padding: 16,
+        fontFamily: 'var(--mono)',
+        fontSize: 12,
+        color: 'var(--err, #e57373)',
+        whiteSpace: 'pre-wrap',
+      }}
+    >
+      {error}
+    </div>
+  );
+}
+
+function EmptyPane({ label }: { label: string }) {
+  return (
+    <div
+      style={{
+        padding: 16,
+        fontFamily: 'var(--mono)',
+        fontSize: 12,
+        color: 'var(--fg-3)',
+      }}
+    >
+      {label}
+    </div>
+  );
+}
+
+const tableStyle: React.CSSProperties = {
+  width: '100%',
+  fontFamily: 'var(--mono)',
+  fontSize: 12,
+  borderCollapse: 'collapse',
+};
+
+const rowStyle: React.CSSProperties = { borderTop: '1px solid var(--line)' };
+
+// ──────────────────────────────────────────────────────────────
+// Subtab views
+// ──────────────────────────────────────────────────────────────
+
+function PodsView({ agentId }: { agentId: string }) {
+  const { data, error, loading } = useK8sList<K8sPod[]>(
+    agentId,
+    { type: 'K8sListPodsRequest' },
+    (msg) =>
+      msg.type === 'K8sListPodsResponse'
+        ? { data: msg.payload.pods, error: msg.payload.error }
+        : null,
+  );
+  const pods = data ?? [];
+  return (
+    <>
+      <PanelHead
+        title="KUBERNETES · pods"
+        meta={loading && !data ? 'loading…' : `${pods.length} pod${pods.length === 1 ? '' : 's'}`}
+      />
       <div style={{ flex: 1, overflow: 'auto', padding: 'var(--pad, 12px)' }}>
         {error ? (
-          <div
-            style={{
-              padding: 16,
-              fontFamily: 'var(--mono)',
-              fontSize: 12,
-              color: 'var(--err, #e57373)',
-              whiteSpace: 'pre-wrap',
-            }}
-          >
-            {error}
-          </div>
+          <ErrorPane error={error} />
         ) : pods.length === 0 && !loading ? (
-          <div
-            style={{
-              padding: 16,
-              fontFamily: 'var(--mono)',
-              fontSize: 12,
-              color: 'var(--fg-3)',
-            }}
-          >
-            no pods on this cluster yet
-          </div>
+          <EmptyPane label="no pods on this cluster yet" />
         ) : (
-          <table
-            className="tbl"
-            style={{
-              width: '100%',
-              fontFamily: 'var(--mono)',
-              fontSize: 12,
-              borderCollapse: 'collapse',
-            }}
-          >
+          <table className="tbl" style={tableStyle}>
             <thead>
-              <tr style={{ color: 'var(--fg-3)', textAlign: 'left' }}>
-                <th style={{ padding: '6px 10px' }}>namespace</th>
-                <th style={{ padding: '6px 10px' }}>name</th>
-                <th style={{ padding: '6px 10px' }}>ready</th>
-                <th style={{ padding: '6px 10px' }}>status</th>
-                <th style={{ padding: '6px 10px' }}>restarts</th>
-                <th style={{ padding: '6px 10px' }}>age</th>
-                <th style={{ padding: '6px 10px' }}>node</th>
+              <tr style={thRow}>
+                <th style={tdBase}>namespace</th>
+                <th style={tdBase}>name</th>
+                <th style={tdBase}>ready</th>
+                <th style={tdBase}>status</th>
+                <th style={tdBase}>restarts</th>
+                <th style={tdBase}>age</th>
+                <th style={tdBase}>node</th>
               </tr>
             </thead>
             <tbody>
               {pods.map((p) => (
-                <tr
-                  key={`${p.namespace}/${p.name}`}
-                  style={{ borderTop: '1px solid var(--line)' }}
-                >
-                  <td style={{ padding: '6px 10px', color: 'var(--fg-2)' }}>{p.namespace}</td>
-                  <td style={{ padding: '6px 10px' }}>{p.name}</td>
-                  <td style={{ padding: '6px 10px' }}>{p.ready}</td>
-                  <td style={{ padding: '6px 10px', ...phaseStyle(p.phase) }}>{p.phase}</td>
-                  <td style={{ padding: '6px 10px' }}>{p.restarts}</td>
-                  <td style={{ padding: '6px 10px' }}>{fmtAge(p.age_secs)}</td>
-                  <td style={{ padding: '6px 10px', color: 'var(--fg-2)' }}>
-                    {p.node ?? '—'}
-                  </td>
+                <tr key={`${p.namespace}/${p.name}`} style={rowStyle}>
+                  <td style={tdMuted}>{p.namespace}</td>
+                  <td style={tdBase}>{p.name}</td>
+                  <td style={tdBase}>{p.ready}</td>
+                  <td style={{ ...tdBase, ...phaseStyle(p.phase) }}>{p.phase}</td>
+                  <td style={tdBase}>{p.restarts}</td>
+                  <td style={tdBase}>{fmtAge(p.age_secs)}</td>
+                  <td style={tdMuted}>{p.node ?? '—'}</td>
                 </tr>
               ))}
             </tbody>
           </table>
         )}
+      </div>
+    </>
+  );
+}
+
+function DeploymentsView({ agentId }: { agentId: string }) {
+  const { data, error, loading } = useK8sList<K8sDeployment[]>(
+    agentId,
+    { type: 'K8sListDeploymentsRequest' },
+    (msg) =>
+      msg.type === 'K8sListDeploymentsResponse'
+        ? { data: msg.payload.deployments, error: msg.payload.error }
+        : null,
+  );
+  const items = data ?? [];
+  return (
+    <>
+      <PanelHead
+        title="KUBERNETES · deployments"
+        meta={loading && !data ? 'loading…' : `${items.length} deployment${items.length === 1 ? '' : 's'}`}
+      />
+      <div style={{ flex: 1, overflow: 'auto', padding: 'var(--pad, 12px)' }}>
+        {error ? (
+          <ErrorPane error={error} />
+        ) : items.length === 0 && !loading ? (
+          <EmptyPane label="no deployments" />
+        ) : (
+          <table className="tbl" style={tableStyle}>
+            <thead>
+              <tr style={thRow}>
+                <th style={tdBase}>namespace</th>
+                <th style={tdBase}>name</th>
+                <th style={tdBase}>ready</th>
+                <th style={tdBase}>up-to-date</th>
+                <th style={tdBase}>available</th>
+                <th style={tdBase}>age</th>
+                <th style={tdBase}>image</th>
+              </tr>
+            </thead>
+            <tbody>
+              {items.map((d) => (
+                <tr key={`${d.namespace}/${d.name}`} style={rowStyle}>
+                  <td style={tdMuted}>{d.namespace}</td>
+                  <td style={tdBase}>{d.name}</td>
+                  <td style={tdBase}>{d.ready}</td>
+                  <td style={tdBase}>{d.up_to_date}</td>
+                  <td style={tdBase}>{d.available}</td>
+                  <td style={tdBase}>{fmtAge(d.age_secs)}</td>
+                  <td style={tdMuted}>{d.image ?? '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </>
+  );
+}
+
+function ServicesView({ agentId }: { agentId: string }) {
+  const { data, error, loading } = useK8sList<K8sService[]>(
+    agentId,
+    { type: 'K8sListServicesRequest' },
+    (msg) =>
+      msg.type === 'K8sListServicesResponse'
+        ? { data: msg.payload.services, error: msg.payload.error }
+        : null,
+  );
+  const items = data ?? [];
+  return (
+    <>
+      <PanelHead
+        title="KUBERNETES · services"
+        meta={loading && !data ? 'loading…' : `${items.length} service${items.length === 1 ? '' : 's'}`}
+      />
+      <div style={{ flex: 1, overflow: 'auto', padding: 'var(--pad, 12px)' }}>
+        {error ? (
+          <ErrorPane error={error} />
+        ) : items.length === 0 && !loading ? (
+          <EmptyPane label="no services" />
+        ) : (
+          <table className="tbl" style={tableStyle}>
+            <thead>
+              <tr style={thRow}>
+                <th style={tdBase}>namespace</th>
+                <th style={tdBase}>name</th>
+                <th style={tdBase}>type</th>
+                <th style={tdBase}>cluster-ip</th>
+                <th style={tdBase}>external-ip</th>
+                <th style={tdBase}>ports</th>
+                <th style={tdBase}>age</th>
+              </tr>
+            </thead>
+            <tbody>
+              {items.map((s) => (
+                <tr key={`${s.namespace}/${s.name}`} style={rowStyle}>
+                  <td style={tdMuted}>{s.namespace}</td>
+                  <td style={tdBase}>{s.name}</td>
+                  <td style={tdBase}>{s.kind}</td>
+                  <td style={tdMuted}>{s.cluster_ip ?? '—'}</td>
+                  <td style={tdMuted}>
+                    {s.external_ips.length > 0 ? s.external_ips.join(', ') : '—'}
+                  </td>
+                  <td style={tdMuted}>
+                    {s.ports.length > 0 ? s.ports.join(', ') : '—'}
+                  </td>
+                  <td style={tdBase}>{fmtAge(s.age_secs)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </>
+  );
+}
+
+function IngressesView({ agentId }: { agentId: string }) {
+  const { data, error, loading } = useK8sList<K8sIngress[]>(
+    agentId,
+    { type: 'K8sListIngressesRequest' },
+    (msg) =>
+      msg.type === 'K8sListIngressesResponse'
+        ? { data: msg.payload.ingresses, error: msg.payload.error }
+        : null,
+  );
+  const items = data ?? [];
+  return (
+    <>
+      <PanelHead
+        title="KUBERNETES · ingresses"
+        meta={loading && !data ? 'loading…' : `${items.length} ingress${items.length === 1 ? '' : 'es'}`}
+      />
+      <div style={{ flex: 1, overflow: 'auto', padding: 'var(--pad, 12px)' }}>
+        {error ? (
+          <ErrorPane error={error} />
+        ) : items.length === 0 && !loading ? (
+          <EmptyPane label="no ingresses" />
+        ) : (
+          <table className="tbl" style={tableStyle}>
+            <thead>
+              <tr style={thRow}>
+                <th style={tdBase}>namespace</th>
+                <th style={tdBase}>name</th>
+                <th style={tdBase}>class</th>
+                <th style={tdBase}>hosts</th>
+                <th style={tdBase}>address</th>
+                <th style={tdBase}>age</th>
+              </tr>
+            </thead>
+            <tbody>
+              {items.map((i) => (
+                <tr key={`${i.namespace}/${i.name}`} style={rowStyle}>
+                  <td style={tdMuted}>{i.namespace}</td>
+                  <td style={tdBase}>{i.name}</td>
+                  <td style={tdMuted}>{i.class ?? '—'}</td>
+                  <td style={tdMuted}>
+                    {i.hosts.length > 0 ? i.hosts.join(', ') : '—'}
+                  </td>
+                  <td style={tdMuted}>
+                    {i.addresses.length > 0 ? i.addresses.join(', ') : '—'}
+                  </td>
+                  <td style={tdBase}>{fmtAge(i.age_secs)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </>
+  );
+}
+
+function PvcsView({ agentId }: { agentId: string }) {
+  const { data, error, loading } = useK8sList<K8sPvc[]>(
+    agentId,
+    { type: 'K8sListPvcsRequest' },
+    (msg) =>
+      msg.type === 'K8sListPvcsResponse'
+        ? { data: msg.payload.pvcs, error: msg.payload.error }
+        : null,
+  );
+  const items = data ?? [];
+  return (
+    <>
+      <PanelHead
+        title="KUBERNETES · pvcs"
+        meta={loading && !data ? 'loading…' : `${items.length} pvc${items.length === 1 ? '' : 's'}`}
+      />
+      <div style={{ flex: 1, overflow: 'auto', padding: 'var(--pad, 12px)' }}>
+        {error ? (
+          <ErrorPane error={error} />
+        ) : items.length === 0 && !loading ? (
+          <EmptyPane label="no persistent volume claims" />
+        ) : (
+          <table className="tbl" style={tableStyle}>
+            <thead>
+              <tr style={thRow}>
+                <th style={tdBase}>namespace</th>
+                <th style={tdBase}>name</th>
+                <th style={tdBase}>status</th>
+                <th style={tdBase}>volume</th>
+                <th style={tdBase}>capacity</th>
+                <th style={tdBase}>access</th>
+                <th style={tdBase}>storageclass</th>
+                <th style={tdBase}>age</th>
+              </tr>
+            </thead>
+            <tbody>
+              {items.map((p) => (
+                <tr key={`${p.namespace}/${p.name}`} style={rowStyle}>
+                  <td style={tdMuted}>{p.namespace}</td>
+                  <td style={tdBase}>{p.name}</td>
+                  <td style={{ ...tdBase, ...phaseStyle(p.status) }}>{p.status}</td>
+                  <td style={tdMuted}>{p.volume_name ?? '—'}</td>
+                  <td style={tdBase}>{p.capacity ?? '—'}</td>
+                  <td style={tdMuted}>
+                    {p.access_modes.length > 0 ? p.access_modes.join(',') : '—'}
+                  </td>
+                  <td style={tdMuted}>{p.storage_class ?? '—'}</td>
+                  <td style={tdBase}>{fmtAge(p.age_secs)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </>
+  );
+}
+
+function EventsView({ agentId }: { agentId: string }) {
+  const { data, error, loading } = useK8sList<K8sEvent[]>(
+    agentId,
+    { type: 'K8sListEventsRequest' },
+    (msg) =>
+      msg.type === 'K8sListEventsResponse'
+        ? { data: msg.payload.events, error: msg.payload.error }
+        : null,
+  );
+  const items = data ?? [];
+  return (
+    <>
+      <PanelHead
+        title="KUBERNETES · events"
+        meta={loading && !data ? 'loading…' : `${items.length} event${items.length === 1 ? '' : 's'} (capped @200)`}
+      />
+      <div style={{ flex: 1, overflow: 'auto', padding: 'var(--pad, 12px)' }}>
+        {error ? (
+          <ErrorPane error={error} />
+        ) : items.length === 0 && !loading ? (
+          <EmptyPane label="no recent events" />
+        ) : (
+          <table className="tbl" style={tableStyle}>
+            <thead>
+              <tr style={thRow}>
+                <th style={tdBase}>last seen</th>
+                <th style={tdBase}>type</th>
+                <th style={tdBase}>reason</th>
+                <th style={tdBase}>object</th>
+                <th style={tdBase}>×</th>
+                <th style={tdBase}>message</th>
+              </tr>
+            </thead>
+            <tbody>
+              {items.map((e, idx) => (
+                <tr key={idx} style={rowStyle}>
+                  <td style={tdMuted}>{fmtAge(e.age_secs)} ago</td>
+                  <td style={{ ...tdBase, ...phaseStyle(e.kind) }}>{e.kind}</td>
+                  <td style={tdBase}>{e.reason}</td>
+                  <td style={tdMuted}>
+                    {e.namespace ? `${e.namespace}/` : ''}
+                    {e.object}
+                  </td>
+                  <td style={tdBase}>{e.count}</td>
+                  <td style={tdMuted}>{e.message}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </>
+  );
+}
+
+// ──────────────────────────────────────────────────────────────
+// Shell — inner sidebar + content router (mirrors DockerHub)
+// ──────────────────────────────────────────────────────────────
+
+type Props = {
+  agentId: string;
+  subtab: K8sSubtab;
+  onSubtabChange: (s: K8sSubtab) => void;
+};
+
+export default function KubernetesHub({ agentId, subtab, onSubtabChange }: Props) {
+  return (
+    <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
+      <nav
+        aria-label="kubernetes subnav"
+        style={{
+          width: 168,
+          flexShrink: 0,
+          borderRight: '1px solid var(--line)',
+          background: 'var(--bg-1)',
+          padding: '8px 0',
+          overflowY: 'auto',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 2,
+        }}
+      >
+        <div
+          style={{
+            padding: '4px 12px 8px',
+            color: 'var(--fg-3)',
+            fontFamily: 'var(--mono)',
+            fontSize: 10,
+            letterSpacing: '0.08em',
+            textTransform: 'uppercase',
+          }}
+        >
+          kubernetes
+        </div>
+        {SUBTAB_DEFS.map((s, i) => {
+          const active = s.id === subtab;
+          return (
+            <button
+              key={s.id}
+              type="button"
+              onClick={() => onSubtabChange(s.id)}
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'flex-start',
+                gap: 2,
+                width: '100%',
+                padding: '6px 12px',
+                border: 0,
+                background: active ? 'var(--bg-2)' : 'transparent',
+                borderLeft: `2px solid ${active ? 'var(--accent)' : 'transparent'}`,
+                cursor: 'pointer',
+                fontFamily: 'var(--mono)',
+                color: active ? 'var(--fg)' : 'var(--fg-2)',
+                textAlign: 'left',
+              }}
+            >
+              <span style={{ display: 'inline-flex', gap: 8, alignItems: 'baseline', fontSize: 12 }}>
+                <span style={{ color: 'var(--fg-3)', fontSize: 10 }}>
+                  {String(i + 1).padStart(2, '0')}
+                </span>
+                <span>{s.label}</span>
+              </span>
+              {s.hint && (
+                <span style={{ fontSize: 10, color: 'var(--fg-3)', paddingLeft: 22 }}>
+                  {s.hint}
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </nav>
+
+      <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+        {subtab === 'pods'        && <PodsView        agentId={agentId} />}
+        {subtab === 'deployments' && <DeploymentsView agentId={agentId} />}
+        {subtab === 'services'    && <ServicesView    agentId={agentId} />}
+        {subtab === 'ingresses'   && <IngressesView   agentId={agentId} />}
+        {subtab === 'pvcs'        && <PvcsView        agentId={agentId} />}
+        {subtab === 'events'      && <EventsView      agentId={agentId} />}
       </div>
     </div>
   );

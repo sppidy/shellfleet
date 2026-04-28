@@ -16,6 +16,56 @@ export type K8sPod = {
   containers: string[];
 };
 
+export type K8sDeployment = {
+  namespace: string;
+  name: string;
+  ready: string;
+  up_to_date: number;
+  available: number;
+  age_secs: number;
+  image: string | null;
+};
+
+export type K8sService = {
+  namespace: string;
+  name: string;
+  kind: string;
+  cluster_ip: string | null;
+  external_ips: string[];
+  ports: string[];
+  age_secs: number;
+};
+
+export type K8sIngress = {
+  namespace: string;
+  name: string;
+  class: string | null;
+  hosts: string[];
+  addresses: string[];
+  age_secs: number;
+};
+
+export type K8sPvc = {
+  namespace: string;
+  name: string;
+  status: string;
+  volume_name: string | null;
+  capacity: string | null;
+  access_modes: string[];
+  storage_class: string | null;
+  age_secs: number;
+};
+
+export type K8sEvent = {
+  namespace: string;
+  kind: string;
+  reason: string;
+  object: string;
+  message: string;
+  count: number;
+  age_secs: number;
+};
+
 export type SystemStatsPayload = {
   hostname: string;
   kernel: string;
@@ -425,12 +475,31 @@ export type AgentMessagePayload =
   | { type: 'ControlServiceRequest'; payload: { name: string; action: string } }
   | { type: 'ControlServiceResponse'; payload: { name: string; success: boolean; error: string | null } }
   | { type: 'K8sListPodsRequest' }
+  | { type: 'K8sListPodsResponse'; payload: { pods: K8sPod[]; error: string | null } }
+  | { type: 'K8sListDeploymentsRequest' }
   | {
-      type: 'K8sListPodsResponse';
-      payload: {
-        pods: K8sPod[];
-        error: string | null;
-      };
+      type: 'K8sListDeploymentsResponse';
+      payload: { deployments: K8sDeployment[]; error: string | null };
+    }
+  | { type: 'K8sListServicesRequest' }
+  | {
+      type: 'K8sListServicesResponse';
+      payload: { services: K8sService[]; error: string | null };
+    }
+  | { type: 'K8sListIngressesRequest' }
+  | {
+      type: 'K8sListIngressesResponse';
+      payload: { ingresses: K8sIngress[]; error: string | null };
+    }
+  | { type: 'K8sListPvcsRequest' }
+  | {
+      type: 'K8sListPvcsResponse';
+      payload: { pvcs: K8sPvc[]; error: string | null };
+    }
+  | { type: 'K8sListEventsRequest' }
+  | {
+      type: 'K8sListEventsResponse';
+      payload: { events: K8sEvent[]; error: string | null };
     }
   | { type: 'StartTerminalRequest'; payload: { session_id: string } }
   | { type: 'TerminalData'; payload: { session_id: string; data: number[] } }
