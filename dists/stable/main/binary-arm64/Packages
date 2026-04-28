@@ -24,28 +24,31 @@ Description: Agent for sys-manager: connects a host to a sys-manager server over
  on hosts that should appear as Kubernetes targets in the dashboard;
  install plain sys-manager-agent everywhere else.
 
-Package: sys-manager-agent
+Package: sys-manager-agent-k8s
 Architecture: arm64
-Version: 1.1.0-ci202604271614.g03fdaa9
+Version: 1.1.0-ci202604280311.g8d70dc3
 Priority: optional
 Section: admin
 Maintainer: sppidy <sppidytg@gmail.com>
-Installed-Size: 7104
+Installed-Size: 14449
+Provides: sys-manager-agent
 Depends: libc6 (>= 2.39), libssl3t64 (>= 3.0.0), systemd
-Filename: pool/main/sys-manager-agent_1.1.0-ci202604271614.g03fdaa9_arm64.deb
-Size: 1560652
-MD5sum: ebbc95044c6e1393244d0e5bbd6567cd
-SHA1: deb7e62129a2115b0b7fab00fd262bbe454e0eff
-SHA256: aebd7aca9b700c337f197eb844fc56b9a52f312575502dee90b7ecb0df538316
-SHA512: 8d483e1d1b694198697e4c4e8ece71462c13e6d3fc3bf49fab6ee5317d8266142598637a9457866931f9b3494f743404d2a0878da4392c9a89f2d5826abbe35b
+Conflicts: sys-manager-agent
+Replaces: sys-manager-agent
+Filename: pool/main/sys-manager-agent-k8s_1.1.0-ci202604280311.g8d70dc3_arm64.deb
+Size: 3266036
+MD5sum: a34b1e9171c3b7b84fd64ebe511c5d76
+SHA1: 49ef48ab8ee8d2e34f86958d5c53bac1c4eb0632
+SHA256: 862cebdee1cf0c078e3a1e2de5d8333bbdbd003d6fc95ac934f3a7d822f42a1f
+SHA512: db6cfdb15f0d20567e4702f9df287d5064c506fb56618f86ae737ca921017af31809b9c9962fbc6fadbd16216d39b95ce74db8ecaa9d25cd10f76aafccbaf87c
 Homepage: https://github.com/sppidy/sys-mngr-agent
 Description: Agent for sys-manager: connects a host to a sys-manager server over WebSocket
  and exposes systemd service control, terminal, and config editing.
- Agent for sys-manager. Connects a Linux host to a sys-manager server over a
- TLS WebSocket and exposes systemd service control, an interactive terminal,
- and remote read/write of configuration files. Pairing happens through the
- server's device-auth flow; the resulting token is cached at
- /etc/sys-manager/agent-token.txt.
+ Agent for sys-manager — k8s flavor. Same as sys-manager-agent plus a
+ compiled-in kube-rs client so the agent can talk to a kube-apiserver
+ via in-cluster ServiceAccount or a kubeconfig at $KUBECONFIG. Install
+ on hosts that should appear as Kubernetes targets in the dashboard;
+ install plain sys-manager-agent everywhere else.
 
 Package: sys-manager-agent
 Architecture: arm64
@@ -130,6 +133,29 @@ MD5sum: 917c40624c5c3e4245889428e214dc63
 SHA1: 57593f7958abb3a5d7d4b93b220b3217b8cdf41e
 SHA256: 8a3de487bdcac146d41b408d88cd8294d7918648d3c4043550b8fe9b315739e9
 SHA512: 89d5548a4e5e851a72440ab2212c35d78a318cfa1b02eba19d1148a1796596082bb91c73269664dcc3224d0b37e4c571fb115210151a296eb273a2cf02c21636
+Homepage: https://github.com/sppidy/sys-mngr-agent
+Description: Agent for sys-manager: connects a host to a sys-manager server over WebSocket
+ and exposes systemd service control, terminal, and config editing.
+ Agent for sys-manager. Connects a Linux host to a sys-manager server over a
+ TLS WebSocket and exposes systemd service control, an interactive terminal,
+ and remote read/write of configuration files. Pairing happens through the
+ server's device-auth flow; the resulting token is cached at
+ /etc/sys-manager/agent-token.txt.
+
+Package: sys-manager-agent
+Architecture: arm64
+Version: 1.1.0-ci202604280311.g8d70dc3
+Priority: optional
+Section: admin
+Maintainer: sppidy <sppidytg@gmail.com>
+Installed-Size: 7261
+Depends: libc6 (>= 2.39), libssl3t64 (>= 3.0.0), systemd
+Filename: pool/main/sys-manager-agent_1.1.0-ci202604280311.g8d70dc3_arm64.deb
+Size: 1584392
+MD5sum: 59d345f187c2c9993d2f1f3d3d5a2ab3
+SHA1: bf692fd983cf82c0e0cee0528a12206170404125
+SHA256: c820dc8c564acbc632fe17ef7714be53a1722a3b8cea8f95667a5bf58011afbd
+SHA512: 8fa20194d94601a3599280cbcd7d4b175fc4b2516b2708711346f31ca9c540e27bc64a3b3499fdad5767446abb391aee7a6a240c1b700e290696166f33104f7c
 Homepage: https://github.com/sppidy/sys-mngr-agent
 Description: Agent for sys-manager: connects a host to a sys-manager server over WebSocket
  and exposes systemd service control, terminal, and config editing.
