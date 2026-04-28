@@ -1226,4 +1226,18 @@ pub enum UiMessage {
 
     /// Server forwarding a message from an agent to the UI
     AgentMessage { agent_id: String, message: Message },
+
+    /// Server rejecting a SendToAgent the operator wasn't allowed to issue.
+    /// The WS-plane RBAC gate (see `is_mutating_agent_message` in the
+    /// server) used to silently drop these, leaving panels like the K8s
+    /// logs viewer stuck on "waiting for output…". Emitting this back
+    /// gives the dashboard something to surface as a toast so the user
+    /// understands their click was denied. `variant_type` is the
+    /// `Message`'s `type` tag (e.g. `"K8sLogsRequest"`); `reason` is a
+    /// short human-readable string.
+    PermissionDenied {
+        agent_id: String,
+        variant_type: String,
+        reason: String,
+    },
 }
