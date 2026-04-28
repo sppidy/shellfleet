@@ -138,6 +138,37 @@ pub enum Message {
         error: Option<String>,
     },
 
+    /// Slice-2 read API — same capability gate as K8sListPods. Each
+    /// pair returns either a populated list or an `error: Some(_)`,
+    /// never both. Empty lists are legitimate (cluster has none).
+    K8sListDeploymentsRequest,
+    K8sListDeploymentsResponse {
+        deployments: Vec<K8sDeployment>,
+        error: Option<String>,
+    },
+    K8sListServicesRequest,
+    K8sListServicesResponse {
+        services: Vec<K8sService>,
+        error: Option<String>,
+    },
+    K8sListIngressesRequest,
+    K8sListIngressesResponse {
+        ingresses: Vec<K8sIngress>,
+        error: Option<String>,
+    },
+    K8sListPvcsRequest,
+    K8sListPvcsResponse {
+        pvcs: Vec<K8sPvc>,
+        error: Option<String>,
+    },
+    /// Cluster-wide events sorted newest-first, capped at 200 by the
+    /// agent so a busy cluster doesn't blow up the WS frame.
+    K8sListEventsRequest,
+    K8sListEventsResponse {
+        events: Vec<K8sEvent>,
+        error: Option<String>,
+    },
+
     /// Request to read a configuration file
     ReadConfigRequest { path: String },
 
@@ -948,6 +979,70 @@ pub struct AptUpgradable {
     pub current_version: String,
     pub new_version: String,
     pub source: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct K8sDeployment {
+    pub namespace: String,
+    pub name: String,
+    /// `<ready_replicas>/<spec_replicas>`, e.g. `3/3`.
+    pub ready: String,
+    pub up_to_date: i32,
+    pub available: i32,
+    pub age_secs: i64,
+    /// First container image — full inspection lives behind Describe.
+    pub image: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct K8sService {
+    pub namespace: String,
+    pub name: String,
+    /// `ClusterIP` / `NodePort` / `LoadBalancer` / `ExternalName`.
+    pub kind: String,
+    pub cluster_ip: Option<String>,
+    pub external_ips: Vec<String>,
+    /// Pre-formatted `port:nodePort/proto` strings, comma-joined upstream.
+    pub ports: Vec<String>,
+    pub age_secs: i64,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct K8sIngress {
+    pub namespace: String,
+    pub name: String,
+    pub class: Option<String>,
+    pub hosts: Vec<String>,
+    pub addresses: Vec<String>,
+    pub age_secs: i64,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct K8sPvc {
+    pub namespace: String,
+    pub name: String,
+    /// `Bound` / `Pending` / `Lost`.
+    pub status: String,
+    pub volume_name: Option<String>,
+    pub capacity: Option<String>,
+    /// Short-form list, e.g. `["RWO"]`, `["RWO", "RWX"]`.
+    pub access_modes: Vec<String>,
+    pub storage_class: Option<String>,
+    pub age_secs: i64,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct K8sEvent {
+    pub namespace: String,
+    /// `Normal` / `Warning`.
+    pub kind: String,
+    pub reason: String,
+    /// Pre-formatted `kind/name` of the involved object.
+    pub object: String,
+    pub message: String,
+    pub count: i32,
+    /// Seconds since `lastTimestamp` (or `eventTime` for newer events).
+    pub age_secs: i64,
 }
 
 /// One row in the dashboard's k8s Pods table. The agent collapses
