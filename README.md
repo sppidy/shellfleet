@@ -27,7 +27,7 @@ Apt repo: <https://sys-mgr-repo.sppidy.in/>  ·  Container images: <https://hrbr
 The fastest path to a running dashboard + a paired host:
 
 1. Bring up the server + web stack from the published container images.
-   See [`dist/QUICKSTART.md`](dist/QUICKSTART.md) for the self-contained
+   See [`docs/QUICKSTART.md`](docs/QUICKSTART.md) for the self-contained
    walkthrough — no GitHub access needed.
 2. Install the agent on a target host via the signed apt repo
    (instructions further down under **Connecting an agent**).
@@ -90,7 +90,7 @@ Top-level files in this superproject:
 | `Dockerfile.web`           | Next.js standalone build → node:slim runtime                       |
 | `Dockerfile.agent`         | Local-test agent image (referenced by the commented compose stanza)|
 | `.github/workflows/`       | `agent-deb.yml` — multi-arch (amd64 + arm64) .deb build + apt repo |
-| `dist/QUICKSTART.md`       | Self-contained 5-min install using published container images      |
+| `docs/QUICKSTART.md`       | Self-contained 5-min install using published container images      |
 | `docs/CLOUDFLARE.md`       | Edge configuration: WAF rate-limit rules, headers, origin cert     |
 | `docs/METRICS.md`          | Metrics plugin — point the dashboard at your existing Prometheus    |
 | `metrics.example.yaml`     | Drop-in starter config for the metrics plugin                       |
