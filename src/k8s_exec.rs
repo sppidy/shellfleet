@@ -139,13 +139,24 @@ pub async fn spawn_exec(
     });
 
     // Supervisor: when read exits (container EOF or operator stop),
-    // tear down the rest. attached.join() waits for the apiserver
-    // side to finalize.
+    // tear down the rest, then surface the apiserver-side status so
+    // the dashboard isn't left staring at a blank pane when e.g. the
+    // container is distroless and /bin/sh never started.
+    let session_id_super = session_id.clone();
+    let tx_msg_super = tx_msg.clone();
     let supervisor = tokio::spawn(async move {
         let _ = read_handle.await;
         write_handle.abort();
         resize_handle.abort();
-        let _ = attached.join().await;
+        let join_result = attached.join().await;
+        let banner = match join_result {
+            Ok(()) => "\r\n\x1b[2m[ session ended ]\x1b[0m\r\n".to_string(),
+            Err(e) => format!("\r\n\x1b[31m[ exec failed: {e} ]\x1b[0m\r\n"),
+        };
+        let _ = tx_msg_super.send(Message::TerminalData {
+            session_id: session_id_super,
+            data: banner.into_bytes(),
+        });
     });
 
     Ok(K8sExecSession {
