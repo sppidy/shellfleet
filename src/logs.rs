@@ -7,6 +7,29 @@ use tokio::process::Command;
 use tokio::sync::{mpsc, Mutex};
 use tokio::task::JoinHandle;
 
+/// Hard cap on the docker `--tail` argument. A viewer-allowed
+/// request with `tail=2_000_000_000` would force docker to read the
+/// entire log file into RAM and stream it over the WS, blowing
+/// agent memory and operator browser memory long before the
+/// operator could cancel. 10_000 lines mirrors the
+/// `journal_stream` backlog cap and is more than enough for the
+/// "what just happened" use case the UI panel exists for.
+const MAX_DOCKER_TAIL: u32 = 10_000;
+
+/// Mirrors the docker container-id / name validation in
+/// `terminal::spawn_docker_exec`. Names are
+/// `[a-zA-Z0-9][a-zA-Z0-9_.-]*`, IDs are 12 or 64 hex chars; both
+/// fit in this same allow-list. Without this check a leading `-`
+/// could turn a request value into a flag (`--privileged` etc.)
+/// when it lands in argv.
+fn valid_container_id(s: &str) -> bool {
+    !s.is_empty()
+        && !s.starts_with('-')
+        && s.len() <= 256
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'))
+}
+
 /// One active `docker logs` stream per container_id. New requests for the
 /// same container cancel the previous stream so the operator never has to
 /// stop one log before starting another.
@@ -23,6 +46,19 @@ impl LogStreams {
         follow: bool,
         tx: mpsc::UnboundedSender<Message>,
     ) {
+        // Reject hostile / malformed container_ids before they
+        // land in argv. The send goes to the same channel the
+        // dashboard's logs panel listens on, so the operator
+        // sees an error instead of a hang.
+        if !valid_container_id(&container_id) {
+            let _ = tx.send(Message::DockerLogsEnd {
+                container_id,
+                error: Some("invalid container id".into()),
+            });
+            return;
+        }
+        let tail = tail.min(MAX_DOCKER_TAIL);
+
         // Cancel any previous stream for the same container.
         self.stop(&container_id).await;
 

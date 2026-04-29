@@ -7,6 +7,24 @@ use tokio::process::Command;
 use tokio::sync::{mpsc, Mutex};
 use tokio::task::JoinHandle;
 
+/// Hard cap on `journalctl --lines`. A viewer-allowed value of
+/// `lines=u32::MAX` would force journald to emit the entire ring,
+/// which on a busy host is hundreds of MB streamed over the WS.
+/// 10_000 mirrors the `journal_stream` backlog cap.
+const MAX_JOURNAL_LINES: u32 = 10_000;
+
+/// Mirrors `journal_stream::is_safe_token`. systemd unit names use
+/// `[A-Za-z0-9._@:\-\\]+`; rejects empty / leading-`-` / >256-char
+/// values that could turn into journalctl flags or path-traversal
+/// attempts when they hit argv.
+fn valid_unit_name(s: &str) -> bool {
+    if s.is_empty() || s.starts_with('-') || s.len() > 256 {
+        return false;
+    }
+    s.chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '@' | ':' | '\\'))
+}
+
 /// One active `journalctl -fu <unit>` stream per unit. Restarting a
 /// stream for the same unit cancels the previous one.
 #[derive(Default, Clone)]
@@ -22,6 +40,17 @@ impl JournalStreams {
         follow: bool,
         tx: mpsc::UnboundedSender<Message>,
     ) {
+        // Reject hostile / malformed unit names before they land
+        // in argv; cap the backlog before journald starts spooling.
+        if !valid_unit_name(&unit) {
+            let _ = tx.send(Message::JournalLogsEnd {
+                unit,
+                error: Some("invalid unit name".into()),
+            });
+            return;
+        }
+        let lines = lines.min(MAX_JOURNAL_LINES);
+
         self.stop(&unit).await;
         let unit_for_task = unit.clone();
         let tx_task = tx.clone();

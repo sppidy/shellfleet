@@ -58,8 +58,14 @@ use serde::Deserialize;
 use shared::Message;
 use std::time::Duration;
 use tokio::sync::mpsc;
-use tokio_tungstenite::{connect_async, tungstenite::protocol::Message as WsMessage};
-use url::Url;
+use tokio_tungstenite::{
+    connect_async,
+    tungstenite::{
+        client::IntoClientRequest,
+        http::header::AUTHORIZATION,
+        protocol::Message as WsMessage,
+    },
+};
 
 #[derive(Deserialize)]
 struct DeviceAuthResponse {
@@ -161,12 +167,33 @@ async fn main() {
     let token = get_agent_token(&api_url).await;
 
     let wss_url_str = std::env::var("SERVER_WS_URL").unwrap_or_else(|_| "wss://dashboard.example.com/agent/ws".to_string());
-    let url_with_auth = format!("{}?token={}", wss_url_str, token);
-    let url = Url::parse(&url_with_auth).unwrap();
-    
+
     println!("Connecting to server WebSocket...");
 
-    let (ws_stream, _) = match connect_async(url.as_str()).await {
+    // Build the upgrade request with the bearer token in an
+    // `Authorization` header rather than a `?token=` query string.
+    // Query strings get logged by reverse proxies, edge CDN access
+    // logs, server tracing, crash reports, and operator screenshots
+    // — none of which we want to leak the long-lived agent token to.
+    // The header is only on the upgrade exchange and is dropped from
+    // the persistent WS frames that follow.
+    let mut request = match wss_url_str.as_str().into_client_request() {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("Failed to build WS request from SERVER_WS_URL={wss_url_str}: {e}");
+            std::process::exit(1);
+        }
+    };
+    let bearer = match format!("Bearer {token}").parse() {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("Failed to encode bearer token: {e}");
+            std::process::exit(1);
+        }
+    };
+    request.headers_mut().insert(AUTHORIZATION, bearer);
+
+    let (ws_stream, _) = match connect_async(request).await {
         Ok(res) => res,
         Err(e) => {
             eprintln!("Failed to connect to server: {}. Your token might have been revoked.", e);
@@ -1263,7 +1290,12 @@ async fn main() {
                                 });
                             }
                             Message::ReadConfigRequest { path } => {
-                                let resp = match config::check(&path) {
+                                // `check_read` canonicalises and re-runs
+                                // the deny/allow match on the resolved
+                                // location, so a symlink under an allowed
+                                // prefix that points at /etc/shadow is
+                                // rejected here before std::fs::read.
+                                let resp = match config::check_read(&path) {
                                     Err(e) => Message::ReadConfigResponse {
                                         path: path.clone(),
                                         content: "".to_string(),
@@ -1285,24 +1317,35 @@ async fn main() {
                                 let _ = tx.send(resp);
                             }
                             Message::WriteConfigRequest { path, content } => {
-                                let resp = match config::check(&path) {
+                                // `check_write` canonicalises the parent
+                                // dir; `write_no_follow` opens the final
+                                // path with O_NOFOLLOW so a symlink at
+                                // the leaf component can't redirect the
+                                // write off-target.
+                                let resp = match config::check_write(&path) {
                                     Err(e) => Message::WriteConfigResponse {
                                         path: path.clone(),
                                         success: false,
                                         error: Some(e.to_string()),
                                     },
-                                    Ok(safe_path) => match std::fs::write(&safe_path, content) {
-                                        Ok(_) => Message::WriteConfigResponse {
-                                            path: path.clone(),
-                                            success: true,
-                                            error: None,
-                                        },
-                                        Err(e) => Message::WriteConfigResponse {
-                                            path: path.clone(),
-                                            success: false,
-                                            error: Some(e.to_string()),
-                                        },
-                                    },
+                                    Ok((parent, name)) => {
+                                        match config::write_no_follow(
+                                            &parent,
+                                            &name,
+                                            content.as_bytes(),
+                                        ) {
+                                            Ok(_) => Message::WriteConfigResponse {
+                                                path: path.clone(),
+                                                success: true,
+                                                error: None,
+                                            },
+                                            Err(e) => Message::WriteConfigResponse {
+                                                path: path.clone(),
+                                                success: false,
+                                                error: Some(e.to_string()),
+                                            },
+                                        }
+                                    }
                                 };
                                 let _ = tx.send(resp);
                             }

@@ -63,6 +63,16 @@ rustls = { version = "0.23", default-features = false, features = ["ring"], opti
 # revisit if a maintained fork (serde_yml) becomes the de-facto choice.
 serde_yaml = { version = "0.9", optional = true }
 
+# Used on Unix only for `O_NOFOLLOW` when opening operator-supplied
+# config-file paths: combined with the canonicalize-and-recheck in
+# `agent::config`, this rejects symlink swaps on the final
+# component of a write target. Listed under a target-specific
+# table so non-Unix dev hosts can still `cargo check` the rest
+# of the agent (the `write_no_follow` fn has a `#[cfg(not(unix))]`
+# fallback that doesn't reference libc).
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 # cargo-deb metadata. Used by the .github/workflows/agent-deb.yml job in the
 # superproject to publish .deb packages to https://sppidy.github.io/sys-manager.
 [package.metadata.deb]
