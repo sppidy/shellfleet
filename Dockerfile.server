@@ -1,14 +1,28 @@
-FROM rust:latest AS builder
+# Pinned to a specific Rust toolchain rather than `rust:latest` so a
+# silent upstream Rust release can't change the produced binary
+# behaviour mid-deploy. Bump deliberately when it's time.
+FROM rust:1.92-bookworm AS builder
 WORKDIR /usr/src/app
 COPY . .
-RUN cargo build --release -p server
+RUN cargo build --release --locked -p server
 
 FROM debian:bookworm-slim
 WORKDIR /app
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates wget \
+ && apt-get install -y --no-install-recommends ca-certificates wget gosu \
  && rm -rf /var/lib/apt/lists/* \
- && mkdir -p /data
+ && groupadd --system --gid 65532 app \
+ && useradd --system --uid 65532 --gid 65532 --no-create-home --shell /usr/sbin/nologin app \
+ && mkdir -p /data \
+ && chown app:app /data
 COPY --from=builder /usr/src/app/target/release/server /app/server
+COPY docker/server-entrypoint.sh /usr/local/bin/server-entrypoint.sh
+RUN chown app:app /app/server \
+ && chmod 0755 /app/server /usr/local/bin/server-entrypoint.sh
 EXPOSE 8080
+# Entrypoint runs as root for one chown call (so the existing
+# server_data volume from the pre-LOW-1 image becomes writable to
+# the app user) then drops privs via gosu. The actual server
+# process runs as uid 65532, never as root.
+ENTRYPOINT ["/usr/local/bin/server-entrypoint.sh"]
 CMD ["./server"]

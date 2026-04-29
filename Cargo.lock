@@ -49,6 +49,7 @@ dependencies = [
  "hostname",
  "k8s-openapi",
  "kube",
+ "libc",
  "portable-pty",
  "reqwest",
  "rustls",
