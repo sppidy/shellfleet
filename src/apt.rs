@@ -1,14 +1,12 @@
 use shared::AptUpgradable;
 use std::path::PathBuf;
-use std::process::Stdio;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 
-/// Where the agent journals an in-flight apt run. If a libc/systemd
-/// self-upgrade kills the agent mid-run, this file lets the next agent
-/// process synthesise an `AptUpgradeResponse` instead of leaving the
-/// scheduler hanging on `last_status="running"` forever.
+/// Where the agent journals an in-flight apt run. The actual dpkg
+/// transaction runs in a transient systemd unit outside the agent
+/// service cgroup, so a systemd/libc/agent self-upgrade can restart
+/// this process without killing apt.
 fn apt_state_path() -> PathBuf {
     PathBuf::from("/var/lib/sys-manager/apt-run.json")
 }
@@ -20,18 +18,20 @@ pub struct AptRunState {
     pub log: String,
     /// Truncated to a sane limit on every flush.
     pub bytes_written: usize,
+    /// Transient systemd unit that owns the apt/dpkg transaction.
+    /// None means this state was written by an older agent.
+    #[serde(default)]
+    pub unit_name: Option<String>,
+    /// Files written by the detached apt wrapper.
+    #[serde(default)]
+    pub log_path: Option<String>,
+    #[serde(default)]
+    pub result_path: Option<String>,
+    #[serde(default)]
+    pub script_path: Option<String>,
 }
 
 const APT_LOG_CAP: usize = 16_000;
-
-fn truncate_inplace(s: &mut String, cap: usize) {
-    if s.len() > cap {
-        let cut = s.len() - cap;
-        let head = format!("…[{cut} bytes truncated]…\n");
-        s.drain(..cut);
-        s.insert_str(0, &head);
-    }
-}
 
 fn write_state(state: &AptRunState) {
     if let Ok(json) = serde_json::to_string(state) {
@@ -47,15 +47,17 @@ fn clear_state() {
     let _ = std::fs::remove_file(apt_state_path());
 }
 
-/// Read any persisted apt run state. The agent calls this once at
-/// startup; if a run was in flight when we exited, we synthesise an
-/// `AptUpgradeResponse` for it.
-pub fn take_pending_run() -> Option<AptRunState> {
+fn read_state() -> Option<AptRunState> {
     let path = apt_state_path();
     let data = std::fs::read_to_string(&path).ok()?;
-    let state: AptRunState = serde_json::from_str(&data).ok()?;
-    let _ = std::fs::remove_file(&path);
-    Some(state)
+    serde_json::from_str(&data).ok()
+}
+
+/// Read any persisted apt run state. The agent calls this once at
+/// startup; if a run was in flight when we exited, we resume watching
+/// the detached systemd unit instead of marking the upgrade failed.
+pub fn pending_run() -> Option<AptRunState> {
+    read_state()
 }
 
 fn now_unix() -> u64 {
@@ -178,96 +180,349 @@ pub async fn refresh() -> (bool, String, Option<String>) {
     (success, log, err)
 }
 
-pub async fn upgrade(package: Option<String>) -> (bool, String, Option<String>) {
-    let mut cmd = Command::new("apt-get");
-    cmd.env("DEBIAN_FRONTEND", "noninteractive")
-        .env("LC_ALL", "C")
-        .arg("-y")
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    match &package {
-        Some(p) => {
-            cmd.arg("install").arg("--only-upgrade").arg(p);
-        }
-        None => {
-            cmd.arg("upgrade");
+fn state_file(name: &str) -> PathBuf {
+    PathBuf::from("/var/lib/sys-manager").join(name)
+}
+
+fn validate_package_arg(package: &str) -> Result<(), String> {
+    if package.is_empty() {
+        return Err("empty package name".to_string());
+    }
+    if package.starts_with('-') {
+        return Err("package name must not start with '-'".to_string());
+    }
+    if package
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '+' | '-' | ':' | '~'))
+    {
+        Ok(())
+    } else {
+        Err("package name contains unsupported characters".to_string())
+    }
+}
+
+fn write_upgrade_script(
+    script_path: &PathBuf,
+    log_path: &PathBuf,
+    result_path: &PathBuf,
+) -> Result<(), String> {
+    let script = format!(
+        r#"#!/bin/sh
+set -u
+
+MODE="$1"
+PKG="${{2:-}}"
+LOG_FILE="{log_path}"
+RESULT_FILE="{result_path}"
+
+export DEBIAN_FRONTEND=noninteractive
+export LC_ALL=C
+
+umask 077
+mkdir -p "$(dirname "$LOG_FILE")" "$(dirname "$RESULT_FILE")"
+
+{{
+    echo "[sys-manager] apt upgrade unit started at $(date -Is)"
+    echo "[sys-manager] mode=$MODE package=${{PKG:-<all>}}"
+
+    if [ "$MODE" = "package" ]; then
+        apt-get -y install --only-upgrade "$PKG"
+    else
+        apt-get -y upgrade
+    fi
+    rc=$?
+
+    if [ "$rc" -ne 0 ]; then
+        echo "[sys-manager] apt-get exited $rc; attempting automatic dpkg/apt recovery"
+        dpkg --configure -a
+        dpkg_rc=$?
+        apt-get -y -f install
+        fix_rc=$?
+        if [ "$dpkg_rc" -eq 0 ] && [ "$fix_rc" -eq 0 ]; then
+            rc=0
+            echo "[sys-manager] automatic dpkg/apt recovery completed"
+        else
+            echo "[sys-manager] automatic recovery failed: dpkg=$dpkg_rc apt_fix=$fix_rc"
+        fi
+    fi
+
+    if [ "$rc" -eq 0 ]; then
+        printf 'success\n' > "$RESULT_FILE"
+    else
+        printf 'failed:%s\n' "$rc" > "$RESULT_FILE"
+    fi
+    echo "[sys-manager] apt upgrade unit finished with rc=$rc at $(date -Is)"
+    exit "$rc"
+}} > "$LOG_FILE" 2>&1
+"#,
+        log_path = log_path.display(),
+        result_path = result_path.display()
+    );
+    if let Some(parent) = script_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("create state dir: {e}"))?;
+    }
+    std::fs::write(script_path, script).map_err(|e| format!("write apt wrapper: {e}"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let perms = std::fs::Permissions::from_mode(0o700);
+        std::fs::set_permissions(script_path, perms)
+            .map_err(|e| format!("chmod apt wrapper: {e}"))?;
+    }
+    Ok(())
+}
+
+fn read_capped_log(path: &str) -> Option<String> {
+    match std::fs::read(path) {
+        Ok(bytes) => Some(truncate_log(&bytes, APT_LOG_CAP)),
+        Err(_) => None,
+    }
+}
+
+fn cleanup_run_files(state: &AptRunState) {
+    if let Some(path) = &state.log_path {
+        let _ = std::fs::remove_file(path);
+    }
+    if let Some(path) = &state.script_path {
+        let _ = std::fs::remove_file(path);
+    }
+    if let Some(path) = &state.result_path {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
+async fn systemctl_unit_state(unit: &str) -> Option<(String, String, String)> {
+    let output = Command::new("systemctl")
+        .args([
+            "show",
+            unit,
+            "--property=LoadState",
+            "--property=ActiveState",
+            "--property=Result",
+            "--no-page",
+        ])
+        .output()
+        .await
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    let mut load = String::new();
+    let mut active = String::new();
+    let mut result = String::new();
+    for line in text.lines() {
+        if let Some(v) = line.strip_prefix("LoadState=") {
+            load = v.to_string();
+        } else if let Some(v) = line.strip_prefix("ActiveState=") {
+            active = v.to_string();
+        } else if let Some(v) = line.strip_prefix("Result=") {
+            result = v.to_string();
         }
     }
-    let mut child = match cmd.spawn() {
-        Ok(c) => c,
-        Err(e) => return (false, String::new(), Some(format!("spawn: {e}"))),
+    Some((load, active, result))
+}
+
+async fn watch_systemd_run(mut state: AptRunState) -> (bool, String, Option<String>) {
+    let result_path = match state.result_path.clone() {
+        Some(p) => p,
+        None => {
+            let log = if state.log.is_empty() {
+                "[sys-manager] older agent left an apt run marker without a detached unit\n"
+                    .to_string()
+            } else {
+                state.log.clone()
+            };
+            clear_state();
+            return (
+                false,
+                log,
+                Some("older agent interrupted apt before detached execution was available".into()),
+            );
+        }
     };
-    let stdout = child.stdout.take();
-    let stderr = child.stderr.take();
+
+    let mut ticker = tokio::time::interval(std::time::Duration::from_secs(2));
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        ticker.tick().await;
+
+        if let Some(log_path) = &state.log_path
+            && let Some(log) = read_capped_log(log_path)
+        {
+            state.log = log;
+            state.bytes_written = state.log.len();
+            write_state(&state);
+        }
+
+        if let Ok(result) = std::fs::read_to_string(&result_path) {
+            let trimmed = result.trim();
+            let success = trimmed == "success";
+            let error = if success {
+                None
+            } else {
+                Some(format!("apt unit {}", trimmed))
+            };
+            if state.log.is_empty() {
+                state
+                    .log
+                    .push_str("[sys-manager] apt unit completed with no captured log\n");
+            }
+            cleanup_run_files(&state);
+            clear_state();
+            return (success, state.log, error);
+        }
+
+        if let Some(unit) = &state.unit_name {
+            if let Some((load, active, result)) = systemctl_unit_state(unit).await {
+                if load == "not-found" || (active == "failed" && result != "success") {
+                    let mut log = state.log.clone();
+                    log.push_str(&format!(
+                        "\n[sys-manager] apt transient unit ended unexpectedly: load={load} active={active} result={result}\n"
+                    ));
+                    cleanup_run_files(&state);
+                    clear_state();
+                    return (
+                        false,
+                        log,
+                        Some("apt transient unit ended before writing a result".into()),
+                    );
+                }
+            }
+        }
+    }
+}
+
+async fn start_systemd_run(package: Option<String>) -> Result<AptRunState, String> {
+    if let Some(pkg) = &package {
+        validate_package_arg(pkg)?;
+    }
 
     let started_at = now_unix();
+    let pid = std::process::id();
+    let run_id = format!("{started_at}-{pid}");
+    let unit_name = format!("sys-manager-apt-{run_id}.service");
+    let log_path = state_file(&format!("apt-run-{run_id}.log"));
+    let result_path = state_file(&format!("apt-run-{run_id}.result"));
+    let script_path = state_file(&format!("apt-run-{run_id}.sh"));
+
+    write_upgrade_script(&script_path, &log_path, &result_path)?;
+
     let mut state = AptRunState {
         package: package.clone(),
         started_at,
-        log: String::new(),
+        log: format!("[sys-manager] starting apt in detached systemd unit {unit_name}\n"),
         bytes_written: 0,
+        unit_name: Some(unit_name.clone()),
+        log_path: Some(log_path.display().to_string()),
+        result_path: Some(result_path.display().to_string()),
+        script_path: Some(script_path.display().to_string()),
     };
+    state.bytes_written = state.log.len();
     write_state(&state);
 
-    let (line_tx, mut line_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-    if let Some(out) = stdout {
-        let tx = line_tx.clone();
-        tokio::spawn(async move {
-            let mut reader = BufReader::new(out).lines();
-            while let Ok(Some(line)) = reader.next_line().await {
-                let _ = tx.send(line);
-            }
-        });
+    let mode = if package.is_some() { "package" } else { "all" };
+    let mut cmd = Command::new("systemd-run");
+    cmd.arg("--unit")
+        .arg(&unit_name)
+        .arg("--description")
+        .arg("sys-manager apt upgrade")
+        .arg("--property=Restart=no")
+        .arg("--property=TimeoutStartSec=0")
+        .arg("--no-block")
+        .arg("/bin/sh")
+        .arg(&script_path)
+        .arg(mode);
+    if let Some(pkg) = &package {
+        cmd.arg(pkg);
     }
-    if let Some(err) = stderr {
-        let tx = line_tx.clone();
-        tokio::spawn(async move {
-            let mut reader = BufReader::new(err).lines();
-            while let Ok(Some(line)) = reader.next_line().await {
-                let _ = tx.send(format!("[stderr] {line}"));
-            }
-        });
-    }
-    drop(line_tx); // close once children drop their senders
 
-    let mut last_flush = tokio::time::Instant::now();
-    let flush_every = std::time::Duration::from_secs(2);
-    loop {
-        tokio::select! {
-            line = line_rx.recv() => match line {
-                Some(l) => {
-                    state.log.push_str(&l);
-                    state.log.push('\n');
-                    state.bytes_written += l.len() + 1;
-                    truncate_inplace(&mut state.log, APT_LOG_CAP);
-                    if last_flush.elapsed() >= flush_every {
-                        write_state(&state);
-                        last_flush = tokio::time::Instant::now();
-                    }
-                }
-                None => break,
-            },
-            _ = tokio::time::sleep_until(last_flush + flush_every) => {
-                write_state(&state);
-                last_flush = tokio::time::Instant::now();
-            }
+    let output = cmd
+        .output()
+        .await
+        .map_err(|e| format!("systemd-run spawn: {e}"))?;
+    if !output.status.success() {
+        let mut err = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        if err.is_empty() {
+            err = String::from_utf8_lossy(&output.stdout).trim().to_string();
         }
+        cleanup_run_files(&state);
+        clear_state();
+        return Err(format!("systemd-run failed: {err}"));
     }
 
-    let status = match child.wait().await {
+    Ok(state)
+}
+
+pub async fn upgrade(package: Option<String>) -> (bool, String, Option<String>) {
+    if let Some(existing) = read_state() {
+        return watch_systemd_run(existing).await;
+    }
+
+    let state = match start_systemd_run(package).await {
         Ok(s) => s,
-        Err(e) => {
-            // Don't clear state — the next process may want to report
-            // the partial log.
-            return (false, state.log, Some(format!("wait: {e}")));
-        }
+        Err(e) => return (false, String::new(), Some(e)),
     };
-    clear_state();
-    let success = status.success();
-    let err = if success {
-        None
-    } else {
-        Some(format!("exit code {:?}", status.code()))
-    };
-    (success, state.log, err)
+    watch_systemd_run(state).await
+}
+
+pub async fn resume_pending_upgrade() -> Option<(Option<String>, bool, String, Option<String>)> {
+    let state = pending_run()?;
+    let package = state.package.clone();
+    let (success, log, error) = watch_systemd_run(state).await;
+    Some((package, success, log, error))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AptRunState, validate_package_arg, write_upgrade_script};
+
+    #[test]
+    fn accepts_debian_package_name_characters() {
+        assert!(validate_package_arg("linux-image-6.8.0-40-generic").is_ok());
+        assert!(validate_package_arg("libc6:amd64").is_ok());
+        assert!(validate_package_arg("sys-manager-agent").is_ok());
+    }
+
+    #[test]
+    fn rejects_option_or_shell_like_package_names() {
+        assert!(validate_package_arg("-oDpkg::Options::=--force").is_err());
+        assert!(validate_package_arg("pkg;reboot").is_err());
+        assert!(validate_package_arg("").is_err());
+    }
+
+    #[test]
+    fn generated_wrapper_runs_automatic_dpkg_recovery() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let script = tmp.path().join("apt-run.sh");
+        let log = tmp.path().join("apt-run.log");
+        let result = tmp.path().join("apt-run.result");
+
+        write_upgrade_script(&script, &log, &result).expect("write wrapper");
+        let text = std::fs::read_to_string(&script).expect("read wrapper");
+
+        assert!(text.contains("apt-get -y upgrade"));
+        assert!(text.contains("apt-get -y install --only-upgrade"));
+        assert!(text.contains("dpkg --configure -a"));
+        assert!(text.contains("apt-get -y -f install"));
+        assert!(text.contains("printf 'success\\n'"));
+        assert!(text.contains("printf 'failed:%s\\n'"));
+    }
+
+    #[test]
+    fn old_state_json_defaults_detached_unit_fields() {
+        let json = r#"{
+            "package": "systemd",
+            "started_at": 1777900000,
+            "log": "old agent state",
+            "bytes_written": 15
+        }"#;
+
+        let state: AptRunState = serde_json::from_str(json).expect("deserialize old state");
+        assert_eq!(state.package.as_deref(), Some("systemd"));
+        assert!(state.unit_name.is_none());
+        assert!(state.log_path.is_none());
+        assert!(state.result_path.is_none());
+        assert!(state.script_path.is_none());
+    }
 }

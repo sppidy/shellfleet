@@ -241,17 +241,20 @@ async fn main() {
         capabilities,
     });
 
-    // If we exited mid-apt-run last time (e.g. libc/systemd self-upgrade
-    // killed us), synthesise the AptUpgradeResponse so the server-side
-    // scheduler doesn't sit on `last_status="running"` forever.
-    if let Some(pending) = apt::take_pending_run() {
-        let mut log = pending.log;
-        log.push_str("\n[agent restarted during upgrade; this run was interrupted]\n");
-        let _ = tx.send(Message::AptUpgradeResponse {
-            package: pending.package,
-            success: false,
-            log,
-            error: Some("agent restarted during upgrade".into()),
+    // If the agent was restarted by systemd/libc/self-package updates,
+    // the apt transaction continues in its own transient systemd unit.
+    // Resume watching that unit and only report once dpkg is finished.
+    if apt::pending_run().is_some() {
+        let tx_clone = tx.clone();
+        tokio::spawn(async move {
+            if let Some((package, success, log, error)) = apt::resume_pending_upgrade().await {
+                let _ = tx_clone.send(Message::AptUpgradeResponse {
+                    package,
+                    success,
+                    log,
+                    error,
+                });
+            }
         });
     }
 
