@@ -830,6 +830,23 @@ async fn handle_agent_socket(socket: WebSocket, state: Arc<AppState>, token: Str
                     // up any rules added while it was offline.
                     health::push_to_agent(&state, &id).await;
                 }
+                Message::CapabilitiesUpdate { capabilities } => {
+                    if let Some(id) = &agent_id_opt {
+                        let mut map = state.agents.lock().await;
+                        if let Some(entry) = map.get_mut(id) {
+                            if entry.capabilities != capabilities {
+                                tracing::info!(
+                                    agent_id = %id,
+                                    capabilities = ?capabilities,
+                                    "agent capabilities updated"
+                                );
+                                entry.capabilities = capabilities;
+                                drop(map);
+                                broadcast_agent_list(&state).await;
+                            }
+                        }
+                    }
+                }
                 other => {
                     if let Some(agent_id) = &agent_id_opt {
                         // Health probe reports — persist last_* fields
