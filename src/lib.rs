@@ -78,6 +78,15 @@ pub enum Message {
     /// Server acknowledging registration
     RegisterAck { agent_id: String },
 
+    /// Agent re-advertising capabilities after a late subsystem start
+    /// (e.g. Docker starting after the agent). The server merges these
+    /// into the live agent entry and re-broadcasts the agent list to
+    /// connected UIs.
+    CapabilitiesUpdate {
+        #[serde(default)]
+        capabilities: Vec<String>,
+    },
+
     /// Ping / Pong for heartbeat (application-level; the WebSocket Ping/Pong
     /// frames are also used by the server to keep proxies from idling out).
     Ping,
