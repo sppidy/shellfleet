@@ -1,6 +1,7 @@
 [Unit]
 Description=Sys-Manager Agent
-After=network.target
+After=network-online.target docker.service k3s.service
+Wants=network-online.target
 
 [Service]
 Type=simple
