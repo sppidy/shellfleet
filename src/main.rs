@@ -235,10 +235,48 @@ async fn main() {
     }
     println!("agent capabilities: {capabilities:?}");
 
+    let initial_caps = capabilities.clone();
     let _ = tx.send(Message::Register {
         hostname,
         protocol_version: shared::PROTOCOL_VERSION,
         capabilities,
+    });
+
+    // Re-probe capabilities periodically so late-starting subsystems
+    // (e.g. Docker starting after the agent on boot) get picked up
+    // without needing a full agent restart.
+    let tx_caps = tx.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(30));
+        interval.tick().await; // skip the immediate first tick
+        let mut current = initial_caps;
+        loop {
+            interval.tick().await;
+            let mut fresh: Vec<String> = Vec::with_capacity(4);
+            if systemd::systemd_available().await {
+                fresh.push("systemd".into());
+            }
+            if docker::docker_available().await {
+                fresh.push("docker".into());
+                match docker::swarm_role().await {
+                    shared::SwarmRole::Manager | shared::SwarmRole::Worker => {
+                        fresh.push("swarm".into());
+                    }
+                    shared::SwarmRole::NotInSwarm => {}
+                }
+            }
+            #[cfg(feature = "kube")]
+            if k8s::k8s_available().await {
+                fresh.push("k8s".into());
+            }
+            if fresh != current {
+                println!("capabilities changed: {current:?} -> {fresh:?}");
+                let _ = tx_caps.send(Message::CapabilitiesUpdate {
+                    capabilities: fresh.clone(),
+                });
+                current = fresh;
+            }
+        }
     });
 
     // If the agent was restarted by systemd/libc/self-package updates,
