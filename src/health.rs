@@ -15,7 +15,7 @@ use tokio::time::Instant;
 
 /// Where exec-kind probes are required to live. Anything else is rejected.
 fn probes_dir() -> PathBuf {
-    PathBuf::from("/etc/sys-manager/probes.d")
+    PathBuf::from("/etc/shellfleet/probes.d")
 }
 
 #[derive(Default, Clone)]
@@ -177,7 +177,7 @@ async fn probe_exec(
     timeout: Duration,
 ) -> (HealthProbeState, String) {
     // Reject anything that looks like a path. Operator scripts must
-    // live in /etc/sys-manager/probes.d/<filename>.
+    // live in /etc/shellfleet/probes.d/<filename>.
     let target = spec.target.trim();
     if target.is_empty()
         || target.contains('/')
@@ -186,7 +186,7 @@ async fn probe_exec(
     {
         return (
             HealthProbeState::Red,
-            format!("invalid exec target {target:?} (must be a filename in /etc/sys-manager/probes.d/)"),
+            format!("invalid exec target {target:?} (must be a filename in /etc/shellfleet/probes.d/)"),
         );
     }
     let path = probes_dir().join(target);

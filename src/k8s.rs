@@ -1,4 +1,4 @@
-//! K8s API surface — only compiled into the `sys-manager-agent-k8s`
+//! K8s API surface — only compiled into the `shellfleet-agent-k8s`
 //! .deb (cargo `--features kube`). Standard host-agent .debs don't
 //! pull kube-rs or k8s-openapi, so the binary stays lean.
 //!
@@ -417,7 +417,7 @@ pub async fn describe(
 
 // ─── slice 6 (v2): apply / scale / delete ──────────────────────
 
-const APPLY_FIELD_MANAGER: &str = "sys-manager";
+const APPLY_FIELD_MANAGER: &str = "shellfleet";
 
 /// Server-side apply of one or more YAML docs. Multi-doc input
 /// (`---` separated) is supported; each doc is applied in order

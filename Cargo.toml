@@ -2,17 +2,17 @@
 name = "agent"
 version = "1.1.0"
 edition = "2024"
-description = "Agent for sys-manager: connects a host to a sys-manager server over WebSocket and exposes systemd service control, terminal, and config editing."
+description = "Agent for ShellFleet: connects a host to a ShellFleet server over WebSocket and exposes systemd service control, terminal, and config editing."
 license = "AGPL-3.0-or-later"
-repository = "https://github.com/sppidy/sys-mngr-agent"
+repository = "https://github.com/sppidy/shellfleet-agent"
 
 [[bin]]
-name = "sys-manager-agent"
+name = "shellfleet-agent"
 path = "src/main.rs"
 
 [features]
 # Default build is the lean host-agent .deb. Turn on the `kube` feature
-# for the sys-manager-agent-k8s package, which adds kube-rs + k8s-openapi
+# for the shellfleet-agent-k8s package, which adds kube-rs + k8s-openapi
 # (~2 MB of crypto deps) so the agent can talk to a kube-apiserver.
 default = []
 kube = ["dep:kube", "dep:k8s-openapi", "dep:chrono", "dep:rustls", "dep:serde_yaml"]
@@ -45,7 +45,7 @@ aws-config = { version = "1", features = ["behavior-version-latest"] }
 aws-sdk-s3 = { version = "1", default-features = false, features = ["sigv4a", "http-1x", "default-https-client", "rt-tokio"] }
 
 # Optional — only compiled when `--features kube` (i.e. the
-# sys-manager-agent-k8s package). Uses rustls so we don't drag a second
+# shellfleet-agent-k8s package). Uses rustls so we don't drag a second
 # TLS stack in alongside reqwest's native-tls.
 chrono = { version = "0.4", default-features = false, features = ["clock"], optional = true }
 kube = { version = "1.1", default-features = false, features = ["client", "rustls-tls", "ws"], optional = true }
@@ -74,58 +74,58 @@ serde_yaml = { version = "0.9", optional = true }
 libc = "0.2"
 
 # cargo-deb metadata. Used by the .github/workflows/agent-deb.yml job in the
-# superproject to publish .deb packages to https://sppidy.github.io/sys-manager.
+# superproject to publish .deb packages to https://sppidy.github.io/shellfleet.
 [package.metadata.deb]
-name = "sys-manager-agent"
+name = "shellfleet-agent"
 maintainer = "sppidy <sppidytg@gmail.com>"
 copyright = "2026, sppidy <sppidytg@gmail.com>"
 extended-description = """\
-Agent for sys-manager. Connects a Linux host to a sys-manager server over a
+Agent for ShellFleet. Connects a Linux host to a ShellFleet server over a
 TLS WebSocket and exposes systemd service control, an interactive terminal,
 and remote read/write of configuration files. Pairing happens through the
 server's device-auth flow; the resulting token is cached at
-/etc/sys-manager/agent-token.txt."""
+/etc/shellfleet/agent-token.txt."""
 section = "admin"
 priority = "optional"
 depends = "$auto, systemd"
 assets = [
-    ["target/release/sys-manager-agent", "usr/bin/sys-manager-agent", "755"],
-    ["debian/env.example", "etc/sys-manager/env.example", "644"],
+    ["target/release/shellfleet-agent", "usr/bin/shellfleet-agent", "755"],
+    ["debian/env.example", "etc/shellfleet/env.example", "644"],
     # Stock probe library. Ships under /usr/share so apt owns the
-    # files; postinst symlinks them into /etc/sys-manager/probes.d/
+    # files; postinst symlinks them into /etc/shellfleet/probes.d/
     # so the operator can `rm` individual entries to disable them
     # without losing them on package upgrade.
-    ["debian/probes.d/apt-pending-count.sh",  "usr/share/sys-manager/probes.d/apt-pending-count.sh",  "755"],
-    ["debian/probes.d/disk-usage.sh",         "usr/share/sys-manager/probes.d/disk-usage.sh",         "755"],
-    ["debian/probes.d/failed-services.sh",    "usr/share/sys-manager/probes.d/failed-services.sh",    "755"],
-    ["debian/probes.d/swap-pressure.sh",      "usr/share/sys-manager/probes.d/swap-pressure.sh",      "755"],
-    ["debian/probes.d/load-average.sh",       "usr/share/sys-manager/probes.d/load-average.sh",       "755"],
-    ["debian/probes.d/docker-running.sh",     "usr/share/sys-manager/probes.d/docker-running.sh",     "755"],
-    ["debian/probes.d/swarm-pending.sh",      "usr/share/sys-manager/probes.d/swarm-pending.sh",      "755"],
-    ["debian/probes.d/cert-expiry-days.sh",   "usr/share/sys-manager/probes.d/cert-expiry-days.sh",   "755"],
-    ["debian/probes.d/journal-errors.sh",     "usr/share/sys-manager/probes.d/journal-errors.sh",     "755"],
-    ["debian/probes.d/ntp-drift.sh",          "usr/share/sys-manager/probes.d/ntp-drift.sh",          "755"],
+    ["debian/probes.d/apt-pending-count.sh",  "usr/share/shellfleet/probes.d/apt-pending-count.sh",  "755"],
+    ["debian/probes.d/disk-usage.sh",         "usr/share/shellfleet/probes.d/disk-usage.sh",         "755"],
+    ["debian/probes.d/failed-services.sh",    "usr/share/shellfleet/probes.d/failed-services.sh",    "755"],
+    ["debian/probes.d/swap-pressure.sh",      "usr/share/shellfleet/probes.d/swap-pressure.sh",      "755"],
+    ["debian/probes.d/load-average.sh",       "usr/share/shellfleet/probes.d/load-average.sh",       "755"],
+    ["debian/probes.d/docker-running.sh",     "usr/share/shellfleet/probes.d/docker-running.sh",     "755"],
+    ["debian/probes.d/swarm-pending.sh",      "usr/share/shellfleet/probes.d/swarm-pending.sh",      "755"],
+    ["debian/probes.d/cert-expiry-days.sh",   "usr/share/shellfleet/probes.d/cert-expiry-days.sh",   "755"],
+    ["debian/probes.d/journal-errors.sh",     "usr/share/shellfleet/probes.d/journal-errors.sh",     "755"],
+    ["debian/probes.d/ntp-drift.sh",          "usr/share/shellfleet/probes.d/ntp-drift.sh",          "755"],
 ]
 maintainer-scripts = "debian"
 
 [package.metadata.deb.systemd-units]
 unit-scripts = "debian"
-unit-name = "sys-manager-agent"
+unit-name = "shellfleet-agent"
 enable = true
 start = true
 restart-after-upgrade = true
 
-# Variant: sys-manager-agent-k8s. Built with `cargo deb --variant k8s
+# Variant: shellfleet-agent-k8s. Built with `cargo deb --variant k8s
 # --features kube` in CI. Same binary path + systemd unit as the
 # standard package, so the two are mutually exclusive at install time.
 [package.metadata.deb.variants.k8s]
-name = "sys-manager-agent-k8s"
-conflicts = "sys-manager-agent"
-provides = "sys-manager-agent"
-replaces = "sys-manager-agent"
+name = "shellfleet-agent-k8s"
+conflicts = "shellfleet-agent"
+provides = "shellfleet-agent"
+replaces = "shellfleet-agent"
 extended-description = """\
-Agent for sys-manager — k8s flavor. Same as sys-manager-agent plus a
+Agent for ShellFleet — k8s flavor. Same as shellfleet-agent plus a
 compiled-in kube-rs client so the agent can talk to a kube-apiserver
 via in-cluster ServiceAccount or a kubeconfig at $KUBECONFIG. Install
 on hosts that should appear as Kubernetes targets in the dashboard;
-install plain sys-manager-agent everywhere else."""
+install plain shellfleet-agent everywhere else."""

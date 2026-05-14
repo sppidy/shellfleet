@@ -22,7 +22,7 @@ mod k8s_exec;
 
 /// Write the bearer token to disk with mode 0600. Tries the operator
 /// path first; on permission failure (e.g. the agent isn't running as
-/// root and `/etc/sys-manager` doesn't exist) falls back to a CWD-
+/// root and `/etc/shellfleet` doesn't exist) falls back to a CWD-
 /// local file. Errors are intentionally swallowed because the token
 /// is also returned in-memory and the caller proceeds either way.
 fn write_token_secure(primary: &str, token: &str) {
@@ -84,7 +84,7 @@ enum DeviceTokenResponse {
 
 async fn get_agent_token(api_url: &str) -> String {
     // 1. Check local file
-    let token_path = "/etc/sys-manager/agent-token.txt";
+    let token_path = "/etc/shellfleet/agent-token.txt";
     if let Ok(token) = std::fs::read_to_string(token_path) {
         if !token.trim().is_empty() {
             return token.trim().to_string();

@@ -1,10 +1,10 @@
 #!/bin/sh
 set -e
 
-CONF_DIR=/etc/sys-manager
+CONF_DIR=/etc/shellfleet
 ENV_FILE="$CONF_DIR/env"
 ENV_EXAMPLE="$CONF_DIR/env.example"
-STATE_DIR=/var/lib/sys-manager
+STATE_DIR=/var/lib/shellfleet
 PROBES_DIR="$CONF_DIR/probes.d"
 
 case "$1" in
@@ -35,14 +35,14 @@ case "$1" in
             chmod 0750 "$PROBES_DIR"
         fi
 
-        # Seed the stock probe library into /etc/sys-manager/probes.d/
+        # Seed the stock probe library into /etc/shellfleet/probes.d/
         # exactly once, gated by a stamp file. After the seed has run,
         # operator deletions stick: `rm /etc/.../foo.sh` disables foo
         # forever. To pick up newly-added stock probes in a future
         # release, the operator runs:
-        #   ln -s /usr/share/sys-manager/probes.d/<name>.sh \
-        #         /etc/sys-manager/probes.d/
-        STOCK_DIR=/usr/share/sys-manager/probes.d
+        #   ln -s /usr/share/shellfleet/probes.d/<name>.sh \
+        #         /etc/shellfleet/probes.d/
+        STOCK_DIR=/usr/share/shellfleet/probes.d
         SEED_STAMP="$STATE_DIR/.probes-seeded"
         if [ ! -e "$SEED_STAMP" ] && [ -d "$STOCK_DIR" ]; then
             for src in "$STOCK_DIR"/*.sh; do
@@ -57,7 +57,7 @@ case "$1" in
             chmod 0644 "$SEED_STAMP"
         fi
 
-        # Seed /etc/sys-manager/env on first install. Never overwrite an
+        # Seed /etc/shellfleet/env on first install. Never overwrite an
         # existing operator-edited file on upgrade.
         if [ ! -e "$ENV_FILE" ] && [ -e "$ENV_EXAMPLE" ]; then
             cp "$ENV_EXAMPLE" "$ENV_FILE"

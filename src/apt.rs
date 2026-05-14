@@ -8,7 +8,7 @@ use tokio::process::Command;
 /// service cgroup, so a systemd/libc/agent self-upgrade can restart
 /// this process without killing apt.
 fn apt_state_path() -> PathBuf {
-    PathBuf::from("/var/lib/sys-manager/apt-run.json")
+    PathBuf::from("/var/lib/shellfleet/apt-run.json")
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
@@ -94,7 +94,7 @@ fn parse_apt_list(stdout: &str) -> Vec<AptUpgradable> {
             continue;
         }
         // Format: name/source new-version arch [upgradable from: old-version]
-        // Example: sys-manager-agent/now 1.1.0-ci... amd64 [upgradable from: 1.0.0]
+        // Example: shellfleet-agent/now 1.1.0-ci... amd64 [upgradable from: 1.0.0]
         let mut parts = line.split_whitespace();
         let name_source = match parts.next() {
             Some(s) => s,
@@ -181,7 +181,7 @@ pub async fn refresh() -> (bool, String, Option<String>) {
 }
 
 fn state_file(name: &str) -> PathBuf {
-    PathBuf::from("/var/lib/sys-manager").join(name)
+    PathBuf::from("/var/lib/shellfleet").join(name)
 }
 
 fn validate_package_arg(package: &str) -> Result<(), String> {
@@ -222,8 +222,8 @@ umask 077
 mkdir -p "$(dirname "$LOG_FILE")" "$(dirname "$RESULT_FILE")"
 
 {{
-    echo "[sys-manager] apt upgrade unit started at $(date -Is)"
-    echo "[sys-manager] mode=$MODE package=${{PKG:-<all>}}"
+    echo "[shellfleet] apt upgrade unit started at $(date -Is)"
+    echo "[shellfleet] mode=$MODE package=${{PKG:-<all>}}"
 
     if [ "$MODE" = "package" ]; then
         apt-get -y install --only-upgrade "$PKG"
@@ -233,16 +233,16 @@ mkdir -p "$(dirname "$LOG_FILE")" "$(dirname "$RESULT_FILE")"
     rc=$?
 
     if [ "$rc" -ne 0 ]; then
-        echo "[sys-manager] apt-get exited $rc; attempting automatic dpkg/apt recovery"
+        echo "[shellfleet] apt-get exited $rc; attempting automatic dpkg/apt recovery"
         dpkg --configure -a
         dpkg_rc=$?
         apt-get -y -f install
         fix_rc=$?
         if [ "$dpkg_rc" -eq 0 ] && [ "$fix_rc" -eq 0 ]; then
             rc=0
-            echo "[sys-manager] automatic dpkg/apt recovery completed"
+            echo "[shellfleet] automatic dpkg/apt recovery completed"
         else
-            echo "[sys-manager] automatic recovery failed: dpkg=$dpkg_rc apt_fix=$fix_rc"
+            echo "[shellfleet] automatic recovery failed: dpkg=$dpkg_rc apt_fix=$fix_rc"
         fi
     fi
 
@@ -251,7 +251,7 @@ mkdir -p "$(dirname "$LOG_FILE")" "$(dirname "$RESULT_FILE")"
     else
         printf 'failed:%s\n' "$rc" > "$RESULT_FILE"
     fi
-    echo "[sys-manager] apt upgrade unit finished with rc=$rc at $(date -Is)"
+    echo "[shellfleet] apt upgrade unit finished with rc=$rc at $(date -Is)"
     exit "$rc"
 }} > "$LOG_FILE" 2>&1
 "#,
@@ -328,7 +328,7 @@ async fn watch_systemd_run(mut state: AptRunState) -> (bool, String, Option<Stri
         Some(p) => p,
         None => {
             let log = if state.log.is_empty() {
-                "[sys-manager] older agent left an apt run marker without a detached unit\n"
+                "[shellfleet] older agent left an apt run marker without a detached unit\n"
                     .to_string()
             } else {
                 state.log.clone()
@@ -366,7 +366,7 @@ async fn watch_systemd_run(mut state: AptRunState) -> (bool, String, Option<Stri
             if state.log.is_empty() {
                 state
                     .log
-                    .push_str("[sys-manager] apt unit completed with no captured log\n");
+                    .push_str("[shellfleet] apt unit completed with no captured log\n");
             }
             cleanup_run_files(&state);
             clear_state();
@@ -378,7 +378,7 @@ async fn watch_systemd_run(mut state: AptRunState) -> (bool, String, Option<Stri
                 if load == "not-found" || (active == "failed" && result != "success") {
                     let mut log = state.log.clone();
                     log.push_str(&format!(
-                        "\n[sys-manager] apt transient unit ended unexpectedly: load={load} active={active} result={result}\n"
+                        "\n[shellfleet] apt transient unit ended unexpectedly: load={load} active={active} result={result}\n"
                     ));
                     cleanup_run_files(&state);
                     clear_state();
@@ -401,7 +401,7 @@ async fn start_systemd_run(package: Option<String>) -> Result<AptRunState, Strin
     let started_at = now_unix();
     let pid = std::process::id();
     let run_id = format!("{started_at}-{pid}");
-    let unit_name = format!("sys-manager-apt-{run_id}.service");
+    let unit_name = format!("shellfleet-apt-{run_id}.service");
     let log_path = state_file(&format!("apt-run-{run_id}.log"));
     let result_path = state_file(&format!("apt-run-{run_id}.result"));
     let script_path = state_file(&format!("apt-run-{run_id}.sh"));
@@ -411,7 +411,7 @@ async fn start_systemd_run(package: Option<String>) -> Result<AptRunState, Strin
     let mut state = AptRunState {
         package: package.clone(),
         started_at,
-        log: format!("[sys-manager] starting apt in detached systemd unit {unit_name}\n"),
+        log: format!("[shellfleet] starting apt in detached systemd unit {unit_name}\n"),
         bytes_written: 0,
         unit_name: Some(unit_name.clone()),
         log_path: Some(log_path.display().to_string()),
@@ -426,7 +426,7 @@ async fn start_systemd_run(package: Option<String>) -> Result<AptRunState, Strin
     cmd.arg("--unit")
         .arg(&unit_name)
         .arg("--description")
-        .arg("sys-manager apt upgrade")
+        .arg("shellfleet apt upgrade")
         .arg("--property=Restart=no")
         .arg("--property=TimeoutStartSec=0")
         .arg("--no-block")
@@ -481,7 +481,7 @@ mod tests {
     fn accepts_debian_package_name_characters() {
         assert!(validate_package_arg("linux-image-6.8.0-40-generic").is_ok());
         assert!(validate_package_arg("libc6:amd64").is_ok());
-        assert!(validate_package_arg("sys-manager-agent").is_ok());
+        assert!(validate_package_arg("shellfleet-agent").is_ok());
     }
 
     #[test]

@@ -21,12 +21,12 @@ const MULTIPART_CHUNK: usize = 16 * 1024 * 1024;
 /// Hard ceiling for S3 GetObject body size during restore. The
 /// streaming loop aborts past this point so a malicious or
 /// runaway upload can't fill the agent's disk while tar happily
-/// extracts. Override with `SYS_MANAGER_S3_RESTORE_MAX_BYTES` (in
+/// extracts. Override with `SHELLFLEET_S3_RESTORE_MAX_BYTES` (in
 /// bytes); default is 50 GiB.
 const S3_RESTORE_MAX_BYTES_DEFAULT: u64 = 50 * 1024 * 1024 * 1024;
 
 fn s3_restore_max_bytes() -> u64 {
-    std::env::var("SYS_MANAGER_S3_RESTORE_MAX_BYTES")
+    std::env::var("SHELLFLEET_S3_RESTORE_MAX_BYTES")
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(S3_RESTORE_MAX_BYTES_DEFAULT)
@@ -336,7 +336,7 @@ pub async fn run_backup(
             let s3_uri = format!("s3://{bucket}/{key}");
 
             let tmp = match tempfile::Builder::new()
-                .prefix("sys-manager-backup-")
+                .prefix("shellfleet-backup-")
                 .suffix(".tar.gz")
                 .tempfile()
             {
@@ -596,7 +596,7 @@ pub async fn restore(
                     total_bytes = total_bytes.saturating_add(chunk.len() as u64);
                     if total_bytes > max_bytes {
                         pipe_err = Some(format!(
-                            "S3 GetObject body exceeded SYS_MANAGER_S3_RESTORE_MAX_BYTES ({max_bytes} bytes); aborting restore"
+                            "S3 GetObject body exceeded SHELLFLEET_S3_RESTORE_MAX_BYTES ({max_bytes} bytes); aborting restore"
                         ));
                         break;
                     }

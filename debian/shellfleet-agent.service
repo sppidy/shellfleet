@@ -1,5 +1,5 @@
 [Unit]
-Description=Sys-Manager Agent
+Description=ShellFleet Agent
 After=network-online.target docker.service k3s.service
 Wants=network-online.target
 
@@ -8,12 +8,12 @@ Type=simple
 User=root
 Group=root
 
-ExecStart=/usr/bin/sys-manager-agent
+ExecStart=/usr/bin/shellfleet-agent
 
-# State (auth token) lives at /etc/sys-manager/agent-token.txt; read-only fields
-# go in /etc/sys-manager/env. A bind mount of /etc lets the config editor see
+# State (auth token) lives at /etc/shellfleet/agent-token.txt; read-only fields
+# go in /etc/shellfleet/env. A bind mount of /etc lets the config editor see
 # host configs even on systems with strict ProtectHome/ProtectSystem defaults.
-EnvironmentFile=-/etc/sys-manager/env
+EnvironmentFile=-/etc/shellfleet/env
 
 Restart=on-failure
 RestartSec=5s

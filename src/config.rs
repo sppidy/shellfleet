@@ -46,7 +46,7 @@ const DENY_PREFIXES: &[&str] = &[
     "/etc/gshadow",
     "/etc/sudoers",
     "/etc/ssh/",
-    "/etc/sys-manager/agent-token",
+    "/etc/shellfleet/agent-token",
     "/root/",
     "/home/.ssh/",
     "/proc/",
@@ -298,7 +298,7 @@ mod tests {
     #[test]
     fn blocks_agent_token() {
         assert!(matches!(
-            check("/etc/sys-manager/agent-token.txt"),
+            check("/etc/shellfleet/agent-token.txt"),
             Err(PathError::BlockedByDenyList(_))
         ));
     }
