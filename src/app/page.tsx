@@ -354,9 +354,7 @@ function HomeBody() {
             </span>
           </div>
           <div className="brand-meta">
-            <span>v0.4.2</span>
-            <span className="muted">·</span>
-            <span>ws://sys-api</span>
+            <span>{agents.length} agents</span>
             <button
               type="button"
               onClick={() => setSidebarOpen(false)}
