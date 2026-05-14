@@ -357,7 +357,7 @@ async fn callback_handler(
     let user_res = match client
         .get("https://api.github.com/user")
         .header("Authorization", format!("Bearer {}", token_data.access_token))
-        .header("User-Agent", "sys-manager")
+        .header("User-Agent", "shellfleet")
         .send()
         .await
     {
@@ -442,7 +442,7 @@ async fn callback_handler(
             return (
                 StatusCode::FORBIDDEN,
                 format!(
-                    "This sys-manager Community Edition is at its {}-user seat cap. \
+                    "This ShellFleet Community Edition is at its {}-user seat cap. \
                      Ask an existing admin to remove a seat at /admin, or upgrade to EE.",
                     crate::CE_USER_LIMIT
                 ),

@@ -3,8 +3,8 @@ name = "server"
 version = "0.1.0"
 edition = "2024"
 license = "AGPL-3.0-or-later"
-repository = "https://github.com/sppidy/sys-mngr-server"
-description = "sys-manager control-plane server: axum HTTP/WS hub for the sys-manager fleet."
+repository = "https://github.com/sppidy/shellfleet-server"
+description = "ShellFleet control-plane server: axum HTTP/WS hub for the ShellFleet fleet."
 
 [dependencies]
 axum = { version = "0.8.9", features = ["ws", "macros"] }

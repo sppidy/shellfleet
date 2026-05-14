@@ -628,7 +628,7 @@ pub fn fire_update_result(
         "UPDATE_",
         Event {
             kind: "update_result",
-            headline: "sys-manager apt upgrade".into(),
+            headline: "shellfleet apt upgrade".into(),
             agent_id,
             status,
             log,
@@ -658,7 +658,7 @@ pub fn fire_health_probe_transition(
         "HEALTH_",
         Event {
             kind: "health_probe.transition",
-            headline: format!("sys-manager health probe `{probe_name}`"),
+            headline: format!("shellfleet health probe `{probe_name}`"),
             agent_id,
             status: status.into(),
             log: detail,
@@ -684,7 +684,7 @@ pub fn fire_backup_result(
         "BACKUP_",
         Event {
             kind: "backup_job.result",
-            headline: format!("sys-manager backup `{name}`"),
+            headline: format!("shellfleet backup `{name}`"),
             agent_id,
             status: if success { "success".into() } else { "failed".into() },
             log,
@@ -706,7 +706,7 @@ pub fn fire_agent_disconnect(db: SqlitePool, agent_id: String, at: i64) {
         "DISCONNECT_",
         Event {
             kind: "agent.disconnect",
-            headline: "sys-manager agent".into(),
+            headline: "shellfleet agent".into(),
             agent_id,
             status: "disconnected".into(),
             log: String::new(),
@@ -731,7 +731,7 @@ pub fn fire_agent_connect(db: SqlitePool, agent_id: String, at: i64) {
         "CONNECT_",
         Event {
             kind: "agent.connect",
-            headline: "sys-manager agent".into(),
+            headline: "shellfleet agent".into(),
             agent_id,
             status: "connected".into(),
             log: String::new(),

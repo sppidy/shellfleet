@@ -1,11 +1,11 @@
 //! At-rest encryption for sensitive `users` columns.
 //!
 //! Threat model: a backup leak that doesn't include the live env. The
-//! attacker has `sys-manager.db` but not `JWT_SECRET`. Without
+//! attacker has `shellfleet.db` but not `JWT_SECRET`. Without
 //! encryption they could read TOTP secrets directly and bypass 2FA;
 //! with encryption the column ciphertext is opaque without the key.
 //!
-//! Key derivation: `SHA-256("sys-manager-aead-v1" || JWT_SECRET)`.
+//! Key derivation: `SHA-256("shellfleet-aead-v1" || JWT_SECRET)`.
 //! JWT_SECRET is required to be ≥ 32 chars of random hex (enforced by
 //! `auth::assert_jwt_secret_present`), so the input is high-entropy
 //! and a single round of SHA-256 produces a uniformly-distributed
@@ -32,7 +32,7 @@ const NONCE_LEN: usize = 12; // AES-GCM standard
 fn key() -> Key<Aes256Gcm> {
     let secret = env::var("JWT_SECRET").expect("JWT_SECRET must be set");
     let mut h = Sha256::new();
-    h.update(b"sys-manager-aead-v1");
+    h.update(b"shellfleet-aead-v1");
     h.update(secret.as_bytes());
     // Sha256::finalize() returns exactly 32 bytes, which is also the
     // key size for Aes256Gcm — convert through a fixed-size array

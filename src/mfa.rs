@@ -52,7 +52,7 @@ use crate::{auth, AppState};
 
 const TOTP_PERIOD: u64 = 30;
 const TOTP_DIGITS: u32 = 6;
-const TOTP_ISSUER: &str = "sys-manager";
+const TOTP_ISSUER: &str = "shellfleet";
 /// ±1 30s window — total acceptance window 90s, the standard skew
 /// budget per RFC 6238 §6 advice.
 const TOTP_SKEW_STEPS: i64 = 1;

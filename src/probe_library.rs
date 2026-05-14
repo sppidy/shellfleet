@@ -1,5 +1,5 @@
 //! Static catalog of stock probes shipped by the agent .deb. The
-//! agent installs the scripts under /etc/sys-manager/probes.d/ (via
+//! agent installs the scripts under /etc/shellfleet/probes.d/ (via
 //! /usr/share symlinks). This catalog tells the SPA what each script
 //! does and what env vars it understands, so the operator can pick
 //! one from a dropdown instead of remembering script names.
@@ -13,7 +13,7 @@ use crate::AppState;
 #[derive(Serialize)]
 pub struct CatalogEntry {
     /// Script filename — must match the agent's
-    /// /etc/sys-manager/probes.d/<name> for the probe to actually
+    /// /etc/shellfleet/probes.d/<name> for the probe to actually
     /// run.
     pub script: String,
     pub title: String,

@@ -28,7 +28,7 @@ pub struct PendingDeviceRow {
 }
 
 pub fn db_path_str() -> String {
-    std::env::var("DB_PATH").unwrap_or_else(|_| "/data/sys-manager.db".to_string())
+    std::env::var("DB_PATH").unwrap_or_else(|_| "/data/shellfleet.db".to_string())
 }
 
 /// Initialize a SQLite pool, run schema migrations, and import the legacy

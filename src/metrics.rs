@@ -1,6 +1,6 @@
 //! Prometheus metrics plugin (CE).
 //!
-//! sys-manager doesn't store time-series — that's Prometheus's job.
+//! ShellFleet doesn't store time-series — that's Prometheus's job.
 //! This module turns the dashboard into a thin renderer for the
 //! operator's existing Prometheus: configure named panel templates
 //! in YAML, and a per-agent `Metrics` tab in the web UI calls
@@ -18,7 +18,7 @@
 //! ## Configuration
 //!
 //! Path resolved from `METRICS_CONFIG_PATH` (default
-//! `/etc/sys-manager/metrics.yaml`). If the file is missing or
+//! `/etc/shellfleet/metrics.yaml`). If the file is missing or
 //! invalid the plugin stays disabled — the `/api/metrics/panels`
 //! endpoint returns an empty list and the web UI hides the tab.
 //! See `metrics.example.yaml` in the repo root for the schema.
@@ -53,7 +53,7 @@ use std::sync::{Arc, OnceLock};
 
 use crate::{auth, AppState};
 
-const DEFAULT_CONFIG_PATH: &str = "/etc/sys-manager/metrics.yaml";
+const DEFAULT_CONFIG_PATH: &str = "/etc/shellfleet/metrics.yaml";
 const PROM_TIMEOUT_SECS: u64 = 10;
 const MAX_POINTS: usize = 5_000;
 
