@@ -19,12 +19,12 @@ Apt repo: <https://shellfleet-repo.sppidy.in/>  ·  Container images: <https://g
 > the dashboard at your existing Prometheus via the metrics plugin (named
 > panel templates in YAML, queried on demand) and the per-agent **Metrics**
 > tab renders the result. No free-form PromQL from the browser, no metric
-> storage in ShellFleet. See [`docs/METRICS.md`](docs/METRICS.md).
+> storage in ShellFleet. See [Metrics](https://shellfleet.sppidy.in/docs.html#metrics).
 
 ## Quick start
 
 1. Bring up the server + web stack from the published container images.
-   [`docs/QUICKSTART.md`](docs/QUICKSTART.md) has the full walkthrough --
+   [Quickstart](https://shellfleet.sppidy.in/docs.html#quickstart) has the full walkthrough --
    no GitHub access needed.
 2. Install the agent on a target host via the signed apt repo
    (see **Connecting an agent** below).
@@ -90,13 +90,7 @@ Top-level files:
 | `Dockerfile.web`           | Next.js standalone build → node:slim runtime                       |
 | `Dockerfile.agent`         | Local-test agent image (referenced by the commented compose stanza)|
 | `.github/workflows/`       | `agent-deb.yml` — multi-arch (amd64 + arm64) .deb build + apt repo |
-| `docs/QUICKSTART.md`       | 5-min install using published container images                     |
-| `docs/CLOUDFLARE.md`       | WAF rate-limit rules, headers, origin cert                         |
-| `docs/METRICS.md`          | Metrics plugin — point the dashboard at your Prometheus           |
 | `metrics.example.yaml`     | Drop-in starter config for the metrics plugin                       |
-| `docs/KUBERNETES.md`       | K8s support — install paths, RBAC posture, limitations            |
-| `docs/HELM.md`             | Helm chart reference — every value + upgrade / uninstall          |
-| `docs/WEBHOOKS.md`         | Outbound webhook fan-out — events, sinks, env-var matrix          |
 | `helm/shellfleet-agent/`   | In-cluster install chart for the k8s flavor of the agent           |
 | `Dockerfile.agent.k8s`     | Build the k8s-flavor agent image (used by the Helm chart)          |
 | `CONTRIBUTING.md`, `CLA.md`| Contribution flow + Individual Contributor License Agreement       |
@@ -148,16 +142,21 @@ The `.env` on the docker host carries:
 
    GPG fingerprint: `9181 1FCB AB45 B996 B40E AD1E C6E2 9AC2 52C7 4AEE`.
 
-2. **Pair it.** The agent prints a one-time pairing code on first boot:
+2. **Pair it.** The agent won't connect without a token. Run the pairing
+   flow once:
 
    ```bash
-   sudo journalctl -u shellfleet-agent -n 20
+   sudo shellfleet-agent --pair
    ```
 
-   Open `/device` on the dashboard, sign in with GitHub (must be in the
-   `ALLOWED_GITHUB_USERS` allowlist), paste the 8-character code, approve.
-   The agent stores its bearer token at `/etc/shellfleet/agent-token.txt`
-   and reconnects automatically.
+   It prints an 8-character code. Open `/device` on the dashboard, sign
+   in with GitHub (must be in `ALLOWED_GITHUB_USERS`), paste the code,
+   approve. The token is saved at `/etc/shellfleet/agent-token.txt`.
+   Start the service:
+
+   ```bash
+   sudo systemctl restart shellfleet-agent
+   ```
 
 3. **Roll updates** via CI + apt:
 
@@ -217,7 +216,7 @@ tab appears on every agent. The server substitutes `{instance}` (and
 **id**, never raw PromQL.
 
 Worked example with `process_exporter` (top-10 processes by CPU + RSS as
-panels) is in [`docs/METRICS.md`](docs/METRICS.md). A drop-in starter
+panels) is in [Metrics](https://shellfleet.sppidy.in/docs.html#metrics). A drop-in starter
 config is at [`metrics.example.yaml`](metrics.example.yaml).
 
 > Why delegate to Prometheus instead of building a collector?
@@ -249,8 +248,8 @@ echo 'KUBECONFIG=/etc/shellfleet/kubeconfig' | sudo tee -a /etc/shellfleet/env
 
 CE ships single-cluster + read + exec/logs. Multi-cluster federation, Helm
 releases UI, and namespace-scoped RBAC overlays are EE. See
-[`docs/KUBERNETES.md`](docs/KUBERNETES.md) for the operator walkthrough and
-[`docs/HELM.md`](docs/HELM.md) for every chart value.
+[Kubernetes](https://shellfleet.sppidy.in/docs.html#kubernetes) for the operator walkthrough and
+[Helm](https://shellfleet.sppidy.in/docs.html#helm) for every chart value.
 
 > **CE/EE rule of thumb:** in-cluster Pod, kubeconfig-on-a-host, single
 > kube-apiserver, read + exec/logs — **CE**. Multi-cluster, namespace-scoped
@@ -321,7 +320,7 @@ rollout.
   surface (`/auth/*`, `/api/me`, `/api/auth/mfa/verify`) keyed off
   `CF-Connecting-IP`. 30 burst, 30 req/min steady. Defence-in-depth on
   top of Cloudflare's edge rate limiter — see
-  [`docs/CLOUDFLARE.md`](docs/CLOUDFLARE.md).
+  [Cloudflare](https://shellfleet.sppidy.in/docs.html#cloudflare).
 
 ### Roadmap — Enterprise Edition
 

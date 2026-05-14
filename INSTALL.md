@@ -37,16 +37,20 @@ The package installs:
 - `/etc/shellfleet/env.example` — annotated environment template
 
 On first install, `/etc/shellfleet/env` is seeded from the example. Edit it
-to point at your server, then:
+to point at your server, then pair:
+
+```bash
+sudo shellfleet-agent --pair
+```
+
+It prints an 8-character code. Paste it at
+`https://dashboard.example.com/device` (or your own deploy) and approve.
+The token is saved at `/etc/shellfleet/agent-token.txt` and survives
+upgrades. Then start the service:
 
 ```bash
 sudo systemctl restart shellfleet-agent
-sudo journalctl -u shellfleet-agent -f
 ```
-
-First start prints a pairing code. Approve it at
-`https://dashboard.example.com/device` (or your own deploy). Token is cached
-at `/etc/shellfleet/agent-token.txt` and survives upgrades.
 
 ## Updating
 
