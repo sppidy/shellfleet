@@ -17,13 +17,33 @@ access needed.
 - Tabs auto-hide based on what the agent can do (no docker = no Docker tab,
   no k8s = no Kubernetes tab).
 
-| Component | Port | Role |
-|-----------|------|------|
-| **web** (Next.js) | 3000 | Dashboard SPA, talks to server via `wss://.../ui/ws` |
-| **server** (axum) | 8080 | WS hub + REST API + OAuth + SQLite |
-| **shellfleet-agent** | — | Per-host daemon (`.deb`) or in-cluster Pod (Helm), connects via `wss://.../agent/ws` |
-
-> **You (browser)** → web :3000 → server :8080 ← agent (each host)
+<div style="display:flex;flex-direction:column;align-items:center;gap:0;font-family:var(--mono);font-size:13px;">
+  <div style="background:var(--bg-2);border:1px solid var(--line);border-radius:6px;padding:12px 20px;text-align:center;color:var(--fg-2);font-size:12px;">you (browser, GitHub OAuth)</div>
+  <div style="width:1px;height:24px;background:var(--line-2);"></div>
+  <div style="display:grid;grid-template-columns:1fr auto 1fr;gap:0;align-items:center;width:100%;max-width:680px;">
+    <div style="background:var(--bg-2);border:1px solid var(--line);border-radius:6px;padding:14px 20px;text-align:center;">
+      <div style="color:var(--accent);font-weight:600;margin-bottom:4px;">web</div>
+      <div style="color:var(--fg-3);font-size:11px;">Next.js · :3000</div>
+    </div>
+    <div style="color:var(--fg-3);padding:0 14px;font-size:11px;white-space:nowrap;">← wss /ui/ws →</div>
+    <div style="background:var(--bg-2);border:1px solid var(--line);border-radius:6px;padding:14px 20px;text-align:center;">
+      <div style="color:var(--accent);font-weight:600;margin-bottom:4px;">server</div>
+      <div style="color:var(--fg-3);font-size:11px;">axum · SQLite · :8080</div>
+    </div>
+  </div>
+  <div style="width:1px;height:24px;background:var(--line-2);"></div>
+  <div style="color:var(--fg-3);font-size:11px;margin-bottom:4px;">wss /agent/ws</div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;width:100%;max-width:680px;">
+    <div style="background:var(--bg-2);border:1px solid var(--line);border-radius:6px;padding:14px 20px;text-align:center;">
+      <div style="color:var(--accent);font-weight:600;margin-bottom:4px;">shellfleet-agent</div>
+      <div style="color:var(--fg-3);font-size:11px;">host shape · .deb on any Linux</div>
+    </div>
+    <div style="background:var(--bg-2);border:1px solid var(--line);border-radius:6px;padding:14px 20px;text-align:center;">
+      <div style="color:var(--accent);font-weight:600;margin-bottom:4px;">shellfleet-agent-k8s</div>
+      <div style="color:var(--fg-3);font-size:11px;">k8s shape · Helm Pod or .deb-k8s</div>
+    </div>
+  </div>
+</div>
 
 ---
 

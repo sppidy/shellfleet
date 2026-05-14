@@ -12,6 +12,7 @@ on:
         type: boolean
         default: true
   push:
+    branches: [main]
     tags:
       - 'v*'
 
