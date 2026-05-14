@@ -36,38 +36,41 @@ The fastest path to a running dashboard + a paired host:
 
 ## Architecture
 
-```
-                                          (Cloudflare → nginx)
-   ┌──────────────────────────┐                │
-   │   Next.js dashboard      │ ──── wss /ui/ws──┐
-   │  (web, port 3000)        │                │ │
-   └──────────────────────────┘                │ │
-                                               ▼ │
-   ┌──────────────────────────┐    ┌──────────────────────┐    docker compose
-   │   axum server            │ ⇄  │  /data/sys-manager.db│    on the host VM
-   │  (server, port 8080)     │    │  (SQLite, WAL)       │
-   └────────────┬─────────────┘
-                │   wss /agent/ws
-                ▼
-   ┌─────────────────────────────────────────────────────────────┐
-   │  sys-manager-agent on each host (.deb via apt repo)         │
-   │  • systemd service control + system stats                   │
-   │  • interactive PTY (host shell + per-container exec)        │
-   │  • config file read/write                                   │
-   │  • docker container/image/network/volume/stack/swarm        │
-   │  • streaming docker logs + journalctl                       │
-   │  • apt update/upgrade, scheduled update windows             │
-   │  • health probes (http/tcp/exec) — opt-in only              │
-   │  • backups (tar/gzip → local or s3) — gated by env          │
-   └─────────────────────────────────────────────────────────────┘
+```mermaid
+graph TD
+    CF["☁️ Cloudflare → nginx"]
 
-       (optional) Metrics plugin — server-side only
-   ┌─────────────────────────────────────────────────────────────┐
-   │  YAML panel templates → server queries your Prometheus      │
-   │  on demand → per-agent "Metrics" tab renders the result.    │
-   │  Agent is uninvolved; node_exporter / process_exporter live │
-   │  on the host as separate, operator-managed processes.       │
-   └─────────────────────────────────────────────────────────────┘
+    subgraph compose["docker compose on host VM"]
+        WEB["Next.js dashboard<br/><i>web, port 3000</i>"]
+        SERVER["axum server<br/><i>server, port 8080</i>"]
+        DB[("SQLite, WAL<br/>/data/sys-manager.db")]
+        SERVER <--> DB
+    end
+
+    CF --> WEB
+    CF --> SERVER
+    WEB -- "wss /ui/ws" --> SERVER
+
+    subgraph agents["sys-manager-agent · each host · .deb via apt repo"]
+        A1["systemd service control + system stats"]
+        A2["interactive PTY — host shell + per-container exec"]
+        A3["config file read/write"]
+        A4["docker container / image / network / volume / stack / swarm"]
+        A5["streaming docker logs + journalctl"]
+        A6["apt update/upgrade, scheduled update windows"]
+        A7["health probes — http / tcp / exec — opt-in only"]
+        A8["backups — tar/gzip → local or S3 — gated by env"]
+    end
+
+    SERVER -- "wss /agent/ws" --> agents
+
+    subgraph metrics["(optional) Metrics plugin — server-side only"]
+        M1["YAML panel templates → server queries your Prometheus on demand"]
+        M2["Per-agent Metrics tab renders the result"]
+        M3["Agent uninvolved · node_exporter / process_exporter<br/>are separate, operator-managed processes"]
+    end
+
+    SERVER -.-> metrics
 ```
 
 ## Repository layout
