@@ -82,28 +82,25 @@ enum DeviceTokenResponse {
     Error { error: String },
 }
 
-async fn get_agent_token(api_url: &str) -> String {
-    // 1. Check local file
-    let token_path = "/etc/shellfleet/agent-token.txt";
-    if let Ok(token) = std::fs::read_to_string(token_path) {
-        if !token.trim().is_empty() {
-            return token.trim().to_string();
-        }
-    }
-    // Fallback for Windows/dev
-    if let Ok(token) = std::fs::read_to_string("agent-token.txt") {
-        if !token.trim().is_empty() {
-            return token.trim().to_string();
-        }
-    }
+const TOKEN_PATH: &str = "/etc/shellfleet/agent-token.txt";
 
-    // 2. Perform Device Auth Flow
+fn read_token() -> Option<String> {
+    for path in [TOKEN_PATH, "agent-token.txt"] {
+        if let Ok(t) = std::fs::read_to_string(path) {
+            let t = t.trim().to_string();
+            if !t.is_empty() { return Some(t); }
+        }
+    }
+    None
+}
+
+async fn pair(api_url: &str) -> String {
     let client = reqwest::Client::new();
-    
+
     println!("Requesting device authorization...");
     let auth_res = client.post(format!("{}/api/device/request", api_url))
         .send().await.expect("Failed to contact server");
-        
+
     let auth_data: DeviceAuthResponse = auth_res.json().await.expect("Failed to parse response");
 
     println!("=======================================================");
@@ -114,34 +111,24 @@ async fn get_agent_token(api_url: &str) -> String {
 
     loop {
         tokio::time::sleep(Duration::from_secs(auth_data.interval)).await;
-        
-        let req_body = serde_json::json!({
-            "device_code": auth_data.device_code
-        });
-        
+
+        let req_body = serde_json::json!({ "device_code": auth_data.device_code });
         let token_res = client.post(format!("{}/api/device/token", api_url))
             .json(&req_body)
             .send().await;
-            
+
         if let Ok(res) = token_res {
             if let Ok(data) = res.json::<DeviceTokenResponse>().await {
                 match data {
                     DeviceTokenResponse::Token { access_token } => {
                         println!("Agent successfully authorized!");
-                        // The token grants WebSocket connect privileges,
-                        // so the on-disk file is mode 0600 — readable
-                        // only by the agent's user (typically root via
-                        // the systemd unit). Write+chmod is split into
-                        // two steps because std::fs::write doesn't
-                        // expose a perm-on-create knob.
-                        write_token_secure(token_path, &access_token);
+                        write_token_secure(TOKEN_PATH, &access_token);
                         return access_token;
                     }
                     DeviceTokenResponse::Error { error } => {
-                        if error == "authorization_pending" {
-                            // Continue polling
-                        } else {
-                            panic!("Authorization failed: {}", error);
+                        if error != "authorization_pending" {
+                            eprintln!("Authorization failed: {}", error);
+                            std::process::exit(1);
                         }
                     }
                 }
@@ -161,10 +148,19 @@ async fn main() {
         let _ = rustls::crypto::ring::default_provider().install_default();
     }
 
+    let args: Vec<String> = std::env::args().collect();
+    let is_pair = args.iter().any(|a| a == "--pair" || a == "pair");
+
     let api_url = std::env::var("SERVER_API_URL").unwrap_or_else(|_| "https://dashboard.example.com".to_string());
-    
-    // Perform Tailscale-like auth
-    let token = get_agent_token(&api_url).await;
+
+    let token = if is_pair {
+        pair(&api_url).await
+    } else if let Some(t) = read_token() {
+        t
+    } else {
+        eprintln!("No agent token found. Run `shellfleet-agent --pair` to pair this host.");
+        std::process::exit(1);
+    };
 
     let wss_url_str = std::env::var("SERVER_WS_URL").unwrap_or_else(|_| "wss://dashboard.example.com/agent/ws".to_string());
 
