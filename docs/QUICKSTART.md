@@ -1,40 +1,29 @@
-# ShellFleet — quickstart
+# ShellFleet -- quickstart
 
-**Audience:** cloud engineer who has Docker + a host with a public DNS name.
-**Target time:** 10 minutes from zero to a working dashboard with one paired host.
+**Audience:** you have Docker and a host with a public DNS name.
+**Time:** ~10 minutes to a working dashboard with one paired host.
 
-This guide does not need access to the GitHub source. Everything you need is
-on the public GHCR packages at `ghcr.io/sppidy/shellfleet` and the public
-apt repo at `shellfleet-repo.sppidy.in`.
+Everything here uses the public GHCR images at `ghcr.io/sppidy/shellfleet`
+and the public apt repo at `shellfleet-repo.sppidy.in`. No GitHub source
+access needed.
 
 ---
 
 ## 0 · what you'll have at the end
 
-- A web dashboard at `https://your-host.example.com/` signed in via GitHub.
-- A `shellfleet-agent` running on at least one Linux host, paired through
-  the dashboard.
-- The dashboard auto-hides tabs the agent can't serve (no docker on the host
-  → no Docker tab, host doesn't run k8s → no Kubernetes tab, etc.).
+- A web dashboard at `https://your-host.example.com/` behind GitHub OAuth.
+- A `shellfleet-agent` on at least one Linux host, paired through the
+  dashboard.
+- Tabs auto-hide based on what the agent can do (no docker = no Docker tab,
+  no k8s = no Kubernetes tab).
 
-```
-        you (browser, GitHub OAuth)
-                │
-                ▼
-   ┌────────────────────────┐    wss://…/ui/ws    ┌──────────────────────┐
-   │ web (Next.js, GHCR)  │ ──────────────────► │ server (axum,        │
-   │ 3000                   │                     │ GHCR)  8080        │
-   └────────────────────────┘                     └──────────┬───────────┘
-                                                             │  wss://…/agent/ws
-                                                             ▼
-                                                  ┌──────────────────────┐
-                                                  │ shellfleet-agent     │
-                                                  │  • host shape (.deb  │
-                                                  │    on any Linux)     │
-                                                  │  • k8s shape (Helm   │
-                                                  │    Pod or .deb-k8s)  │
-                                                  └──────────────────────┘
-```
+| Component | Port | Role |
+|-----------|------|------|
+| **web** (Next.js) | 3000 | Dashboard SPA, talks to server via `wss://.../ui/ws` |
+| **server** (axum) | 8080 | WS hub + REST API + OAuth + SQLite |
+| **shellfleet-agent** | — | Per-host daemon (`.deb`) or in-cluster Pod (Helm), connects via `wss://.../agent/ws` |
+
+> **You (browser)** → web :3000 → server :8080 ← agent (each host)
 
 ---
 
@@ -44,12 +33,11 @@ On a small Linux VM (1 vCPU, 1 GB RAM is plenty):
 
 - Docker 25+ with the `compose` plugin.
 - A DNS A/AAAA record pointing `your-host.example.com` at the VM.
-- Some way to terminate TLS in front of the stack — Caddy / nginx / Cloudflare
-  Tunnel / Traefik. The stack itself listens HTTP on `:3000` (web) and `:8080`
-  (server). Public hosting also needs to forward two WebSocket paths:
-  `/ui/ws` (browser ⇄ server) and `/agent/ws` (agent ⇄ server). Same TLS
-  origin for both is fine.
-- A GitHub OAuth app — register one at
+- TLS termination in front of the stack -- Caddy / nginx / Cloudflare
+  Tunnel / Traefik. The stack listens HTTP on `:3000` (web) and `:8080`
+  (server). Forward two WebSocket paths: `/ui/ws` (browser ↔ server)
+  and `/agent/ws` (agent ↔ server). Same TLS origin for both is fine.
+- A GitHub OAuth app -- register at
   <https://github.com/settings/developers> with:
   - **Homepage URL:** `https://your-host.example.com/`
   - **Authorization callback URL:** `https://your-host.example.com/auth/callback`
@@ -126,17 +114,17 @@ JWT_SECRET=replace-me-with-openssl-rand-hex-32
 ALLOWED_GITHUB_USERS=your-github-login
 ```
 
-> **JWT_SECRET** must be a real random value. Generate it with:
+> **JWT_SECRET** must be real random. Generate it:
 > ```bash
 > openssl rand -hex 32
 > ```
-> and paste the output into `.env`.
+> Paste the output into `.env`.
 
 ---
 
 ## 3 · TLS in front (one of these)
 
-### Option A — Caddy (simplest, auto Let's Encrypt)
+### Option A -- Caddy (auto Let's Encrypt)
 
 `Caddyfile`:
 
@@ -166,16 +154,15 @@ volumes:
   caddy_config:
 ```
 
-### Option B — Cloudflare Tunnel
+### Option B -- Cloudflare Tunnel
 
-`cloudflared tunnel create shellfleet`, then map both `/ui/ws` and
-`/agent/ws` to `http://server:8080` and the rest to `http://web:3000`.
-See [`docs/CLOUDFLARE.md`](CLOUDFLARE.md) for the WAF rate-limit rules
-recommended in front of the stack.
+`cloudflared tunnel create shellfleet`, then map `/ui/ws` and `/agent/ws`
+to `http://server:8080` and the rest to `http://web:3000`. See
+[`docs/CLOUDFLARE.md`](CLOUDFLARE.md) for WAF rate-limit rules.
 
-### Option C — your existing nginx
+### Option C -- your existing nginx
 
-WebSocket-capable forwarding for `/ui/ws` and `/agent/ws` — check that
+WebSocket-capable forwarding for `/ui/ws` and `/agent/ws` -- make sure
 the upstream config has:
 
 ```nginx
@@ -195,18 +182,18 @@ docker compose up -d
 docker compose logs -f server
 ```
 
-Open `https://your-host.example.com/` → "Continue with GitHub" → you should
-land on the Fleet overview with zero agents.
+Open `https://your-host.example.com/` → "Continue with GitHub" → Fleet
+overview with zero agents.
 
 ---
 
 ## 5 · pair your first agent
 
-Pick the install shape that matches what the host runs.
+Pick the install shape that matches your host.
 
-### Path A — apt repo, host agent (most common)
+### Path A -- apt repo, host agent (most common)
 
-For Linux VMs / bare metal that host systemd + (optionally) Docker:
+For Linux VMs / bare metal with systemd + (optionally) Docker:
 
 ```bash
 sudo install -m 0755 -d /etc/apt/keyrings
@@ -218,7 +205,7 @@ sudo apt-get update
 sudo apt-get install -y shellfleet-agent
 ```
 
-The .deb installs a systemd unit that reads its config from
+The .deb installs a systemd unit that reads config from
 `/etc/shellfleet/env`:
 
 ```bash
@@ -231,10 +218,10 @@ sudo systemctl restart shellfleet-agent
 sudo journalctl -u shellfleet-agent -n 20
 ```
 
-### Path B — apt repo, k8s flavor (host that talks to a kube-apiserver)
+### Path B -- apt repo, k8s flavor (host with KUBECONFIG)
 
-If the host has a `KUBECONFIG`, install the k8s-flavor package instead.
-It Conflicts/Replaces the standard package, so you can't have both:
+Install the k8s-flavor package instead. It Conflicts/Replaces the standard
+package -- you can't have both:
 
 ```bash
 # (same apt repo setup as Path A, then…)
@@ -247,14 +234,14 @@ EOF
 sudo systemctl restart shellfleet-agent
 ```
 
-The agent advertises an additional `"k8s"` capability, and the dashboard
-reveals the **Kubernetes** top-level tab when you select that agent.
+The agent advertises `"k8s"` capability, and the dashboard shows the
+**Kubernetes** tab when you select that agent.
 
-### Path C — Helm, in-cluster Pod
+### Path C -- Helm, in-cluster Pod
 
-Install the agent as a Pod inside any kube-apiserver-reachable cluster.
-Read [`docs/KUBERNETES.md`](KUBERNETES.md) for the full operator
-walkthrough and [`docs/HELM.md`](HELM.md) for every chart value.
+Install the agent as a Pod inside a cluster. See
+[`docs/KUBERNETES.md`](KUBERNETES.md) for the full walkthrough and
+[`docs/HELM.md`](HELM.md) for every chart value.
 
 ```bash
 helm install sysmgr ./helm/shellfleet-agent \
@@ -265,7 +252,7 @@ helm install sysmgr ./helm/shellfleet-agent \
   --set rbac.write=true        # opt-in: lets the agent apply / scale / delete
 ```
 
-Tail the Pod's logs to read the pairing code, same as Path A.
+Tail the Pod's logs for the pairing code, same as Path A.
 
 ### approve the pairing
 
@@ -276,12 +263,12 @@ The agent prints an 8-character code in its journal / Pod log:
 ```
 
 In the dashboard, **Connect agent** → paste the code → approve. The agent
-caches its bearer token at `/etc/shellfleet/agent-token.txt` and will
-reconnect automatically across reboots.
+caches its bearer token at `/etc/shellfleet/agent-token.txt` and reconnects
+automatically across reboots.
 
 ---
 
-## 6 · what each env var does
+## 6 · env var reference
 
 ### Required server vars
 
@@ -306,9 +293,9 @@ reconnect automatically across reboots.
 
 ### Outbound webhook fan-out
 
-Set the **prefix-less** vars below to route every event (apt update result,
+Set the prefix-less vars to route every event (apt update result,
 health-probe transition, backup result, agent disconnect) through the same
-sink. Or pin a per-event prefix to override a single event type.
+sink. Or add a per-event prefix to override a single event type.
 
 | Suffix                       | Maps to                                                         |
 |------------------------------|------------------------------------------------------------------|
@@ -323,15 +310,15 @@ Per-event override prefixes (each takes the same five suffixes):
 `BACKUP_*` (backup job result), `DISCONNECT_*` (agent dropped off).
 
 See [`WEBHOOKS.md`](WEBHOOKS.md) for the full reference: when each
-event fires, what each sink renders, the audit-row format, and
-worked examples for Slack / Discord / Telegram / generic JSON.
+event fires, what each sink renders, audit-row format, and worked
+examples for Slack / Discord / Telegram / generic JSON.
 
 ### Per-agent S3 backup destination
 
 When a backup job's `dest` is `s3://bucket/prefix`, the agent uploads via
-the AWS SDK — no `awscli` install needed. Standard AWS env vars work, plus
-`AWS_ENDPOINT_URL` for any S3-compatible backend (MinIO, Cloudflare R2,
-Backblaze B2, Wasabi, …). Drop the relevant block into `/etc/shellfleet/env`
+the AWS SDK -- no `awscli` needed. Standard AWS env vars work, plus
+`AWS_ENDPOINT_URL` for S3-compatible backends (MinIO, Cloudflare R2,
+Backblaze B2, Wasabi, ...). Drop the relevant block into `/etc/shellfleet/env`
 on each agent. Recipes for each backend are in
 [`agent/debian/env.example`](https://github.com/sppidy/shellfleet-agent/blob/main/debian/env.example)
 or your installed copy at `/etc/shellfleet/env.example`.
@@ -340,7 +327,7 @@ or your installed copy at `/etc/shellfleet/env.example`.
 
 ## 7 · pull-only quick test (no compose)
 
-If you just want to see whether the images pull:
+To check whether the images pull:
 
 ```bash
 docker pull ghcr.io/sppidy/shellfleet/server:latest
@@ -349,7 +336,7 @@ docker pull ghcr.io/sppidy/shellfleet/agent:latest
 docker pull ghcr.io/sppidy/shellfleet/agent-k8s:latest
 ```
 
-No login required — the GHCR project is public.
+No login required -- GHCR project is public.
 
 ---
 
@@ -357,19 +344,19 @@ No login required — the GHCR project is public.
 
 The agent advertises a capability set on connect (`systemd`, `docker`,
 `swarm`, `k8s`). The dashboard hides tabs for capabilities the agent
-didn't claim, so a k8s-only Pod agent shows just `overview · k8s · metrics
-· health · config` and a no-docker host hides the Docker top-level tab.
-This is automatic — nothing to configure.
+didn't claim, so a k8s-only Pod agent shows `overview · k8s · metrics
+· health · config` and a no-docker host hides the Docker tab.
+Automatic -- nothing to configure.
 
 ---
 
 ## 9 · where to get help
 
 - Issues / questions → open one in `sppidy/shellfleet` on GitHub.
-- Architecture deep-dive → [README.md](../README.md) at the repo root.
+- Architecture deep-dive → [README.md](../README.md).
 - Topic-specific docs:
-  - [`KUBERNETES.md`](KUBERNETES.md) — k8s install paths, RBAC posture
-  - [`HELM.md`](HELM.md) — chart reference + every value
-  - [`METRICS.md`](METRICS.md) — Prometheus plugin schema + worked example
-  - [`WEBHOOKS.md`](WEBHOOKS.md) — outbound notification fan-out reference
-  - [`CLOUDFLARE.md`](CLOUDFLARE.md) — WAF rate-limit rules in front of the stack
+  - [`KUBERNETES.md`](KUBERNETES.md) -- k8s install paths, RBAC posture
+  - [`HELM.md`](HELM.md) -- chart reference + every value
+  - [`METRICS.md`](METRICS.md) -- Prometheus plugin schema + worked example
+  - [`WEBHOOKS.md`](WEBHOOKS.md) -- outbound notification fan-out reference
+  - [`CLOUDFLARE.md`](CLOUDFLARE.md) -- WAF rate-limit rules

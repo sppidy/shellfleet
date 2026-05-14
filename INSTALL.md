@@ -1,17 +1,16 @@
 # Installing the ShellFleet Agent
 
 The agent ships as a multi-arch `.deb` (amd64 + arm64) published from CI
-to an apt repo hosted on GitHub Pages. Each push to `main` produces a new
+to an apt repo on GitHub Pages. Each push to `main` produces a new
 revision; tags produce signed release builds attached to the GitHub Release.
-The `Release` file is GPG-signed; the public key is published at
+The `Release` file is GPG-signed; the public key is at
 `https://shellfleet-repo.sppidy.in/shellfleet.gpg`.
 
 ## Add the apt repo
 
 ```bash
-# 1. Drop the repo's signing key as an ASCII-armored file. apt accepts
-#    both armored and dearmored keyrings via signed-by, so we don't
-#    need the gpg binary on the host (works on minimal Debian/Ubuntu).
+# 1. Drop the signing key. apt accepts armored keyrings via signed-by,
+#    so no gpg binary needed (works on minimal Debian/Ubuntu).
 sudo install -d -m 0755 /etc/apt/keyrings
 curl -fsSL https://shellfleet-repo.sppidy.in/shellfleet.gpg \
   | sudo tee /etc/apt/keyrings/shellfleet.asc > /dev/null
@@ -26,28 +25,27 @@ sudo apt update
 sudo apt install shellfleet-agent
 ```
 
-The signing key fingerprint is `9181 1FCB AB45 B996 B40E AD1E C6E2 9AC2
-52C7 4AEE`. If you want to verify after download, install `gnupg` and
-run `gpg --show-keys /etc/apt/keyrings/shellfleet.asc`.
+Signing key fingerprint: `9181 1FCB AB45 B996 B40E AD1E C6E2 9AC2
+52C7 4AEE`. Verify with `gpg --show-keys /etc/apt/keyrings/shellfleet.asc`.
 
 ## Configure
 
 The package installs:
 
-- `/usr/bin/shellfleet-agent` — the binary
-- `/lib/systemd/system/shellfleet-agent.service` — the unit
-- `/etc/shellfleet/env.example` — annotated environment template
+- `/usr/bin/shellfleet-agent` -- the binary
+- `/lib/systemd/system/shellfleet-agent.service` -- the unit
+- `/etc/shellfleet/env.example` -- annotated environment template
 
 On first install, `/etc/shellfleet/env` is seeded from the example. Edit it
-to point at a different server, then:
+to point at your server, then:
 
 ```bash
 sudo systemctl restart shellfleet-agent
 sudo journalctl -u shellfleet-agent -f
 ```
 
-The first start prints a pairing code; approve it at
-`https://dashboard.example.com/device` (or your own deploy). The token is cached
+First start prints a pairing code. Approve it at
+`https://dashboard.example.com/device` (or your own deploy). Token is cached
 at `/etc/shellfleet/agent-token.txt` and survives upgrades.
 
 ## Updating
@@ -56,14 +54,13 @@ at `/etc/shellfleet/agent-token.txt` and survives upgrades.
 sudo apt update && sudo apt install --only-upgrade shellfleet-agent
 ```
 
-`apt` will preserve `/etc/shellfleet/env` and the cached token. The systemd
+`apt` preserves `/etc/shellfleet/env` and the cached token. The systemd
 unit restarts automatically on upgrade (`restart-after-upgrade` in the
-package's metadata).
+package metadata).
 
 ## DNS
 
-The apt repo is served from GitHub Pages at the custom domain
-`shellfleet-repo.sppidy.in`. You need a DNS record:
+The apt repo is served from GitHub Pages at `shellfleet-repo.sppidy.in`:
 
 ```
 shellfleet-repo.sppidy.in.  CNAME  sppidy.github.io.
@@ -71,12 +68,12 @@ shellfleet-repo.sppidy.in.  CNAME  sppidy.github.io.
 
 (Or `A` records to GitHub's Pages IPs if your DNS provider can't CNAME at
 that level.) The workflow drops a `CNAME` file into the `gh-pages` branch
-and a `.nojekyll` marker so the apt repo files are served as-is.
+and a `.nojekyll` marker so apt repo files are served as-is.
 
 ## Bootstrap (one-time, repo owner)
 
-The submodule repos (`shellfleet-agent`, `shellfleet-shared`, …) are private,
-so the runner needs a Personal Access Token with read access to them.
+The submodule repos (`shellfleet-agent`, `shellfleet-shared`, ...) are private,
+so the runner needs a PAT with read access.
 
 1. Create a [fine-grained PAT](https://github.com/settings/personal-access-tokens/new)
    - Resource owner: **sppidy**

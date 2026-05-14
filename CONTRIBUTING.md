@@ -1,13 +1,10 @@
 # Contributing to ShellFleet
 
-Thanks for considering a contribution! This document covers everything
-you need to know before opening a pull request.
-
 ## TL;DR
 
 1. Open an issue first if the change is non-trivial.
 2. Fork, branch off `main`, keep PRs focused.
-3. **Sign the [CLA](CLA.md)** — the bot will comment on your first PR.
+3. **Sign the [CLA](CLA.md)** -- the bot will comment on your first PR.
 4. Sign your commits (`git commit -S`). Branch protection on `main`
    rejects unsigned commits.
 5. Follow the existing code style; CI will tell you if you didn't.
@@ -24,13 +21,13 @@ you need to know before opening a pull request.
 | `shared/` | [`shellfleet-shared`](https://github.com/sppidy/shellfleet-shared) | Common protocol/types crate |
 
 PRs should target the submodule repo for the component you're changing.
-Once merged, a maintainer will bump the pointer in the super-repo.
+Once merged, a maintainer bumps the pointer in the super-repo.
 
 ## Development setup
 
 See [`README.md`](README.md) for the dev quickstart and
-[`docs/QUICKSTART.md`](docs/QUICKSTART.md) for the
-container-based deployment walkthrough.
+[`docs/QUICKSTART.md`](docs/QUICKSTART.md) for the container-based
+deployment walkthrough.
 
 Minimum tooling:
 
@@ -40,50 +37,47 @@ Minimum tooling:
 
 ## Contributor License Agreement (CLA)
 
-Before we can merge your contribution, you must agree to the
+Before we can merge, you must agree to the
 [**Individual Contributor License Agreement**](CLA.md).
 
 ### Why a CLA?
 
-ShellFleet is published under the **AGPL-3.0** license. The project
-also has a planned commercial enterprise edition that includes
-features such as SSO, advanced RBAC, multi-tenancy, secret-manager
-integration, and long-retention audit log.
+ShellFleet is AGPL-3.0. There's also a planned commercial enterprise
+edition (SSO, advanced RBAC, multi-tenancy, secret-manager integration,
+long-retention audit log).
 
 The CLA grants the maintainer the right to:
 
 1. Distribute your contribution under AGPL-3.0 (the public license),
    **and**
-2. Re-license it under a commercial license for inclusion in the
-   enterprise edition.
+2. Re-license it under a commercial license for the enterprise edition.
 
-Without this dual-licensing right, every contributor would have a veto
-on the enterprise edition, which is not workable. The CLA does **not**
-take away your copyright — you retain all rights to your own code and
-can use it elsewhere however you like.
+Without dual-licensing rights, every contributor would have a veto on
+the enterprise edition. The CLA does **not** transfer your copyright --
+you keep all rights to your code and can use it elsewhere however you
+like.
 
 ### How to sign
 
-When you open your first pull request, [CLA Assistant](https://cla-assistant.io/)
-will leave a comment with a one-click link. Click through, log in with
-GitHub, agree once, and you're set for all future contributions.
-Subsequent PRs will not re-prompt.
+Open your first PR. [CLA Assistant](https://cla-assistant.io/) comments
+with a one-click link. Log in with GitHub, agree once, done for all
+future contributions. Subsequent PRs won't re-prompt.
 
-If you are contributing on behalf of a company, please ask your
-employer to sign the corporate CLA instead — open an issue tagged
-`cla:corporate` and we'll send the form.
+Contributing on behalf of a company? Ask your employer to sign the
+corporate CLA -- open an issue tagged `cla:corporate` and we'll send the
+form.
 
 ## Commit hygiene
 
-- **Sign every commit** (`-S`). Branch protection on `main` requires
-  signed commits across all five repos (super + agent + server + web +
-  shared). Set up signing once via `git config --global user.signingkey
-  ...` and `commit.gpgsign true`; see GitHub's [signing-commits docs](https://docs.github.com/en/authentication/managing-commit-signature-verification).
+- **Sign every commit** (`-S`). Branch protection on `main` requires it
+  across all five repos. Set up signing once:
+  `git config --global user.signingkey ...` and `commit.gpgsign true`.
+  See GitHub's [signing-commits docs](https://docs.github.com/en/authentication/managing-commit-signature-verification).
 - **Conventional-style summaries** are appreciated but not strict:
   `feat(server): add WebAuthn enrollment endpoint`,
   `fix(agent): handle reconnect after suspend`.
 - **No `Co-Authored-By: Claude`** trailers. AI-assisted code is fine,
-  but you are the author for licensing purposes — you sign the CLA, not
+  but you are the author for licensing purposes -- you sign the CLA, not
   the model.
 - Squash before opening the PR if the branch is messy; a maintainer may
   squash on merge regardless.
@@ -101,16 +95,16 @@ employer to sign the corporate CLA instead — open an issue tagged
 **Discuss in an issue first:**
 
 - New top-level features (sidebar pages, dashboard widgets)
-- Anything that adds a background loop on the agent — see the idle-cost
+- Anything that adds a background loop on the agent -- see the idle-cost
   budget below
 - Database schema changes
 - New dependencies, especially heavy ones
 
 **Probably not:**
 
-- Light-mode-only redesigns (dark-mode is the durable preference)
-- Features that duplicate functionality available in the planned
-  enterprise edition (see [README's roadmap section](README.md))
+- Light-mode-only redesigns (dark-mode is the default)
+- Features that duplicate planned enterprise edition functionality
+  (see [README's roadmap section](README.md))
 - Telemetry / phone-home of any kind in CE
 
 ## Idle-cost budget (agent)
@@ -121,9 +115,9 @@ The agent runs on small hardware. New features must respect:
 - **<1% average CPU** when no UI is connected
 - **No outbound traffic** when idle except the WS keepalive
 
-If your patch adds a background loop, call it out in the PR
-description and include a measurement of its impact (RSS at idle,
-CPU% during a representative window).
+If your patch adds a background loop, call it out in the PR description
+and include a measurement (RSS at idle, CPU% during a representative
+window).
 
 ## Reporting bugs
 
@@ -138,8 +132,8 @@ Use [GitHub issues](https://github.com/sppidy/shellfleet/issues) with:
 ## Reporting security issues
 
 **Do not open a public issue for security bugs.** Email the maintainer
-at `sppidytg@gmail.com` with the subject `[security] ShellFleet: ...`
-and we'll coordinate a fix and disclosure timeline.
+at `sppidytg@gmail.com` with subject `[security] ShellFleet: ...` and
+we'll coordinate a fix and disclosure timeline.
 
 ## License
 
