@@ -17,6 +17,7 @@ const inter = Inter({
 export const metadata: Metadata = {
   title: "ShellFleet",
   description: "Manage systemd services and Docker workloads across your fleet from one terminal-flavored dashboard.",
+  icons: { icon: "/favicon.svg" },
 };
 
 import { WebSocketProvider } from "@/components/providers/WebSocketProvider";

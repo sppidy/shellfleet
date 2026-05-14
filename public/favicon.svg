@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32" fill="none" stroke="#7fb069" stroke-linecap="square" stroke-linejoin="miter">
+  
+  <rect x="1.5" y="1.5" width="29" height="29" rx="4" stroke-width="1.5"></rect>
+  <path d="M 9 8 L 6 8 L 6 24 L 9 24" stroke-width="2"></path>
+  <path d="M 23 8 L 26 8 L 26 24 L 23 24" stroke-width="2"></path>
+  <text x="16" y="22" text-anchor="middle" fill="#7fb069" stroke="none" font-family="&#39;JetBrains Mono&#39;, &#39;SF Mono&#39;, ui-monospace, Menlo, Consolas, &#39;DejaVu Sans Mono&#39;, monospace" font-weight="700" font-size="14" letter-spacing="-0.3">sf</text>
+</svg>
