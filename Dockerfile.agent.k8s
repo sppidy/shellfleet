@@ -33,4 +33,4 @@ COPY --from=builder /src/target/release/shellfleet-agent /usr/bin/shellfleet-age
 # the bearer token after pairing without touching /etc permissions.
 RUN install -d -m 0700 /etc/shellfleet
 
-ENTRYPOINT ["/usr/bin/shellfleet-agent"]
+ENTRYPOINT ["/usr/bin/shellfleet-agent", "--pair"]
