@@ -36,7 +36,7 @@ apply handlers yet, that lands in slice 6 / EE multi-cluster.
 
 ## Image
 
-CI publishes multi-arch images to `hrbr.sppidy.in/shellfleet/agent-k8s`
+CI publishes multi-arch images to `ghcr.io/sppidy/shellfleet/agent-k8s`
 on every k8s-related commit. The chart's default image points there.
 
 To roll your own:

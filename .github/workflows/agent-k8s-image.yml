@@ -8,11 +8,6 @@ on:
       - "shared/**"
       - "Dockerfile.agent.k8s"
       - "helm/**"
-      # Bare submodule-pointer files. A super-repo commit that only
-      # bumps these has no `agent/**` content change in the super
-      # tree (submodules are 160000-mode entries, not directories),
-      # so without these patterns the workflow wouldn't fire on a
-      # slice-N pointer bump.
       - "agent"
       - "shared"
       - ".github/workflows/agent-k8s-image.yml"
@@ -22,49 +17,30 @@ on:
 
 permissions:
   contents: read
+  packages: write
 
 concurrency:
   group: agent-k8s-image
   cancel-in-progress: false
 
 env:
-  REGISTRY: hrbr.sppidy.in
-  IMAGE_NAME: shellfleet/agent-k8s
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository_owner }}/shellfleet/agent-k8s
 
 jobs:
   build:
-    # Per-arch native build. The previous attempt at multi-arch via
-    # QEMU emulation was 30+ min per run because kube-rs +
-    # k8s-openapi don't compile in any reasonable time under x86 →
-    # aarch64 emulation. Mirroring the .deb workflow's matrix —
-    # native runners per arch — gets us back into the ~5 min budget.
     name: Build (${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          # amd64 — runs on the registry-co-located runner so the
-          # push goes over loopback / the public hostname →
-          # Traefik → harbor-nginx with negligible RTT.
           - arch: amd64
-            runner: [self-hosted, amd64-builder]
+            runner: ubuntu-latest
             platform: linux/amd64
-            push_registry: hrbr.sppidy.in
-            push_scheme: https
-          # arm64 — runs on a remote runner that reaches the
-          # registry over the tailnet via a DERP-relayed path
-          # (~700 KB/s, 50 ms). Pushing to harbor-nginx's
-          # direct host port over plain HTTP skips Traefik
-          # AND TLS overhead, which avoids double-stacked
-          # timeouts under the relay cap. The direct port is
-          # reached via /etc/hosts pinned to the secret-stored
-          # tailnet IP (see "Pin Harbor hostname" step below).
           - arch: arm64
-            runner: [self-hosted, arm64-builder]
+            runner: ubuntu-24.04-arm
             platform: linux/arm64
-            push_registry: hrbr.sppidy.in:18080
-            push_scheme: http
     outputs:
       sha_short: ${{ steps.tags.outputs.sha_short }}
     steps:
@@ -86,63 +62,15 @@ jobs:
           fi
           git submodule update --init --recursive --depth 1 agent shared
 
-      # Pinning /etc/hosts to the secret-stored tailnet IP keeps
-      # the push off the public CF path (which strips the auth
-      # `service=` param) and on the local / direct-tailnet path.
-      # Idempotent across runs; the duplicate-line dedupe avoids
-      # polluting /etc/hosts on a long-lived runner.
-      - name: Pin Harbor hostname to tailnet IP
-        shell: bash
-        run: |
-          set -euo pipefail
-          line="${{ secrets.HARBOR_TS_IP }} ${REGISTRY}"
-          if ! grep -qxF "$line" /etc/hosts; then
-            echo "$line" | sudo tee -a /etc/hosts
-          fi
-          getent hosts "${REGISTRY}"
-
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
-        with:
-          # Host network so buildkit sees the runner's /etc/hosts.
-          driver-opts: |
-            network=host
-          # The direct-port path (arm64-builder leg) is plain HTTP, so we
-          # need to mark `hrbr.sppidy.in:18080` as an insecure
-          # registry for buildkit. The amd64 leg uses HTTPS so this
-          # just adds an unused entry — harmless.
-          buildkitd-config-inline: |
-            [registry."hrbr.sppidy.in:18080"]
-              http = true
-              insecure = true
 
-      # Manual ~/.docker/config.json instead of docker/login-action.
-      # Reason: the direct-port URL (arm64-builder leg) is plain HTTP, and
-      # `docker login hrbr.sppidy.in:18080` would fail with
-      # "server gave HTTP response to HTTPS client" because the
-      # daemon enforces HTTPS unless `insecure-registries` is set
-      # at the daemon level (requires restart). Writing the auth
-      # blob directly is daemon-free; buildkit + build-push-action
-      # read from this file.
-      - name: Write Harbor credentials
-        shell: bash
-        env:
-          HARBOR_USER: ${{ secrets.HARBOR_ROBOT_USER }}
-          HARBOR_PASS: ${{ secrets.HARBOR_ROBOT_SECRET }}
-        run: |
-          set -euo pipefail
-          mkdir -p ~/.docker
-          AUTH=$(printf '%s:%s' "$HARBOR_USER" "$HARBOR_PASS" | base64 -w0)
-          # Both URLs share the same Harbor backend + same robot account.
-          cat > ~/.docker/config.json <<EOF
-          {
-            "auths": {
-              "hrbr.sppidy.in":       { "auth": "$AUTH" },
-              "hrbr.sppidy.in:18080": { "auth": "$AUTH" }
-            }
-          }
-          EOF
-          chmod 0600 ~/.docker/config.json
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Compute tags
         id: tags
@@ -151,13 +79,7 @@ jobs:
           set -euo pipefail
           SHA_SHORT=$(echo "$GITHUB_SHA" | cut -c1-7)
           echo "sha_short=${SHA_SHORT}" >> "$GITHUB_OUTPUT"
-          # Each arch pushes a single arch-suffixed tag; the merge job
-          # below stitches them into multi-arch tags afterwards.
-          # Note that the registry portion can be a direct-port URL
-          # (arm64 leg) or the public Traefik hostname (amd64 leg) —
-          # Harbor stores by image name regardless, the manifest job
-          # then references the canonical hostname when stitching.
-          echo "tag=${{ matrix.push_registry }}/${IMAGE_NAME}:sha-${SHA_SHORT}-${{ matrix.arch }}" >> "$GITHUB_OUTPUT"
+          echo "tag=${{ env.REGISTRY }}/${IMAGE_NAME}:sha-${SHA_SHORT}-${{ matrix.arch }}" >> "$GITHUB_OUTPUT"
 
       - name: Build + push (${{ matrix.arch }})
         uses: docker/build-push-action@v6
@@ -167,8 +89,8 @@ jobs:
           platforms: ${{ matrix.platform }}
           push: true
           tags: ${{ steps.tags.outputs.tag }}
-          cache-from: type=registry,ref=${{ matrix.push_registry }}/${{ env.IMAGE_NAME }}:buildcache-${{ matrix.arch }}
-          cache-to: type=registry,ref=${{ matrix.push_registry }}/${{ env.IMAGE_NAME }}:buildcache-${{ matrix.arch }},mode=max
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache-${{ matrix.arch }}
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache-${{ matrix.arch }},mode=max
           provenance: false
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
@@ -178,53 +100,18 @@ jobs:
 
   manifest:
     name: Multi-arch manifest
-    # Stitch on the registry-co-located runner so the imagetools
-    # API calls stay off the public path. Falls back to
-    # ubuntu-latest if no self-hosted runner is available, but at
-    # that point the prior build jobs would have already failed.
     needs: build
-    runs-on: [self-hosted, amd64-builder]
+    runs-on: ubuntu-latest
     steps:
-      - name: Pin Harbor hostname (idempotent)
-        shell: bash
-        run: |
-          set -euo pipefail
-          line="${{ secrets.HARBOR_TS_IP }} ${REGISTRY}"
-          if ! grep -qxF "$line" /etc/hosts; then
-            echo "$line" | sudo tee -a /etc/hosts
-          fi
-
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
-        with:
-          driver-opts: |
-            network=host
-          # Direct-port URL is plain HTTP — same insecure registry
-          # config as the build legs so imagetools can read the
-          # arm64 source tag.
-          buildkitd-config-inline: |
-            [registry."hrbr.sppidy.in:18080"]
-              http = true
-              insecure = true
 
-      - name: Write Harbor credentials
-        shell: bash
-        env:
-          HARBOR_USER: ${{ secrets.HARBOR_ROBOT_USER }}
-          HARBOR_PASS: ${{ secrets.HARBOR_ROBOT_SECRET }}
-        run: |
-          set -euo pipefail
-          mkdir -p ~/.docker
-          AUTH=$(printf '%s:%s' "$HARBOR_USER" "$HARBOR_PASS" | base64 -w0)
-          cat > ~/.docker/config.json <<EOF
-          {
-            "auths": {
-              "hrbr.sppidy.in":       { "auth": "$AUTH" },
-              "hrbr.sppidy.in:18080": { "auth": "$AUTH" }
-            }
-          }
-          EOF
-          chmod 0600 ~/.docker/config.json
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Compose multi-arch tags
         id: tags
@@ -232,13 +119,8 @@ jobs:
         run: |
           set -euo pipefail
           SHA_SHORT="${{ needs.build.outputs.sha_short }}"
-          # Source tags reflect where each leg pushed:
-          # amd64 via Traefik (canonical), arm64 via direct port.
           AMD="${REGISTRY}/${IMAGE_NAME}:sha-${SHA_SHORT}-amd64"
-          ARM="hrbr.sppidy.in:18080/${IMAGE_NAME}:sha-${SHA_SHORT}-arm64"
-          # Destination tags always use the canonical hostname so
-          # consumers reference Harbor at hrbr.sppidy.in regardless
-          # of how each arch got pushed.
+          ARM="${REGISTRY}/${IMAGE_NAME}:sha-${SHA_SHORT}-arm64"
           DEST=("${REGISTRY}/${IMAGE_NAME}:sha-${SHA_SHORT}")
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             VER="${GITHUB_REF##refs/tags/}"

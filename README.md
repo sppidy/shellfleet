@@ -7,7 +7,7 @@ ingresses / pvcs / events + describe + live-tail logs + pod exec), apt updates,
 health probes, backups, fan-out commands, and remote shells across every host
 you connect.
 
-Apt repo: <https://sys-mgr-repo.sppidy.in/>  ·  Container images: <https://hrbr.sppidy.in/shellfleet>
+Apt repo: <https://shellfleet-repo.sppidy.in/>  ·  Container images: <https://ghcr.io/sppidy/shellfleet>
 
 > The agent's design rule is **be cheap when nobody's looking**: ~4 MB RSS at
 > idle, no background polling for stats / containers / images / networks /
@@ -144,9 +144,9 @@ The `.env` on the docker host carries:
 
    ```bash
    sudo install -m 0755 -d /etc/apt/keyrings
-   curl -fsSL https://sys-mgr-repo.sppidy.in/shellfleet.gpg \
+   curl -fsSL https://shellfleet-repo.sppidy.in/shellfleet.gpg \
      | sudo tee /etc/apt/keyrings/shellfleet.asc > /dev/null
-   echo 'deb [signed-by=/etc/apt/keyrings/shellfleet.asc] https://sys-mgr-repo.sppidy.in stable main' \
+   echo 'deb [signed-by=/etc/apt/keyrings/shellfleet.asc] https://shellfleet-repo.sppidy.in stable main' \
      | sudo tee /etc/apt/sources.list.d/shellfleet.list
    sudo apt-get update && sudo apt-get install -y shellfleet-agent
    ```
@@ -170,7 +170,7 @@ The `.env` on the docker host carries:
    ```bash
    gh workflow run agent-deb.yml --ref main
    for h in <host-1> <host-2> …; do
-     ssh -n root@$h "rm -rf /var/lib/apt/lists/sys-mgr-repo.sppidy.in_* 2>/dev/null; \
+     ssh -n root@$h "rm -rf /var/lib/apt/lists/shellfleet-repo.sppidy.in_* 2>/dev/null; \
                      apt-get update -qq && \
                      DEBIAN_FRONTEND=noninteractive apt-get install -y shellfleet-agent && \
                      systemctl is-active shellfleet-agent"

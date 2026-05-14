@@ -4,8 +4,8 @@
 **Target time:** 10 minutes from zero to a working dashboard with one paired host.
 
 This guide does not need access to the GitHub source. Everything you need is
-on the public Harbor project at `hrbr.sppidy.in/shellfleet` and the public
-apt repo at `sys-mgr-repo.sppidy.in`.
+on the public GHCR packages at `ghcr.io/sppidy/shellfleet` and the public
+apt repo at `shellfleet-repo.sppidy.in`.
 
 ---
 
@@ -22,8 +22,8 @@ apt repo at `sys-mgr-repo.sppidy.in`.
                 │
                 ▼
    ┌────────────────────────┐    wss://…/ui/ws    ┌──────────────────────┐
-   │ web (Next.js, Harbor)  │ ──────────────────► │ server (axum,        │
-   │ 3000                   │                     │ Harbor)  8080        │
+   │ web (Next.js, GHCR)  │ ──────────────────► │ server (axum,        │
+   │ 3000                   │                     │ GHCR)  8080        │
    └────────────────────────┘                     └──────────┬───────────┘
                                                              │  wss://…/agent/ws
                                                              ▼
@@ -65,7 +65,7 @@ On a small Linux VM (1 vCPU, 1 GB RAM is plenty):
 ```yaml
 services:
   server:
-    image: hrbr.sppidy.in/shellfleet/server:latest
+    image: ghcr.io/sppidy/shellfleet/server:latest
     ports:
       - "8080:8080"
     environment:
@@ -92,7 +92,7 @@ services:
     restart: unless-stopped
 
   web:
-    image: hrbr.sppidy.in/shellfleet/web:latest
+    image: ghcr.io/sppidy/shellfleet/web:latest
     ports:
       - "3000:3000"
     environment:
@@ -190,7 +190,7 @@ proxy_read_timeout 1d;
 ## 4 · bring it up
 
 ```bash
-docker compose pull         # grabs server / web from Harbor (no login needed)
+docker compose pull         # grabs server / web from GHCR (no login needed)
 docker compose up -d
 docker compose logs -f server
 ```
@@ -210,9 +210,9 @@ For Linux VMs / bare metal that host systemd + (optionally) Docker:
 
 ```bash
 sudo install -m 0755 -d /etc/apt/keyrings
-curl -fsSL https://sys-mgr-repo.sppidy.in/shellfleet.gpg \
+curl -fsSL https://shellfleet-repo.sppidy.in/shellfleet.gpg \
   | sudo tee /etc/apt/keyrings/shellfleet.asc > /dev/null
-echo 'deb [signed-by=/etc/apt/keyrings/shellfleet.asc] https://sys-mgr-repo.sppidy.in stable main' \
+echo 'deb [signed-by=/etc/apt/keyrings/shellfleet.asc] https://shellfleet-repo.sppidy.in stable main' \
   | sudo tee /etc/apt/sources.list.d/shellfleet.list
 sudo apt-get update
 sudo apt-get install -y shellfleet-agent
@@ -343,13 +343,13 @@ or your installed copy at `/etc/shellfleet/env.example`.
 If you just want to see whether the images pull:
 
 ```bash
-docker pull hrbr.sppidy.in/shellfleet/server:latest
-docker pull hrbr.sppidy.in/shellfleet/web:latest
-docker pull hrbr.sppidy.in/shellfleet/agent:latest
-docker pull hrbr.sppidy.in/shellfleet/agent-k8s:latest
+docker pull ghcr.io/sppidy/shellfleet/server:latest
+docker pull ghcr.io/sppidy/shellfleet/web:latest
+docker pull ghcr.io/sppidy/shellfleet/agent:latest
+docker pull ghcr.io/sppidy/shellfleet/agent-k8s:latest
 ```
 
-No login required — the Harbor project is public.
+No login required — the GHCR project is public.
 
 ---
 

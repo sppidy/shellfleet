@@ -4,7 +4,7 @@ The agent ships as a multi-arch `.deb` (amd64 + arm64) published from CI
 to an apt repo hosted on GitHub Pages. Each push to `main` produces a new
 revision; tags produce signed release builds attached to the GitHub Release.
 The `Release` file is GPG-signed; the public key is published at
-`https://sys-mgr-repo.sppidy.in/shellfleet.gpg`.
+`https://shellfleet-repo.sppidy.in/shellfleet.gpg`.
 
 ## Add the apt repo
 
@@ -13,12 +13,12 @@ The `Release` file is GPG-signed; the public key is published at
 #    both armored and dearmored keyrings via signed-by, so we don't
 #    need the gpg binary on the host (works on minimal Debian/Ubuntu).
 sudo install -d -m 0755 /etc/apt/keyrings
-curl -fsSL https://sys-mgr-repo.sppidy.in/shellfleet.gpg \
+curl -fsSL https://shellfleet-repo.sppidy.in/shellfleet.gpg \
   | sudo tee /etc/apt/keyrings/shellfleet.asc > /dev/null
 sudo chmod 0644 /etc/apt/keyrings/shellfleet.asc
 
 # 2. Add the source line, scoped to that keyring.
-echo "deb [signed-by=/etc/apt/keyrings/shellfleet.asc] https://sys-mgr-repo.sppidy.in stable main" \
+echo "deb [signed-by=/etc/apt/keyrings/shellfleet.asc] https://shellfleet-repo.sppidy.in stable main" \
   | sudo tee /etc/apt/sources.list.d/shellfleet.list
 
 # 3. Install.
@@ -63,10 +63,10 @@ package's metadata).
 ## DNS
 
 The apt repo is served from GitHub Pages at the custom domain
-`sys-mgr-repo.sppidy.in`. You need a DNS record:
+`shellfleet-repo.sppidy.in`. You need a DNS record:
 
 ```
-sys-mgr-repo.sppidy.in.  CNAME  sppidy.github.io.
+shellfleet-repo.sppidy.in.  CNAME  sppidy.github.io.
 ```
 
 (Or `A` records to GitHub's Pages IPs if your DNS provider can't CNAME at

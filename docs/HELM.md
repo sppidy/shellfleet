@@ -39,7 +39,7 @@ agent named `<release>-shellfleet-agent-id`.
 
 | key                          | default                                  |
 | ---------------------------- | ---------------------------------------- |
-| `image.repository`           | `hrbr.sppidy.in/shellfleet/agent-k8s`    |
+| `image.repository`           | `ghcr.io/sppidy/shellfleet/agent-k8s`    |
 | `image.tag`                  | `""` → falls back to `.Chart.appVersion` |
 | `image.pullPolicy`           | `IfNotPresent`                           |
 | `imagePullSecrets`           | `[]`                                     |

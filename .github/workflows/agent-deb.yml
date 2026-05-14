@@ -167,9 +167,9 @@ jobs:
       - name: Pin custom domain + landing page
         shell: bash
         run: |
-          # Custom domain so the apt repo lives at sys-mgr-repo.sppidy.in
+          # Custom domain so the apt repo lives at shellfleet-repo.sppidy.in
           # instead of being shadowed by the user's sppidy.in portfolio.
-          echo 'sys-mgr-repo.sppidy.in' > pages/CNAME
+          echo 'shellfleet-repo.sppidy.in' > pages/CNAME
           # Bypass Jekyll on GH Pages — without this it would refuse to
           # serve files under dists/ that contain leading dots etc.
           touch pages/.nojekyll
@@ -181,9 +181,9 @@ jobs:
           <h1>ShellFleet apt repo</h1>
           <p>Signed apt repo, multi-arch (amd64 + arm64). Add it to your sources:</p>
           <pre>sudo install -d -m 0755 /etc/apt/keyrings
-          curl -fsSL https://sys-mgr-repo.sppidy.in/shellfleet.gpg \
+          curl -fsSL https://shellfleet-repo.sppidy.in/shellfleet.gpg \
             | sudo tee /etc/apt/keyrings/shellfleet.asc &gt; /dev/null
-          echo "deb [signed-by=/etc/apt/keyrings/shellfleet.asc] https://sys-mgr-repo.sppidy.in stable main" \
+          echo "deb [signed-by=/etc/apt/keyrings/shellfleet.asc] https://shellfleet-repo.sppidy.in stable main" \
             | sudo tee /etc/apt/sources.list.d/shellfleet.list
           sudo apt update
           sudo apt install shellfleet-agent</pre>

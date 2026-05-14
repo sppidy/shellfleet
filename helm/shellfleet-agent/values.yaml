@@ -4,12 +4,12 @@
 # describe resources, and tail logs. Flip `rbac.exec` for `kubectl exec`,
 # `rbac.write` once slice 6 / EE adds apply+scale.
 
-# Container image. CI publishes multi-arch images to Harbor on every
+# Container image. CI publishes multi-arch images to GHCR on every
 # k8s-related commit to main. Build locally via
 # `docker build -f Dockerfile.agent.k8s` at the super-repo root and
 # point this elsewhere if you'd rather host it yourself.
 image:
-  repository: hrbr.sppidy.in/shellfleet/agent-k8s
+  repository: ghcr.io/sppidy/shellfleet/agent-k8s
   tag: ""           # default to .Chart.appVersion (see Chart.yaml)
   pullPolicy: IfNotPresent
 imagePullSecrets: []

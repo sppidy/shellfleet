@@ -1,9 +1,4 @@
-name: Harbor multi-arch images
-
-# Builds shellfleet-{server,web,agent} natively on amd64 + arm64 runners,
-# pushes per-arch tags to Harbor over Tailscale (bypassing Cloudflare's
-# 100 MB upload cap on hrbr.sppidy.in), and assembles a multi-arch
-# manifest via `docker buildx imagetools create`.
+name: Container images
 
 on:
   workflow_dispatch:
@@ -22,13 +17,11 @@ on:
 
 permissions:
   contents: read
+  packages: write
 
 env:
-  HARBOR_HOST: hrbr.sppidy.in
-  HARBOR_PROJECT: shellfleet
-  # Tailnet IP of the registry host. Stored as a secret so the
-  # public repo doesn't reveal the tailnet shape.
-  HARBOR_TS_IP: ${{ secrets.HARBOR_TS_IP }}
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ghcr.io/${{ github.repository_owner }}/shellfleet
 
 jobs:
   build:
@@ -53,7 +46,6 @@ jobs:
           if [ -n "${{ inputs.tag }}" ]; then
             echo "value=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
           else
-            # github.ref_name on tag pushes is the tag (e.g. v22).
             echo "value=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
           fi
 
@@ -63,32 +55,15 @@ jobs:
           submodules: recursive
           token: ${{ secrets.SUBMODULES_PAT }}
 
-      - name: Tailscale up
-        uses: tailscale/github-action@v3
-        with:
-          authkey: ${{ secrets.TS_AUTHKEY }}
-          # Tag the runner so your tailnet ACLs can grant it access to
-          # the Harbor host. Configure the same tag on the auth key.
-          tags: tag:ci
-
-      - name: Map Harbor hostname to Tailscale IP
-        run: |
-          echo "${{ env.HARBOR_TS_IP }} ${{ env.HARBOR_HOST }}" | sudo tee -a /etc/hosts > /dev/null
-          getent hosts ${{ env.HARBOR_HOST }}
-
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Log in to Harbor
-        env:
-          HARBOR_USER: ${{ secrets.HARBOR_ROBOT_USER }}
-          HARBOR_SECRET: ${{ secrets.HARBOR_ROBOT_SECRET }}
-        run: |
-          # Pass creds via env vars rather than direct workflow-expression
-          # substitution into bash — the robot username contains a literal $
-          # which bash would otherwise try to expand as a variable reference.
-          echo "$HARBOR_SECRET" \
-            | docker login "$HARBOR_HOST" -u "$HARBOR_USER" --password-stdin
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build + push (${{ matrix.platform }})
         run: |
@@ -98,7 +73,7 @@ jobs:
           docker buildx build \
             --platform ${{ matrix.platform }} \
             -f Dockerfile.${IMG} \
-            -t ${{ env.HARBOR_HOST }}/${{ env.HARBOR_PROJECT }}/${IMG}:${TAG}-${ARCH} \
+            -t ${{ env.IMAGE_PREFIX }}/${IMG}:${TAG}-${ARCH} \
             --provenance false \
             --push .
 
@@ -120,35 +95,21 @@ jobs:
             echo "value=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Tailscale up
-        uses: tailscale/github-action@v3
-        with:
-          authkey: ${{ secrets.TS_AUTHKEY }}
-          tags: tag:ci
-
-      - name: Map Harbor hostname to Tailscale IP
-        run: |
-          echo "${{ env.HARBOR_TS_IP }} ${{ env.HARBOR_HOST }}" | sudo tee -a /etc/hosts > /dev/null
-
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Log in to Harbor
-        env:
-          HARBOR_USER: ${{ secrets.HARBOR_ROBOT_USER }}
-          HARBOR_SECRET: ${{ secrets.HARBOR_ROBOT_SECRET }}
-        run: |
-          # Pass creds via env vars rather than direct workflow-expression
-          # substitution into bash — the robot username contains a literal $
-          # which bash would otherwise try to expand as a variable reference.
-          echo "$HARBOR_SECRET" \
-            | docker login "$HARBOR_HOST" -u "$HARBOR_USER" --password-stdin
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build manifest list (${{ steps.tag.outputs.value }})
         run: |
           IMG="${{ matrix.image }}"
           TAG="${{ steps.tag.outputs.value }}"
-          BASE="${{ env.HARBOR_HOST }}/${{ env.HARBOR_PROJECT }}/${IMG}"
+          BASE="${{ env.IMAGE_PREFIX }}/${IMG}"
           docker buildx imagetools create \
             -t "${BASE}:${TAG}" \
             "${BASE}:${TAG}-amd64" \
@@ -159,7 +120,7 @@ jobs:
         run: |
           IMG="${{ matrix.image }}"
           TAG="${{ steps.tag.outputs.value }}"
-          BASE="${{ env.HARBOR_HOST }}/${{ env.HARBOR_PROJECT }}/${IMG}"
+          BASE="${{ env.IMAGE_PREFIX }}/${IMG}"
           docker buildx imagetools create \
             -t "${BASE}:latest" \
             "${BASE}:${TAG}-amd64" \
