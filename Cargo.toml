@@ -3,8 +3,8 @@ name = "shared"
 version = "0.1.0"
 edition = "2024"
 license = "AGPL-3.0-or-later"
-repository = "https://github.com/sppidy/sys-mngr-shared"
-description = "Shared protocol/types crate for sys-manager (server, agent, web)."
+repository = "https://github.com/sppidy/shellfleet-shared"
+description = "Shared protocol/types crate for ShellFleet (server, agent, web)."
 
 [dependencies]
 serde = { version = "1.0.228", features = ["derive"] }
