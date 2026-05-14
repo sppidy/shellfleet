@@ -1,4 +1,4 @@
-# Contributing to sys-manager
+# Contributing to ShellFleet
 
 Thanks for considering a contribution! This document covers everything
 you need to know before opening a pull request.
@@ -14,14 +14,14 @@ you need to know before opening a pull request.
 
 ## Repository layout
 
-`sys-manager` is a super-repo of git submodules:
+`shellfleet` is a super-repo of git submodules:
 
 | Submodule | Repo | Purpose |
 |-----------|------|---------|
-| `agent/`  | [`sys-mngr-agent`](https://github.com/sppidy/sys-mngr-agent)   | Rust daemon installed on managed hosts |
-| `server/` | [`sys-mngr-server`](https://github.com/sppidy/sys-mngr-server) | Rust/axum control-plane API + WS hub |
-| `web/`    | [`sys-mngr-web`](https://github.com/sppidy/sys-mngr-web)       | Next.js dashboard (standalone build) |
-| `shared/` | [`sys-mngr-shared`](https://github.com/sppidy/sys-mngr-shared) | Common protocol/types crate |
+| `agent/`  | [`shellfleet-agent`](https://github.com/sppidy/shellfleet-agent)   | Rust daemon installed on managed hosts |
+| `server/` | [`shellfleet-server`](https://github.com/sppidy/shellfleet-server) | Rust/axum control-plane API + WS hub |
+| `web/`    | [`shellfleet-web`](https://github.com/sppidy/shellfleet-web)       | Next.js dashboard (standalone build) |
+| `shared/` | [`shellfleet-shared`](https://github.com/sppidy/shellfleet-shared) | Common protocol/types crate |
 
 PRs should target the submodule repo for the component you're changing.
 Once merged, a maintainer will bump the pointer in the super-repo.
@@ -45,7 +45,7 @@ Before we can merge your contribution, you must agree to the
 
 ### Why a CLA?
 
-sys-manager is published under the **AGPL-3.0** license. The project
+ShellFleet is published under the **AGPL-3.0** license. The project
 also has a planned commercial enterprise edition that includes
 features such as SSO, advanced RBAC, multi-tenancy, secret-manager
 integration, and long-retention audit log.
@@ -127,18 +127,18 @@ CPU% during a representative window).
 
 ## Reporting bugs
 
-Use [GitHub issues](https://github.com/sppidy/sys-manager/issues) with:
+Use [GitHub issues](https://github.com/sppidy/shellfleet/issues) with:
 
-- sys-manager version (or commit SHA)
+- ShellFleet version (or commit SHA)
 - Agent OS + arch (`uname -a`)
-- Server logs around the failure (`docker logs sys-manager-server-1`)
+- Server logs around the failure (`docker logs shellfleet-server-1`)
 - Browser console for UI bugs
 - Steps to reproduce
 
 ## Reporting security issues
 
 **Do not open a public issue for security bugs.** Email the maintainer
-at `sppidytg@gmail.com` with the subject `[security] sys-manager: ...`
+at `sppidytg@gmail.com` with the subject `[security] ShellFleet: ...`
 and we'll coordinate a fix and disclosure timeline.
 
 ## License

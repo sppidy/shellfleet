@@ -1,6 +1,6 @@
-# Helm chart reference — `sys-manager-agent`
+# Helm chart reference — `shellfleet-agent`
 
-Located at [`../helm/sys-manager-agent/`](../helm/sys-manager-agent/).
+Located at [`../helm/shellfleet-agent/`](../helm/shellfleet-agent/).
 Installs the k8s flavor of the agent as a single-replica `Deployment`
 plus a `ServiceAccount` and gated `ClusterRole`s.
 
@@ -10,8 +10,8 @@ RBAC posture, distroless gotchas), see [`KUBERNETES.md`](KUBERNETES.md).
 ## Install
 
 ```bash
-helm install sysmgr ./helm/sys-manager-agent \
-  --namespace sys-manager --create-namespace \
+helm install sysmgr ./helm/shellfleet-agent \
+  --namespace shellfleet --create-namespace \
   --set server.apiUrl=https://dashboard.example.com \
   --set server.wsUrl=wss://dashboard.example.com/agent/ws
 ```
@@ -20,11 +20,11 @@ After install, the agent prints a one-time pairing code on first run.
 Read it from the Pod logs:
 
 ```bash
-kubectl -n sys-manager logs -f deploy/sysmgr-sys-manager-agent
+kubectl -n shellfleet logs -f deploy/sysmgr-shellfleet-agent
 ```
 
 Paste at `/device` in the dashboard. The cluster appears as a new
-agent named `<release>-sys-manager-agent-id`.
+agent named `<release>-shellfleet-agent-id`.
 
 ## Values
 
@@ -39,7 +39,7 @@ agent named `<release>-sys-manager-agent-id`.
 
 | key                          | default                                  |
 | ---------------------------- | ---------------------------------------- |
-| `image.repository`           | `hrbr.sppidy.in/sys-manager/agent-k8s`   |
+| `image.repository`           | `hrbr.sppidy.in/shellfleet/agent-k8s`    |
 | `image.tag`                  | `""` → falls back to `.Chart.appVersion` |
 | `image.pullPolicy`           | `IfNotPresent`                           |
 | `imagePullSecrets`           | `[]`                                     |
@@ -49,7 +49,7 @@ To use your own image, build with the included Dockerfile:
 ```bash
 docker build -f Dockerfile.agent.k8s -t my-registry/agent-k8s:dev .
 docker push my-registry/agent-k8s:dev
-helm upgrade sysmgr ./helm/sys-manager-agent \
+helm upgrade sysmgr ./helm/shellfleet-agent \
   --set image.repository=my-registry/agent-k8s \
   --set image.tag=dev
 ```
@@ -59,14 +59,14 @@ helm upgrade sysmgr ./helm/sys-manager-agent \
 | key                       | default | notes                                                         |
 | ------------------------- | ------- | ------------------------------------------------------------- |
 | `token.existingSecret`    | `""`    | Name of a Secret with key `agent-token.txt`. Mounted ro at    |
-|                           |         | `/etc/sys-manager/agent-token.txt` (subPath) so the rest of   |
+|                           |         | `/etc/shellfleet/agent-token.txt` (subPath) so the rest of    |
 |                           |         | the directory stays writable for runtime state.               |
 
 Two paths:
 
 1. **First install** — leave `token.existingSecret` empty. The agent
    prints a pairing code, you approve it at `/device`, and the
-   issued token lands at `/etc/sys-manager/agent-token` inside the
+   issued token lands at `/etc/shellfleet/agent-token` inside the
    container. **A Pod restart will wipe it.** Promote to a Secret
    for permanence (steps below).
 
@@ -75,17 +75,17 @@ Two paths:
 ```bash
 # After first pairing, capture the token (file is .txt-suffixed
 # inside the container — the agent uses write_token_secure which
-# writes to /etc/sys-manager/agent-token.txt by default):
-kubectl -n sys-manager exec deploy/sysmgr-sys-manager-agent \
-  -- cat /etc/sys-manager/agent-token.txt > /tmp/agent-token.txt
+# writes to /etc/shellfleet/agent-token.txt by default):
+kubectl -n shellfleet exec deploy/sysmgr-shellfleet-agent \
+  -- cat /etc/shellfleet/agent-token.txt > /tmp/agent-token.txt
 
 # Save it as a Secret. The key MUST be `agent-token.txt` so the
 # chart's subPath mount lands at the right path inside the Pod:
-kubectl -n sys-manager create secret generic sysmgr-token \
+kubectl -n shellfleet create secret generic sysmgr-token \
   --from-file=agent-token.txt=/tmp/agent-token.txt
 
 # Re-install with the Secret reference so future restarts pick it up:
-helm upgrade sysmgr ./helm/sys-manager-agent \
+helm upgrade sysmgr ./helm/shellfleet-agent \
   --reuse-values \
   --set token.existingSecret=sysmgr-token
 ```
@@ -130,7 +130,7 @@ one doesn't disturb the others.
 ## Upgrade
 
 ```bash
-helm upgrade sysmgr ./helm/sys-manager-agent \
+helm upgrade sysmgr ./helm/shellfleet-agent \
   --reuse-values \
   --set image.tag=<new-tag>
 ```
@@ -143,8 +143,8 @@ visible effect.
 ## Uninstall
 
 ```bash
-helm uninstall sysmgr -n sys-manager
-kubectl delete namespace sys-manager   # if you used --create-namespace
+helm uninstall sysmgr -n shellfleet
+kubectl delete namespace shellfleet    # if you used --create-namespace
 ```
 
 The dashboard side keeps the agent's record + token. To revoke, visit
@@ -154,7 +154,7 @@ The dashboard side keeps the agent's record + token. To revoke, visit
 
 ```bash
 # Did the agent advertise the k8s capability?
-kubectl -n sys-manager logs deploy/sysmgr-sys-manager-agent \
+kubectl -n shellfleet logs deploy/sysmgr-shellfleet-agent \
   | grep 'agent capabilities'
 # Expect: agent capabilities: ["k8s"]
 # (or with extras if e.g. systemd is reachable from inside the Pod;
@@ -162,7 +162,7 @@ kubectl -n sys-manager logs deploy/sysmgr-sys-manager-agent \
 
 # Did the dashboard register it?
 # In the server log on the dashboard host:
-docker logs sys-manager-server-1 2>&1 \
+docker logs shellfleet-server-1 2>&1 \
   | grep "agent registered.*$(helm list -A -f sysmgr -o json | jq -r '.[].name')"
 ```
 
@@ -177,7 +177,7 @@ identity resolution picked something other than the in-cluster SA.
 Confirm with:
 
 ```bash
-kubectl -n sys-manager exec deploy/sysmgr-sys-manager-agent \
+kubectl -n shellfleet exec deploy/sysmgr-shellfleet-agent \
   -- ls /var/run/secrets/kubernetes.io/serviceaccount/
 ```
 

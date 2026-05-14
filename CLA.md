@@ -1,6 +1,6 @@
 # Individual Contributor License Agreement (CLA)
 
-Thank you for your interest in contributing to **sys-manager** (the
+Thank you for your interest in contributing to **ShellFleet** (the
 "Project"), maintained by **Spurthi Setty** ("the Maintainer").
 
 This Contributor License Agreement ("Agreement") clarifies the

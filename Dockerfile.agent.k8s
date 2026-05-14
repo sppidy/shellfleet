@@ -1,4 +1,4 @@
-# Multi-stage build for the sys-manager-agent k8s flavor.
+# Multi-stage build for the shellfleet-agent k8s flavor.
 # Same source as the host-agent .deb, just with `--features kube` so
 # the binary advertises the `"k8s"` capability and handles the
 # K8sList* / K8sDescribe / K8sLogs* / K8sExec* variants.
@@ -18,7 +18,7 @@ EOF
 
 WORKDIR /src/agent
 RUN cargo build --release --features kube
-RUN strip /src/target/release/sys-manager-agent
+RUN strip /src/target/release/shellfleet-agent
 
 # ─────────────────────────────────────────────────────────────────
 FROM debian:bookworm-slim AS runtime
@@ -27,10 +27,10 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /src/target/release/sys-manager-agent /usr/bin/sys-manager-agent
+COPY --from=builder /src/target/release/shellfleet-agent /usr/bin/shellfleet-agent
 
 # Token directory — pre-create with mode 0700 so the agent can write
 # the bearer token after pairing without touching /etc permissions.
-RUN install -d -m 0700 /etc/sys-manager
+RUN install -d -m 0700 /etc/shellfleet
 
-ENTRYPOINT ["/usr/bin/sys-manager-agent"]
+ENTRYPOINT ["/usr/bin/shellfleet-agent"]

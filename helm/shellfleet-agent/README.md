@@ -1,14 +1,14 @@
-# sys-manager-agent (Helm)
+# shellfleet-agent (Helm)
 
-In-cluster install of the sys-manager k8s agent. Pulls the cluster
+In-cluster install of the ShellFleet k8s agent. Pulls the cluster
 into the dashboard's Kubernetes tab — pods, deployments, services,
 ingresses, PVCs, events, describe, logs, and (opt-in) `kubectl exec`.
 
 ## Quick start
 
 ```bash
-helm install sysmgr ./helm/sys-manager-agent \
-  --namespace sys-manager --create-namespace \
+helm install sysmgr ./helm/shellfleet-agent \
+  --namespace shellfleet --create-namespace \
   --set server.apiUrl=https://dashboard.example.com \
   --set server.wsUrl=wss://dashboard.example.com/agent/ws
 ```
@@ -16,7 +16,7 @@ helm install sysmgr ./helm/sys-manager-agent \
 Pair on first run by tailing the Pod logs:
 
 ```bash
-kubectl -n sys-manager logs -f deploy/sysmgr-sys-manager-agent
+kubectl -n shellfleet logs -f deploy/sysmgr-shellfleet-agent
 ```
 
 Paste the printed code at `/device` in the dashboard. The agent
@@ -36,14 +36,14 @@ apply handlers yet, that lands in slice 6 / EE multi-cluster.
 
 ## Image
 
-CI publishes multi-arch images to `hrbr.sppidy.in/sys-manager/agent-k8s`
+CI publishes multi-arch images to `hrbr.sppidy.in/shellfleet/agent-k8s`
 on every k8s-related commit. The chart's default image points there.
 
 To roll your own:
 
 ```bash
 docker build -f Dockerfile.agent.k8s -t my-registry/agent-k8s:latest .
-helm upgrade sysmgr ./helm/sys-manager-agent \
+helm upgrade sysmgr ./helm/shellfleet-agent \
   --set image.repository=my-registry/agent-k8s \
   --set image.tag=latest
 ```

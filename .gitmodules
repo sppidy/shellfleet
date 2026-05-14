@@ -1,12 +1,12 @@
 [submodule "web"]
 	path = web
-	url = https://github.com/sppidy/sys-mngr-web
+	url = https://github.com/sppidy/shellfleet-web
 [submodule "shared"]
 	path = shared
-	url = https://github.com/sppidy/sys-mngr-shared
+	url = https://github.com/sppidy/shellfleet-shared
 [submodule "server"]
 	path = server
-	url = https://github.com/sppidy/sys-mngr-server
+	url = https://github.com/sppidy/shellfleet-server
 [submodule "agent"]
 	path = agent
-	url = https://github.com/sppidy/sys-mngr-agent
+	url = https://github.com/sppidy/shellfleet-agent

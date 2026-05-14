@@ -1,4 +1,4 @@
-# sys-manager-agent — Helm values
+# shellfleet-agent — Helm values
 #
 # CE chart. The defaults install a read-only agent that can list pods,
 # describe resources, and tail logs. Flip `rbac.exec` for `kubectl exec`,
@@ -9,7 +9,7 @@
 # `docker build -f Dockerfile.agent.k8s` at the super-repo root and
 # point this elsewhere if you'd rather host it yourself.
 image:
-  repository: hrbr.sppidy.in/sys-manager/agent-k8s
+  repository: hrbr.sppidy.in/shellfleet/agent-k8s
   tag: ""           # default to .Chart.appVersion (see Chart.yaml)
   pullPolicy: IfNotPresent
 imagePullSecrets: []
@@ -27,14 +27,14 @@ server:
 #      `existingSecret` empty and `token` unset — the agent will print a
 #      one-time pairing code on first start. `kubectl logs deploy/<name>`
 #      to read it, then paste at `/device` in the dashboard. The agent
-#      will write the issued token back to /etc/sys-manager/agent-token.txt
+#      will write the issued token back to /etc/shellfleet/agent-token.txt
 #      inside the container (lost on Pod restart unless you `--from-literal`
 #      it back into the secret on subsequent installs).
 #
 #   2. Pre-existing token. Create a Secret with key `agent-token.txt`, set
 #      `existingSecret` to its name, and the chart will mount it at
-#      /etc/sys-manager/agent-token.txt (read-only) via subPath so it
-#      coexists with the writable /etc/sys-manager directory.
+#      /etc/shellfleet/agent-token.txt (read-only) via subPath so it
+#      coexists with the writable /etc/shellfleet directory.
 token:
   existingSecret: ""           # name of an existing Secret with key `agent-token.txt`
   # value: ""                  # ONLY if you accept committing it to values
@@ -83,7 +83,7 @@ extraEnvFrom: []
 
 # Pod-level securityContext. The defaults run the agent as a
 # non-root user (UID 65532, the distroless `nonroot` convention)
-# and let the kubelet chown the /etc/sys-manager emptyDir to that
+# and let the kubelet chown the /etc/shellfleet emptyDir to that
 # group so the agent can write its pairing token there. Override
 # the whole map if you need a different UID/GID for your image.
 podSecurityContext:
@@ -96,8 +96,8 @@ podSecurityContext:
 
 # Container-level securityContext. Defaults strip caps and lock
 # the rootfs read-only; the agent only writes to the
-# /etc/sys-manager emptyDir defined in templates/deployment.yaml.
-# If your image bakes in different ownership for /etc/sys-manager,
+# /etc/shellfleet emptyDir defined in templates/deployment.yaml.
+# If your image bakes in different ownership for /etc/shellfleet,
 # you can flip readOnlyRootFilesystem off here.
 containerSecurityContext:
   allowPrivilegeEscalation: false

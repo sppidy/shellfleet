@@ -36,38 +36,38 @@ operator workflow.
 
 ### A) In-cluster Pod (recommended)
 
-A Helm chart in [`helm/sys-manager-agent/`](../helm/sys-manager-agent/)
+A Helm chart in [`helm/shellfleet-agent/`](../helm/shellfleet-agent/)
 deploys the agent as a single-replica `Deployment` with a dedicated
 `ServiceAccount` and a read-only `ClusterRole`. Pairing happens via
 the existing device-auth flow — the Pod prints a code at first run,
 operator pastes it at `/device`.
 
 ```bash
-helm install sysmgr ./helm/sys-manager-agent \
-  --namespace sys-manager --create-namespace \
+helm install sysmgr ./helm/shellfleet-agent \
+  --namespace shellfleet --create-namespace \
   --set server.apiUrl=https://dashboard.example.com \
   --set server.wsUrl=wss://dashboard.example.com/agent/ws
 
-kubectl -n sys-manager logs -f deploy/sysmgr-sys-manager-agent
+kubectl -n shellfleet logs -f deploy/sysmgr-shellfleet-agent
 ```
 
 See [`HELM.md`](HELM.md) for every configurable value.
 
 ### B) Out-of-cluster, on a Linux host
 
-Install the `sys-manager-agent-k8s` `.deb` on a Linux host that has
+Install the `shellfleet-agent-k8s` `.deb` on a Linux host that has
 access to your kube-apiserver, point `KUBECONFIG` at a credential,
 and the agent treats the cluster as just another target.
 
 ```bash
-sudo apt install sys-manager-agent-k8s
-echo 'KUBECONFIG=/etc/sys-manager/kubeconfig' \
-  | sudo tee -a /etc/sys-manager/env
-sudo install -m 0640 your-kubeconfig /etc/sys-manager/kubeconfig
-sudo systemctl restart sys-manager-agent
+sudo apt install shellfleet-agent-k8s
+echo 'KUBECONFIG=/etc/shellfleet/kubeconfig' \
+  | sudo tee -a /etc/shellfleet/env
+sudo install -m 0640 your-kubeconfig /etc/shellfleet/kubeconfig
+sudo systemctl restart shellfleet-agent
 ```
 
-The `.deb` is mutually exclusive with the standard `sys-manager-agent`
+The `.deb` is mutually exclusive with the standard `shellfleet-agent`
 package (Conflicts/Provides). Install one or the other; you can't
 have both at the same time on the same host.
 
@@ -76,7 +76,7 @@ have both at the same time on the same host.
 CE defaults are read-mostly. Two flags in the Helm chart escalate:
 
 ```bash
-helm upgrade sysmgr ./helm/sys-manager-agent \
+helm upgrade sysmgr ./helm/shellfleet-agent \
   --set rbac.exec=true        # enables pod exec / attach / portforward
   # --set rbac.write=true     # reserved for slice 6 (apply / scale)
 ```
@@ -92,7 +92,7 @@ A cluster-admin kubeconfig works but is overkill for read-mostly.
 
 The agent calls `kube::Client::try_default()`, which falls through:
 
-1. `KUBECONFIG` env var (set in `/etc/sys-manager/env` for `.deb`
+1. `KUBECONFIG` env var (set in `/etc/shellfleet/env` for `.deb`
    installs, or via the Helm chart's `extraEnv`).
 2. `~/.kube/config`.
 3. In-cluster `ServiceAccount` token at
@@ -118,7 +118,7 @@ need #1 or #2.
   exec modal renders `[ session ended ]` immediately. Not a bug —
   use `kubectl debug` upstream when you need a shell on those.
 - **Token persistence in the Pod.** First-run pairing writes to
-  `/etc/sys-manager/agent-token` inside the container. A Pod
+  `/etc/shellfleet/agent-token` inside the container. A Pod
   restart wipes it. Promote to a `Secret` after first pair (see
   `HELM.md`).
 
@@ -130,7 +130,7 @@ need #1 or #2.
   diff.
 - Namespace-scoped RBAC overlays — operator A sees only namespace
   X, operator B sees only namespace Y.
-- Real Operator (CRD + controller) for "install sys-manager into
+- Real Operator (CRD + controller) for "install ShellFleet into
   these N clusters from one declaration".
 - AI log analysis on top of the existing K8sLogs stream.
 

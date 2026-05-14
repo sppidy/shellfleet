@@ -1,6 +1,6 @@
 name: Harbor multi-arch images
 
-# Builds sys-manager-{server,web,agent} natively on amd64 + arm64 runners,
+# Builds shellfleet-{server,web,agent} natively on amd64 + arm64 runners,
 # pushes per-arch tags to Harbor over Tailscale (bypassing Cloudflare's
 # 100 MB upload cap on hrbr.sppidy.in), and assembles a multi-arch
 # manifest via `docker buildx imagetools create`.
@@ -25,7 +25,7 @@ permissions:
 
 env:
   HARBOR_HOST: hrbr.sppidy.in
-  HARBOR_PROJECT: sys-manager
+  HARBOR_PROJECT: shellfleet
   # Tailnet IP of the registry host. Stored as a secret so the
   # public repo doesn't reveal the tailnet shape.
   HARBOR_TS_IP: ${{ secrets.HARBOR_TS_IP }}

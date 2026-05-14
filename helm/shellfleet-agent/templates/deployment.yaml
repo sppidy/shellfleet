@@ -1,9 +1,9 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "sys-manager-agent.fullname" . }}
+  name: {{ include "shellfleet-agent.fullname" . }}
   labels:
-    {{- include "sys-manager-agent.labels" . | nindent 4 }}
+    {{- include "shellfleet-agent.labels" . | nindent 4 }}
 spec:
   # Singleton — multi-replica gives no benefit, the agent multiplexes
   # requests on a single WS connection back to the dashboard.
@@ -12,11 +12,11 @@ spec:
     type: Recreate
   selector:
     matchLabels:
-      {{- include "sys-manager-agent.selectorLabels" . | nindent 6 }}
+      {{- include "shellfleet-agent.selectorLabels" . | nindent 6 }}
   template:
     metadata:
       labels:
-        {{- include "sys-manager-agent.selectorLabels" . | nindent 8 }}
+        {{- include "shellfleet-agent.selectorLabels" . | nindent 8 }}
         {{- with .Values.podLabels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -28,17 +28,17 @@ spec:
       # Stable hostname so the agent's hostname-derived agent_id
       # doesn't change on every Pod recreate (default would be the
       # mutable pod name with the deployment hash). Lets a fixed
-      # Prometheus `instance` label, sys-manager UI bookmarks, and
+      # Prometheus `instance` label, ShellFleet UI bookmarks, and
       # any cross-references in the dashboard survive rollouts.
-      hostname: {{ include "sys-manager-agent.fullname" . }}
-      subdomain: {{ include "sys-manager-agent.fullname" . }}
-      serviceAccountName: {{ include "sys-manager-agent.serviceAccountName" . }}
+      hostname: {{ include "shellfleet-agent.fullname" . }}
+      subdomain: {{ include "shellfleet-agent.fullname" . }}
+      serviceAccountName: {{ include "shellfleet-agent.serviceAccountName" . }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       # Pod-level securityContext. fsGroup makes the emptyDir at
-      # /etc/sys-manager owned by `runAsGroup` so the non-root agent
+      # /etc/shellfleet owned by `runAsGroup` so the non-root agent
       # can write its pairing token there. Override per-deploy via
       # `.Values.podSecurityContext`.
       securityContext:
@@ -60,16 +60,16 @@ spec:
             {{- toYaml . | nindent 12 }}
           {{- end }}
           volumeMounts:
-            # Writable scratch over /etc/sys-manager. With
+            # Writable scratch over /etc/shellfleet. With
             # readOnlyRootFilesystem: true the rest of the rootfs
             # is read-only; this is where device-auth pairing
             # writes the issued bearer token (lost on Pod restart
             # unless promoted into a Secret + existingSecret).
             - name: agent-state
-              mountPath: /etc/sys-manager
+              mountPath: /etc/shellfleet
             {{- if .Values.token.existingSecret }}
             - name: agent-token
-              mountPath: /etc/sys-manager/agent-token.txt
+              mountPath: /etc/shellfleet/agent-token.txt
               subPath: agent-token.txt
               readOnly: true
             {{- end }}

@@ -1,6 +1,6 @@
-# sys-manager — metrics plugin (CE)
+# ShellFleet — metrics plugin (CE)
 #
-# Drop a real version of this file at /etc/sys-manager/metrics.yaml
+# Drop a real version of this file at /etc/shellfleet/metrics.yaml
 # (or wherever METRICS_CONFIG_PATH points) and the dashboard's per-
 # agent "Metrics" tab will render the panels you define here.
 #
@@ -19,7 +19,7 @@ prometheus:
   # network). Comment out what you don't use.
   # bearer_token: ${PROMETHEUS_BEARER}
   # basic_auth:
-  #   username: sys-manager
+  #   username: shellfleet
   #   password: ${PROMETHEUS_PASSWORD}
 
   # tls:
@@ -85,7 +85,7 @@ panels:
       sum by (device) (rate(node_network_receive_bytes_total{instance="{instance}",device!~"lo|veth.*|docker.*|br-.*"}[1m]))
 
   # Requires `process_exporter` (see docs/METRICS.md). Drops in the
-  # "persistent process metrics" answer without sys-manager storing
+  # "persistent process metrics" answer without ShellFleet storing
   # any data — your Prometheus already does, with retention.
   - id: proc_cpu_top10
     title: Top processes by CPU (1m rate)

@@ -1,4 +1,4 @@
-# sys-manager
+# ShellFleet
 
 A self-hosted, terminal-flavoured fleet dashboard. One Rust agent per host (or
 Pod), one axum/SQLite server, one Next.js dashboard. Manages systemd services,
@@ -7,20 +7,20 @@ ingresses / pvcs / events + describe + live-tail logs + pod exec), apt updates,
 health probes, backups, fan-out commands, and remote shells across every host
 you connect.
 
-Apt repo: <https://sys-mgr-repo.sppidy.in/>  ·  Container images: <https://hrbr.sppidy.in/sys-manager>
+Apt repo: <https://sys-mgr-repo.sppidy.in/>  ·  Container images: <https://hrbr.sppidy.in/shellfleet>
 
 > The agent's design rule is **be cheap when nobody's looking**: ~4 MB RSS at
 > idle, no background polling for stats / containers / images / networks /
 > volumes / stacks. The dashboard issuing a request is the only thing that
 > triggers those code paths. See the "Idle cost" section below.
 >
-> For metrics, sys-manager **doesn't compete with Prometheus — it delegates
+> For metrics, ShellFleet **doesn't compete with Prometheus — it delegates
 > to it**. The agent doesn't scrape, doesn't keep a TSDB, and doesn't run an
 > exporter. If you want CPU / memory / disk history, point the dashboard at
 > your existing Prometheus via the metrics plugin (named panel templates in
 > YAML, queried on demand) and the per-agent **Metrics** tab renders the
 > result. No free-form PromQL from the browser, no metric storage in
-> sys-manager. See [`docs/METRICS.md`](docs/METRICS.md).
+> ShellFleet. See [`docs/METRICS.md`](docs/METRICS.md).
 
 ## Quick start
 
@@ -43,7 +43,7 @@ graph TD
     subgraph compose["docker compose on host VM"]
         WEB["Next.js dashboard<br/><i>web, port 3000</i>"]
         SERVER["axum server<br/><i>server, port 8080</i>"]
-        DB[("SQLite, WAL<br/>/data/sys-manager.db")]
+        DB[("SQLite, WAL<br/>/data/shellfleet.db")]
         SERVER <--> DB
     end
 
@@ -51,7 +51,7 @@ graph TD
     CF --> SERVER
     WEB -- "wss /ui/ws" --> SERVER
 
-    subgraph agents["sys-manager-agent · each host · .deb via apt repo"]
+    subgraph agents["shellfleet-agent · each host · .deb via apt repo"]
         A1["systemd service control + system stats"]
         A2["interactive PTY — host shell + per-container exec"]
         A3["config file read/write"]
@@ -79,10 +79,10 @@ This superproject pins four submodules — each is its own GitHub repo:
 
 | Path     | Repo                              | Stack       | Purpose                                                  |
 |----------|-----------------------------------|-------------|----------------------------------------------------------|
-| `web/`   | `sppidy/sys-mngr-web`             | Next.js 16  | Dashboard SPA — sidebar, per-agent tabs, command palette |
-| `server/`| `sppidy/sys-mngr-server`          | axum + SQLx | WS hub, REST API, GitHub OAuth, SQLite store at `/data`  |
-| `agent/` | `sppidy/sys-mngr-agent`           | Rust + Tokio| Per-host daemon. Shipped as a `.deb`                     |
-| `shared/`| `sppidy/sys-mngr-shared`          | Rust crate  | Wire-format `Message` enum + `PROTOCOL_VERSION`          |
+| `web/`   | `sppidy/shellfleet-web`           | Next.js 16  | Dashboard SPA — sidebar, per-agent tabs, command palette |
+| `server/`| `sppidy/shellfleet-server`        | axum + SQLx | WS hub, REST API, GitHub OAuth, SQLite store at `/data`  |
+| `agent/` | `sppidy/shellfleet-agent`         | Rust + Tokio| Per-host daemon. Shipped as a `.deb`                     |
+| `shared/`| `sppidy/shellfleet-shared`        | Rust crate  | Wire-format `Message` enum + `PROTOCOL_VERSION`          |
 
 Top-level files in this superproject:
 
@@ -100,7 +100,7 @@ Top-level files in this superproject:
 | `docs/KUBERNETES.md`       | K8s support — install paths, RBAC posture, limitations              |
 | `docs/HELM.md`             | Helm chart reference — every value + upgrade / uninstall            |
 | `docs/WEBHOOKS.md`         | Outbound webhook fan-out — events, sinks, env-var matrix            |
-| `helm/sys-manager-agent/`  | In-cluster install chart for the k8s flavor of the agent            |
+| `helm/shellfleet-agent/`   | In-cluster install chart for the k8s flavor of the agent            |
 | `Dockerfile.agent.k8s`     | Build the k8s-flavor agent image (used by the Helm chart)           |
 | `CONTRIBUTING.md`, `CLA.md`| Contribution flow + Individual Contributor License Agreement        |
 
@@ -135,7 +135,7 @@ The `.env` on the docker host carries:
 | `BACKUPS_ENABLED`                                | optional | `true` to mount `/api/backups/*` and run the backup scheduler                |
 | `WS_ALLOWED_ORIGINS`                             | optional | Extra origins allowed on `/ui/ws` (UI_URL is always allowed)                 |
 | `UPDATE_WEBHOOK_URL` / `UPDATE_WEBHOOK_FORMAT`   | optional | Outbound webhook on `update_window.result`. Format: `json` (default) or `slack`|
-| `METRICS_CONFIG_PATH`                            | optional | Path to the metrics plugin YAML. Default `/etc/sys-manager/metrics.yaml`. Missing/invalid → plugin disabled, Metrics tab hidden |
+| `METRICS_CONFIG_PATH`                            | optional | Path to the metrics plugin YAML. Default `/etc/shellfleet/metrics.yaml`. Missing/invalid → plugin disabled, Metrics tab hidden |
 
 ## Connecting an agent
 
@@ -144,11 +144,11 @@ The `.env` on the docker host carries:
 
    ```bash
    sudo install -m 0755 -d /etc/apt/keyrings
-   curl -fsSL https://sys-mgr-repo.sppidy.in/sys-manager.gpg \
-     | sudo tee /etc/apt/keyrings/sys-manager.asc > /dev/null
-   echo 'deb [signed-by=/etc/apt/keyrings/sys-manager.asc] https://sys-mgr-repo.sppidy.in stable main' \
-     | sudo tee /etc/apt/sources.list.d/sys-manager.list
-   sudo apt-get update && sudo apt-get install -y sys-manager-agent
+   curl -fsSL https://sys-mgr-repo.sppidy.in/shellfleet.gpg \
+     | sudo tee /etc/apt/keyrings/shellfleet.asc > /dev/null
+   echo 'deb [signed-by=/etc/apt/keyrings/shellfleet.asc] https://sys-mgr-repo.sppidy.in stable main' \
+     | sudo tee /etc/apt/sources.list.d/shellfleet.list
+   sudo apt-get update && sudo apt-get install -y shellfleet-agent
    ```
 
    GPG fingerprint: `9181 1FCB AB45 B996 B40E AD1E C6E2 9AC2 52C7 4AEE`.
@@ -156,13 +156,13 @@ The `.env` on the docker host carries:
 2. **Pair it.** The agent prints a one-time pairing code on first boot:
 
    ```bash
-   sudo journalctl -u sys-manager-agent -n 20
+   sudo journalctl -u shellfleet-agent -n 20
    ```
 
    Open `/device` on the dashboard, sign in with GitHub (must be in the
    `ALLOWED_GITHUB_USERS` allowlist), paste the 8-character code, and
    approve. The agent stores the issued bearer token at
-   `/etc/sys-manager/agent-token.txt` and reconnects automatically.
+   `/etc/shellfleet/agent-token.txt` and reconnects automatically.
 
 3. **Roll updates** by triggering the CI build and `apt-get install -y` on
    each host:
@@ -172,8 +172,8 @@ The `.env` on the docker host carries:
    for h in <host-1> <host-2> …; do
      ssh -n root@$h "rm -rf /var/lib/apt/lists/sys-mgr-repo.sppidy.in_* 2>/dev/null; \
                      apt-get update -qq && \
-                     DEBIAN_FRONTEND=noninteractive apt-get install -y sys-manager-agent && \
-                     systemctl is-active sys-manager-agent"
+                     DEBIAN_FRONTEND=noninteractive apt-get install -y shellfleet-agent && \
+                     systemctl is-active shellfleet-agent"
    done
    ```
 
@@ -200,15 +200,15 @@ systemd.
 
 ## Metrics
 
-sys-manager doesn't store time-series. If you want persistent CPU / memory
+ShellFleet doesn't store time-series. If you want persistent CPU / memory
 / disk / process history per host, **bring your own Prometheus** and point
 the dashboard at it.
 
 ```yaml
-# /etc/sys-manager/metrics.yaml — minimal
+# /etc/shellfleet/metrics.yaml — minimal
 prometheus:
   url: https://prometheus.your-domain.example/api/v1
-  basic_auth: { username: sys-manager, password: ${PROMETHEUS_PASSWORD} }
+  basic_auth: { username: shellfleet, password: ${PROMETHEUS_PASSWORD} }
 
 panels:
   - id: cpu_percent
@@ -235,7 +235,7 @@ config is at [`metrics.example.yaml`](metrics.example.yaml).
 
 ## Kubernetes
 
-The `sys-manager-agent-k8s` flavor talks to a kube-apiserver instead of (or
+The `shellfleet-agent-k8s` flavor talks to a kube-apiserver instead of (or
 alongside) the host's docker / systemd. One agent = one cluster. Read-mostly:
 list pods / deployments / services / ingresses / pvcs / events, describe any
 of them as YAML, live-tail logs from any pod, and (opt-in) `kubectl exec`
@@ -245,14 +245,14 @@ Two install shapes:
 
 ```bash
 # In-cluster (recommended) — Helm chart deploys a Deployment + ClusterRole
-helm install sysmgr ./helm/sys-manager-agent \
-  --namespace sys-manager --create-namespace \
+helm install sysmgr ./helm/shellfleet-agent \
+  --namespace shellfleet --create-namespace \
   --set server.apiUrl=https://dashboard.example.com \
   --set server.wsUrl=wss://dashboard.example.com/agent/ws
 
 # Out-of-cluster — .deb on a Linux host with KUBECONFIG
-sudo apt install sys-manager-agent-k8s
-echo 'KUBECONFIG=/etc/sys-manager/kubeconfig' | sudo tee -a /etc/sys-manager/env
+sudo apt install shellfleet-agent-k8s
+echo 'KUBECONFIG=/etc/shellfleet/kubeconfig' | sudo tee -a /etc/shellfleet/env
 ```
 
 CE ships single-cluster + read + exec/logs. Multi-cluster federation, Helm
@@ -304,13 +304,13 @@ require an agent rollout.
   `UI_URL` is always allowed, `WS_ALLOWED_ORIGINS` adds extras.
 - **Apt repo.** ed25519-signed `Release` + `InRelease`. The clearsigned
   `InRelease` is verified by `apt` against the public key piped into
-  `/etc/apt/keyrings/sys-manager.asc`.
+  `/etc/apt/keyrings/shellfleet.asc`.
 - **OAuth state CSRF.** Random per-flow state in an HttpOnly cookie,
   verified on `/auth/callback`. Defeats the attack where a victim is
   lured into hitting the callback with the attacker's authorization
   code.
 - **At-rest encryption.** TOTP secrets and recovery-code hashes are
-  encrypted with AES-256-GCM. The key is `SHA-256("sys-manager-aead-v1"
+  encrypted with AES-256-GCM. The key is `SHA-256("shellfleet-aead-v1"
   || JWT_SECRET)`, so a DB-only backup leak (without env vars) yields
   no useful material. Format on disk: `v1:<base64-no-pad nonce>.<base64-no-pad ct>`.
 - **Brute-force defence.** Per-login MFA throttle locks after 10 bad
@@ -379,7 +379,7 @@ That's it. There is no continuous polling for stats, container lists,
 image lists, network/volume/stack lists, or prune previews. **Metrics
 collection is intentionally out of scope** — node_exporter (or whatever
 exporter you're using) runs as its own process, scraped by your own
-Prometheus, queried by the dashboard server on demand. The sys-manager
+Prometheus, queried by the dashboard server on demand. The ShellFleet
 agent itself is uninvolved. When no UI is connected, the agent's average
 CPU is ≈ 0%. Idle RSS measured at ~4 MB.
 
@@ -396,7 +396,7 @@ ssh <user>@<docker-host> \
 
 # Inspect approved agent tokens
 ssh <user>@<docker-host> \
-  "docker exec sys-manager-server-1 sqlite3 /data/sys-manager.db \
+  "docker exec shellfleet-server-1 sqlite3 /data/shellfleet.db \
     'SELECT hostname, datetime(created_at,\"unixepoch\"), datetime(last_seen,\"unixepoch\") FROM tokens'"
 
 # Build + roll a new agent .deb
@@ -411,7 +411,7 @@ first — it covers the dev setup, the signed-commit requirement on
 first PR via [cla-assistant.io](https://cla-assistant.io/).
 
 Security issues should NOT be filed as public GitHub issues. Email
-`sppidytg@gmail.com` with the subject `[security] sys-manager: …`
+`sppidytg@gmail.com` with the subject `[security] ShellFleet: …`
 and we'll coordinate a fix and disclosure timeline.
 
 ## License

@@ -1,6 +1,6 @@
 # Metrics plugin (CE)
 
-sys-manager doesn't store time-series — that's Prometheus's job.
+ShellFleet doesn't store time-series — that's Prometheus's job.
 The metrics plugin turns the dashboard into a thin renderer for
 **your existing Prometheus**: configure named panel templates in
 YAML, pick which ones show up on the per-agent Metrics tab, and the
@@ -8,7 +8,7 @@ server queries Prometheus on demand with the agent's instance label
 substituted in.
 
 This is the answer to "I want persistent process / CPU / memory /
-disk metrics" without sys-manager turning into a TSDB.
+disk metrics" without ShellFleet turning into a TSDB.
 
 ## CE / EE split
 
@@ -22,7 +22,7 @@ disk metrics" without sys-manager turning into a TSDB.
 ## Configuration
 
 The plugin reads YAML from the path in `METRICS_CONFIG_PATH` (default
-`/etc/sys-manager/metrics.yaml`). On a fresh deploy, copy
+`/etc/shellfleet/metrics.yaml`). On a fresh deploy, copy
 [`../metrics.example.yaml`](../metrics.example.yaml) to that path,
 edit the Prometheus URL + auth, and restart the server. If the file
 is missing or invalid the plugin stays disabled — the dashboard
@@ -35,7 +35,7 @@ prometheus:
   url: https://prometheus.your-domain.example/api/v1
   bearer_token: ${PROMETHEUS_BEARER}    # optional
   basic_auth:                            # optional
-    username: sys-manager
+    username: shellfleet
     password: ${PROMETHEUS_PASSWORD}
   tls:
     insecure_skip_verify: false          # default false
@@ -61,7 +61,7 @@ upstream:
 
 | Placeholder    | Becomes |
 |----------------|---------|
-| `{agent_id}`   | the raw sys-manager agent id, e.g. `host-a-id` |
+| `{agent_id}`   | the raw ShellFleet agent id, e.g. `host-a-id` |
 | `{instance}`   | resolved from `agent_instance_map` if set, else `agent_id` with the trailing `-id` stripped |
 | `{hostname}`   | alias for `{instance}` |
 
@@ -122,10 +122,10 @@ scrape_configs:
           - host-b:9256
           - host-c:9256
         labels:
-          instance: <hostname>   # match your sys-manager agent label
+          instance: <hostname>   # match your ShellFleet agent label
 ```
 
-### 3. Add panels to `/etc/sys-manager/metrics.yaml`
+### 3. Add panels to `/etc/shellfleet/metrics.yaml`
 
 ```yaml
 panels:
@@ -183,7 +183,7 @@ The hard cap on points returned is 5,000 per series.
 
 ## Things this plugin deliberately doesn't do
 
-- **Alerting.** Prometheus's job. sys-manager's health probes cover
+- **Alerting.** Prometheus's job. ShellFleet's health probes cover
   the "agent state" alert use case; let your Prometheus + Alertmanager
   handle metrics-based alerts.
 - **Writes.** Read-only. There is no `/api/metrics/push` or similar.
@@ -193,7 +193,7 @@ The hard cap on points returned is 5,000 per series.
 
 ## Disabling the plugin
 
-Just delete `/etc/sys-manager/metrics.yaml` (or unset the env var)
+Just delete `/etc/shellfleet/metrics.yaml` (or unset the env var)
 and restart the server. The dashboard's `/api/metrics/panels`
 endpoint returns `{enabled: false, panels: []}` and the Metrics tab
 disappears from the per-agent view.

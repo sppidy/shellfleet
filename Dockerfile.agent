@@ -7,5 +7,5 @@ FROM debian:bookworm-slim
 WORKDIR /app
 # Install systemd, dbus, and bash (needed for portable-pty and systemctl commands)
 RUN apt-get update && apt-get install -y systemd dbus bash && rm -rf /var/lib/apt/lists/*
-COPY --from=builder /usr/src/app/target/release/sys-manager-agent /app/agent
+COPY --from=builder /usr/src/app/target/release/shellfleet-agent /app/agent
 CMD ["./agent"]

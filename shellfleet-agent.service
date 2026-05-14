@@ -1,5 +1,5 @@
 [Unit]
-Description=Sys-Manager Agent
+Description=ShellFleet Agent
 After=network-online.target docker.service k3s.service
 Wants=network-online.target
 
@@ -13,9 +13,9 @@ Group=root
 ExecStart=/usr/local/bin/agent-x86_64-linux
 
 # Ensure the agent has somewhere to write its token safely
-StateDirectory=sys-manager
+StateDirectory=shellfleet
 # Environment config file if you need to override the default server URL
-EnvironmentFile=-/etc/sys-manager/env
+EnvironmentFile=-/etc/shellfleet/env
 
 Restart=on-failure
 RestartSec=5s

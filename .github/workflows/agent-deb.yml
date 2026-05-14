@@ -41,7 +41,7 @@ jobs:
             runner: ubuntu-24.04-arm
           # k8s flavor — `--features kube` adds kube-rs + k8s-openapi
           # (~2 MB of crypto deps). Cargo-deb variant rewrites the
-          # package name to sys-manager-agent-k8s and sets Conflicts /
+          # package name to shellfleet-agent-k8s and sets Conflicts /
           # Provides / Replaces against the standard package.
           - flavor: k8s
             arch: amd64
@@ -129,7 +129,7 @@ jobs:
       - name: Upload .deb artifact
         uses: actions/upload-artifact@v4
         with:
-          name: sys-manager-agent-deb-${{ matrix.flavor }}-${{ matrix.arch }}
+          name: shellfleet-agent-deb-${{ matrix.flavor }}-${{ matrix.arch }}
           path: target/debian/*.deb
           if-no-files-found: error
 
@@ -176,19 +176,19 @@ jobs:
           cat > pages/index.html <<'HTML'
           <!doctype html>
           <meta charset="utf-8">
-          <title>sys-manager apt repo</title>
+          <title>ShellFleet apt repo</title>
           <style>body{font:14px/1.5 system-ui,sans-serif;max-width:720px;margin:3rem auto;padding:0 1rem;color:#222}code,pre{font:13px/1.5 ui-monospace,monospace;background:#f4f4f5;padding:0.1rem 0.3rem;border-radius:3px}pre{padding:1rem;overflow-x:auto}</style>
-          <h1>sys-manager apt repo</h1>
+          <h1>ShellFleet apt repo</h1>
           <p>Signed apt repo, multi-arch (amd64 + arm64). Add it to your sources:</p>
           <pre>sudo install -d -m 0755 /etc/apt/keyrings
-          curl -fsSL https://sys-mgr-repo.sppidy.in/sys-manager.gpg \
-            | sudo tee /etc/apt/keyrings/sys-manager.asc &gt; /dev/null
-          echo "deb [signed-by=/etc/apt/keyrings/sys-manager.asc] https://sys-mgr-repo.sppidy.in stable main" \
-            | sudo tee /etc/apt/sources.list.d/sys-manager.list
+          curl -fsSL https://sys-mgr-repo.sppidy.in/shellfleet.gpg \
+            | sudo tee /etc/apt/keyrings/shellfleet.asc &gt; /dev/null
+          echo "deb [signed-by=/etc/apt/keyrings/shellfleet.asc] https://sys-mgr-repo.sppidy.in stable main" \
+            | sudo tee /etc/apt/sources.list.d/shellfleet.list
           sudo apt update
-          sudo apt install sys-manager-agent</pre>
+          sudo apt install shellfleet-agent</pre>
           <p>Signing key fingerprint: <code>9181 1FCB AB45 B996 B40E AD1E C6E2 9AC2 52C7 4AEE</code>.</p>
-          <p>See <a href="https://github.com/sppidy/sys-manager/blob/main/INSTALL.md">INSTALL.md</a> for full setup.</p>
+          <p>See <a href="https://github.com/sppidy/shellfleet/blob/main/INSTALL.md">INSTALL.md</a> for full setup.</p>
           HTML
 
       - name: Download all .deb artifacts
@@ -197,7 +197,7 @@ jobs:
           # No `name:` filter → grabs every artifact uploaded by the
           # build matrix. Pattern grabs both flavors and both arches
           # into a single tree, then we sort by arch below.
-          pattern: sys-manager-agent-deb-*
+          pattern: shellfleet-agent-deb-*
           path: incoming
           merge-multiple: true
 
@@ -220,10 +220,10 @@ jobs:
           for f in incoming/*.deb; do
             base="$(basename "$f")"
             case "$base" in
-              sys-manager-agent_*_amd64.deb \
-              | sys-manager-agent_*_arm64.deb \
-              | sys-manager-agent-k8s_*_amd64.deb \
-              | sys-manager-agent-k8s_*_arm64.deb)
+              shellfleet-agent_*_amd64.deb \
+              | shellfleet-agent_*_arm64.deb \
+              | shellfleet-agent-k8s_*_amd64.deb \
+              | shellfleet-agent-k8s_*_arm64.deb)
                 cp "$f" "$REPO/pool/$COMP/"
                 ;;
               *)
@@ -235,11 +235,11 @@ jobs:
 
           # Trim old revisions per package + arch — keep the highest 5
           # of each so the pool doesn't grow unbounded across CI runs.
-          # Both sys-manager-agent and sys-manager-agent-k8s are tracked
+          # Both shellfleet-agent and shellfleet-agent-k8s are tracked
           # separately.
           (
             cd "$REPO/pool/$COMP"
-            for pkg in sys-manager-agent sys-manager-agent-k8s; do
+            for pkg in shellfleet-agent shellfleet-agent-k8s; do
               for arch in amd64 arm64; do
                 ls -1 ${pkg}_*_${arch}.deb 2>/dev/null \
                   | sort -V \
@@ -259,8 +259,8 @@ jobs:
               gzip -kf9 "dists/$DIST/$COMP/binary-$arch/Packages"
             done
             cat > /tmp/apt-ftparchive.conf <<'EOF'
-          APT::FTPArchive::Release::Origin "sys-manager";
-          APT::FTPArchive::Release::Label "sys-manager";
+          APT::FTPArchive::Release::Origin "shellfleet";
+          APT::FTPArchive::Release::Label "shellfleet";
           APT::FTPArchive::Release::Suite "stable";
           APT::FTPArchive::Release::Codename "stable";
           APT::FTPArchive::Release::Components "main";
@@ -287,7 +287,7 @@ jobs:
               ${APT_GPG_PASSPHRASE:+--passphrase "$APT_GPG_PASSPHRASE"} \
               -u "$KEYID" --clearsign \
               -o pages/dists/stable/InRelease pages/dists/stable/Release
-          gpg --armor --export "$KEYID" > pages/sys-manager.gpg
+          gpg --armor --export "$KEYID" > pages/shellfleet.gpg
 
       - name: Commit and push gh-pages
         working-directory: pages

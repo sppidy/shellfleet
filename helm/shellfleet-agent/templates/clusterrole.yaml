@@ -2,9 +2,9 @@
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: {{ include "sys-manager-agent.fullname" . }}-read
+  name: {{ include "shellfleet-agent.fullname" . }}-read
   labels:
-    {{- include "sys-manager-agent.labels" . | nindent 4 }}
+    {{- include "shellfleet-agent.labels" . | nindent 4 }}
 rules:
   # Core read surface — what the dashboard's Kubernetes subtabs
   # consume. Pods includes /log subresource for live tail.
@@ -46,9 +46,9 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: {{ include "sys-manager-agent.fullname" . }}-exec
+  name: {{ include "shellfleet-agent.fullname" . }}-exec
   labels:
-    {{- include "sys-manager-agent.labels" . | nindent 4 }}
+    {{- include "shellfleet-agent.labels" . | nindent 4 }}
 rules:
   # `kubectl exec` permissions. Off by default — flipping this on
   # gives the agent a shell on every pod in every namespace.
@@ -67,9 +67,9 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: {{ include "sys-manager-agent.fullname" . }}-write
+  name: {{ include "shellfleet-agent.fullname" . }}-write
   labels:
-    {{- include "sys-manager-agent.labels" . | nindent 4 }}
+    {{- include "shellfleet-agent.labels" . | nindent 4 }}
 rules:
   # Reserved for slice 6 (apply / scale / delete). The agent does not
   # currently send mutating requests; this exists so flipping it on

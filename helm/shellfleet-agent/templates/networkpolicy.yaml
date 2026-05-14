@@ -2,13 +2,13 @@
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: {{ include "sys-manager-agent.fullname" . }}
+  name: {{ include "shellfleet-agent.fullname" . }}
   labels:
-    {{- include "sys-manager-agent.labels" . | nindent 4 }}
+    {{- include "shellfleet-agent.labels" . | nindent 4 }}
 spec:
   podSelector:
     matchLabels:
-      {{- include "sys-manager-agent.selectorLabels" . | nindent 6 }}
+      {{- include "shellfleet-agent.selectorLabels" . | nindent 6 }}
   # Agent makes outbound WS connections only — no service exposes
   # it from outside, so deny all ingress unless an operator opts in
   # via `networkPolicy.extraIngress`.

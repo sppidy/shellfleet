@@ -129,7 +129,7 @@ SLACK_WEBHOOK_URL=https://hooks.slack.com/services/T0/B0/xxxxx
 
 Slack post on a probe transition:
 ```
-:x: *sys-manager health probe `#7`* on `host-a-id` → *red*
+:x: *shellfleet health probe `#7`* on `host-a-id` → *red*
 > error: …
 ```
 ```
@@ -144,10 +144,10 @@ DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/.../...
 
 Discord post on backup success:
 ```
-✅ **sys-manager backup `etc-nightly`** on `host-a-id` → **success**
+✅ **shellfleet backup `etc-nightly`** on `host-a-id` → **success**
 ```
 ```
-1234567 bytes → /var/backups/sys-manager/etc-nightly-1730000000.tar.gz
+1234567 bytes → /var/backups/shellfleet/etc-nightly-1730000000.tar.gz
 ```
 
 ### Telegram

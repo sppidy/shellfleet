@@ -40,7 +40,7 @@ target/
 *.deb
 *.tar.gz
 agent-x86_64-linux
-sys-manager-agent_*/
+shellfleet-agent_*/
 
 # Workflow scratch / handoffs
 conductor/

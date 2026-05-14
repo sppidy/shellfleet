@@ -29,7 +29,7 @@ concurrency:
 
 env:
   REGISTRY: hrbr.sppidy.in
-  IMAGE_NAME: sys-manager/agent-k8s
+  IMAGE_NAME: shellfleet/agent-k8s
 
 jobs:
   build:
@@ -173,8 +173,8 @@ jobs:
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.title=sys-manager-agent-k8s
-            org.opencontainers.image.description=sys-manager k8s agent — kube-rs client behind the same WS protocol as the host agent
+            org.opencontainers.image.title=shellfleet-agent-k8s
+            org.opencontainers.image.description=ShellFleet k8s agent — kube-rs client behind the same WS protocol as the host agent
 
   manifest:
     name: Multi-arch manifest

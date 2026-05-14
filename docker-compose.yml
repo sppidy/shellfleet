@@ -59,7 +59,7 @@ services:
       start_period: 10s
     restart: unless-stopped
     networks:
-      - sys_manager_net
+      - shellfleet_net
 
   web:
     build:
@@ -71,7 +71,7 @@ services:
       - NEXT_PUBLIC_WS_URL=${NEXT_PUBLIC_WS_URL:-wss://dashboard.example.com/ui/ws}
     restart: unless-stopped
     networks:
-      - sys_manager_net
+      - shellfleet_net
     depends_on:
       - server
 
@@ -89,12 +89,12 @@ services:
 #      # Optionally mount host's /etc to allow the config editor to see it
 #      # - /etc:/etc
 #    networks:
-#      - sys_manager_net
+#      - shellfleet_net
 #    depends_on:
 #      - server
 
 networks:
-  sys_manager_net:
+  shellfleet_net:
     driver: bridge
 
 volumes:

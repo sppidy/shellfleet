@@ -1,10 +1,10 @@
-# sys-manager — quickstart
+# ShellFleet — quickstart
 
 **Audience:** cloud engineer who has Docker + a host with a public DNS name.
 **Target time:** 10 minutes from zero to a working dashboard with one paired host.
 
 This guide does not need access to the GitHub source. Everything you need is
-on the public Harbor project at `hrbr.sppidy.in/sys-manager` and the public
+on the public Harbor project at `hrbr.sppidy.in/shellfleet` and the public
 apt repo at `sys-mgr-repo.sppidy.in`.
 
 ---
@@ -12,7 +12,7 @@ apt repo at `sys-mgr-repo.sppidy.in`.
 ## 0 · what you'll have at the end
 
 - A web dashboard at `https://your-host.example.com/` signed in via GitHub.
-- A `sys-manager-agent` running on at least one Linux host, paired through
+- A `shellfleet-agent` running on at least one Linux host, paired through
   the dashboard.
 - The dashboard auto-hides tabs the agent can't serve (no docker on the host
   → no Docker tab, host doesn't run k8s → no Kubernetes tab, etc.).
@@ -28,7 +28,7 @@ apt repo at `sys-mgr-repo.sppidy.in`.
                                                              │  wss://…/agent/ws
                                                              ▼
                                                   ┌──────────────────────┐
-                                                  │ sys-manager-agent    │
+                                                  │ shellfleet-agent     │
                                                   │  • host shape (.deb  │
                                                   │    on any Linux)     │
                                                   │  • k8s shape (Helm   │
@@ -65,7 +65,7 @@ On a small Linux VM (1 vCPU, 1 GB RAM is plenty):
 ```yaml
 services:
   server:
-    image: hrbr.sppidy.in/sys-manager/server:latest
+    image: hrbr.sppidy.in/shellfleet/server:latest
     ports:
       - "8080:8080"
     environment:
@@ -80,7 +80,7 @@ services:
       # - AGENT_SECRET=
       # - WS_ALLOWED_ORIGINS=
       # - BACKUPS_ENABLED=false
-      # - METRICS_CONFIG_PATH=/etc/sys-manager/metrics.yaml
+      # - METRICS_CONFIG_PATH=/etc/shellfleet/metrics.yaml
     volumes:
       - server_data:/data
     healthcheck:
@@ -92,7 +92,7 @@ services:
     restart: unless-stopped
 
   web:
-    image: hrbr.sppidy.in/sys-manager/web:latest
+    image: hrbr.sppidy.in/shellfleet/web:latest
     ports:
       - "3000:3000"
     environment:
@@ -168,7 +168,7 @@ volumes:
 
 ### Option B — Cloudflare Tunnel
 
-`cloudflared tunnel create sys-manager`, then map both `/ui/ws` and
+`cloudflared tunnel create shellfleet`, then map both `/ui/ws` and
 `/agent/ws` to `http://server:8080` and the rest to `http://web:3000`.
 See [`docs/CLOUDFLARE.md`](CLOUDFLARE.md) for the WAF rate-limit rules
 recommended in front of the stack.
@@ -210,25 +210,25 @@ For Linux VMs / bare metal that host systemd + (optionally) Docker:
 
 ```bash
 sudo install -m 0755 -d /etc/apt/keyrings
-curl -fsSL https://sys-mgr-repo.sppidy.in/sys-manager.gpg \
-  | sudo tee /etc/apt/keyrings/sys-manager.asc > /dev/null
-echo 'deb [signed-by=/etc/apt/keyrings/sys-manager.asc] https://sys-mgr-repo.sppidy.in stable main' \
-  | sudo tee /etc/apt/sources.list.d/sys-manager.list
+curl -fsSL https://sys-mgr-repo.sppidy.in/shellfleet.gpg \
+  | sudo tee /etc/apt/keyrings/shellfleet.asc > /dev/null
+echo 'deb [signed-by=/etc/apt/keyrings/shellfleet.asc] https://sys-mgr-repo.sppidy.in stable main' \
+  | sudo tee /etc/apt/sources.list.d/shellfleet.list
 sudo apt-get update
-sudo apt-get install -y sys-manager-agent
+sudo apt-get install -y shellfleet-agent
 ```
 
 The .deb installs a systemd unit that reads its config from
-`/etc/sys-manager/env`:
+`/etc/shellfleet/env`:
 
 ```bash
-sudo tee /etc/sys-manager/env > /dev/null <<EOF
+sudo tee /etc/shellfleet/env > /dev/null <<EOF
 SERVER_API_URL=https://your-host.example.com
 SERVER_WS_URL=wss://your-host.example.com/agent/ws
 EOF
 
-sudo systemctl restart sys-manager-agent
-sudo journalctl -u sys-manager-agent -n 20
+sudo systemctl restart shellfleet-agent
+sudo journalctl -u shellfleet-agent -n 20
 ```
 
 ### Path B — apt repo, k8s flavor (host that talks to a kube-apiserver)
@@ -238,13 +238,13 @@ It Conflicts/Replaces the standard package, so you can't have both:
 
 ```bash
 # (same apt repo setup as Path A, then…)
-sudo apt-get install -y sys-manager-agent-k8s
+sudo apt-get install -y shellfleet-agent-k8s
 
 # Add the kubeconfig path to the agent's env file:
-sudo tee -a /etc/sys-manager/env > /dev/null <<EOF
+sudo tee -a /etc/shellfleet/env > /dev/null <<EOF
 KUBECONFIG=/etc/rancher/k3s/k3s.yaml
 EOF
-sudo systemctl restart sys-manager-agent
+sudo systemctl restart shellfleet-agent
 ```
 
 The agent advertises an additional `"k8s"` capability, and the dashboard
@@ -257,8 +257,8 @@ Read [`docs/KUBERNETES.md`](KUBERNETES.md) for the full operator
 walkthrough and [`docs/HELM.md`](HELM.md) for every chart value.
 
 ```bash
-helm install sysmgr ./helm/sys-manager-agent \
-  --namespace sys-manager --create-namespace \
+helm install sysmgr ./helm/shellfleet-agent \
+  --namespace shellfleet --create-namespace \
   --set server.apiUrl=https://your-host.example.com \
   --set server.wsUrl=wss://your-host.example.com/agent/ws \
   --set rbac.exec=true \
@@ -276,7 +276,7 @@ The agent prints an 8-character code in its journal / Pod log:
 ```
 
 In the dashboard, **Connect agent** → paste the code → approve. The agent
-caches its bearer token at `/etc/sys-manager/agent-token.txt` and will
+caches its bearer token at `/etc/shellfleet/agent-token.txt` and will
 reconnect automatically across reboots.
 
 ---
@@ -331,10 +331,10 @@ worked examples for Slack / Discord / Telegram / generic JSON.
 When a backup job's `dest` is `s3://bucket/prefix`, the agent uploads via
 the AWS SDK — no `awscli` install needed. Standard AWS env vars work, plus
 `AWS_ENDPOINT_URL` for any S3-compatible backend (MinIO, Cloudflare R2,
-Backblaze B2, Wasabi, …). Drop the relevant block into `/etc/sys-manager/env`
+Backblaze B2, Wasabi, …). Drop the relevant block into `/etc/shellfleet/env`
 on each agent. Recipes for each backend are in
-[`agent/debian/env.example`](https://github.com/sppidy/sys-mngr-agent/blob/main/debian/env.example)
-or your installed copy at `/etc/sys-manager/env.example`.
+[`agent/debian/env.example`](https://github.com/sppidy/shellfleet-agent/blob/main/debian/env.example)
+or your installed copy at `/etc/shellfleet/env.example`.
 
 ---
 
@@ -343,10 +343,10 @@ or your installed copy at `/etc/sys-manager/env.example`.
 If you just want to see whether the images pull:
 
 ```bash
-docker pull hrbr.sppidy.in/sys-manager/server:latest
-docker pull hrbr.sppidy.in/sys-manager/web:latest
-docker pull hrbr.sppidy.in/sys-manager/agent:latest
-docker pull hrbr.sppidy.in/sys-manager/agent-k8s:latest
+docker pull hrbr.sppidy.in/shellfleet/server:latest
+docker pull hrbr.sppidy.in/shellfleet/web:latest
+docker pull hrbr.sppidy.in/shellfleet/agent:latest
+docker pull hrbr.sppidy.in/shellfleet/agent-k8s:latest
 ```
 
 No login required — the Harbor project is public.
@@ -365,7 +365,7 @@ This is automatic — nothing to configure.
 
 ## 9 · where to get help
 
-- Issues / questions → open one in `sppidy/sys-manager` on GitHub.
+- Issues / questions → open one in `sppidy/shellfleet` on GitHub.
 - Architecture deep-dive → [README.md](../README.md) at the repo root.
 - Topic-specific docs:
   - [`KUBERNETES.md`](KUBERNETES.md) — k8s install paths, RBAC posture

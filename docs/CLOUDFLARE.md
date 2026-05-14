@@ -1,4 +1,4 @@
-# Cloudflare configuration for sys-manager
+# Cloudflare configuration for ShellFleet
 
 The live deploy fronts the origin with Cloudflare. The server already
 has defence-in-depth security headers, per-actor + per-real-IP rate
@@ -6,7 +6,7 @@ limiting, and CSRF/RBAC, but Cloudflare is the **first** line of
 defence and the right place for IP-keyed throttling: the edge sees the
 real attacker IP before TLS terminates on your origin.
 
-This document is the minimum config needed for sys-manager to be safe
+This document is the minimum config needed for ShellFleet to be safe
 behind Cloudflare. It assumes:
 
 - The proxied A/AAAA record for your dashboard hostname is
@@ -175,7 +175,7 @@ Expect: ~10x `401` then a flip to `429` (Cloudflare) and ultimately
 
 - **WAF custom rules for SQL injection / XSS** — Cloudflare's
   managed rules already cover these. Don't add overlapping rules.
-- **Country blocking** — sys-manager has legitimate users (the user
+- **Country blocking** — ShellFleet has legitimate users (the user
   themself) so geo-blocking is too blunt. If the deploy is ever
   single-country, revisit.
 - **mTLS on /api/agent/ws** — agents currently auth via a

@@ -1,14 +1,14 @@
 {{/*
 Expand the name of the chart.
 */}}
-{{- define "sys-manager-agent.name" -}}
+{{- define "shellfleet-agent.name" -}}
 {{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
 {{/*
 Fully qualified app name — release-name + chart-name unless overridden.
 */}}
-{{- define "sys-manager-agent.fullname" -}}
+{{- define "shellfleet-agent.fullname" -}}
 {{- if .Values.fullnameOverride -}}
 {{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" -}}
 {{- else -}}
@@ -21,27 +21,27 @@ Fully qualified app name — release-name + chart-name unless overridden.
 {{- end -}}
 {{- end -}}
 
-{{- define "sys-manager-agent.chart" -}}
+{{- define "shellfleet-agent.chart" -}}
 {{- printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
-{{- define "sys-manager-agent.labels" -}}
-helm.sh/chart: {{ include "sys-manager-agent.chart" . }}
-{{ include "sys-manager-agent.selectorLabels" . }}
+{{- define "shellfleet-agent.labels" -}}
+helm.sh/chart: {{ include "shellfleet-agent.chart" . }}
+{{ include "shellfleet-agent.selectorLabels" . }}
 {{- if .Chart.AppVersion }}
 app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 {{- end }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end -}}
 
-{{- define "sys-manager-agent.selectorLabels" -}}
-app.kubernetes.io/name: {{ include "sys-manager-agent.name" . }}
+{{- define "shellfleet-agent.selectorLabels" -}}
+app.kubernetes.io/name: {{ include "shellfleet-agent.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 
-{{- define "sys-manager-agent.serviceAccountName" -}}
+{{- define "shellfleet-agent.serviceAccountName" -}}
 {{- if .Values.serviceAccount.create -}}
-{{- default (include "sys-manager-agent.fullname" .) .Values.serviceAccount.name -}}
+{{- default (include "shellfleet-agent.fullname" .) .Values.serviceAccount.name -}}
 {{- else -}}
 {{- default "default" .Values.serviceAccount.name -}}
 {{- end -}}
