@@ -153,10 +153,10 @@ async fn main() {
 
     let api_url = std::env::var("SERVER_API_URL").unwrap_or_else(|_| "https://dashboard.example.com".to_string());
 
-    let token = if is_pair {
-        pair(&api_url).await
-    } else if let Some(t) = read_token() {
+    let token = if let Some(t) = read_token() {
         t
+    } else if is_pair {
+        pair(&api_url).await
     } else {
         eprintln!("No agent token found. Run `shellfleet-agent --pair` to pair this host.");
         std::process::exit(1);
