@@ -1,5 +1,6 @@
 services:
   server:
+    image: ghcr.io/sppidy/shellfleet/server:latest
     build:
       context: .
       dockerfile: Dockerfile.server
@@ -62,6 +63,7 @@ services:
       - shellfleet_net
 
   web:
+    image: ghcr.io/sppidy/shellfleet/web:latest
     build:
       context: .
       dockerfile: Dockerfile.web
