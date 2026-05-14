@@ -17,11 +17,11 @@ UI, and namespace-scoped RBAC overlays are EE.
 
 On every row of the first five subtabs:
 
-- **describe** -- click a name → modal with the full apiserver YAML,
+- **describe** — click a name → modal with the full apiserver YAML,
   sectioned by kubectl-style fields, copyable.
-- **logs** (pods only) -- live tail with auto-follow, container picker,
+- **logs** (pods only) — live tail with auto-follow, container picker,
   5000-line scrollback.
-- **exec** (pods only) -- embedded xterm with `/bin/sh` into the chosen
+- **exec** (pods only) — embedded xterm with `/bin/sh` into the chosen
   container.
 
 Nothing from the cluster is stored. Every render is one apiserver list
@@ -37,7 +37,7 @@ Same agent binary, two ways to run it. Pick whichever fits.
 A Helm chart in [`helm/shellfleet-agent/`](../helm/shellfleet-agent/)
 deploys the agent as a single-replica `Deployment` with a dedicated
 `ServiceAccount` and a read-only `ClusterRole`. Pairing happens via the
-device-auth flow -- the Pod prints a code at first run, you paste it at
+device-auth flow — the Pod prints a code at first run, you paste it at
 `/device`.
 
 ```bash
@@ -120,10 +120,10 @@ need #1 or #2.
 
 ## Roadmap (EE)
 
-- Multi-cluster federation -- one dashboard, N clusters, switch between
+- Multi-cluster federation — one dashboard, N clusters, switch between
   them.
-- Helm releases UI -- list / install / upgrade / rollback / values diff.
-- Namespace-scoped RBAC overlays -- operator A sees only namespace X,
+- Helm releases UI — list / install / upgrade / rollback / values diff.
+- Namespace-scoped RBAC overlays — operator A sees only namespace X,
   operator B sees only namespace Y.
 - Operator (CRD + controller) for "install ShellFleet into these N
   clusters from one declaration".

@@ -32,9 +32,9 @@ Signing key fingerprint: `9181 1FCB AB45 B996 B40E AD1E C6E2 9AC2
 
 The package installs:
 
-- `/usr/bin/shellfleet-agent` -- the binary
-- `/lib/systemd/system/shellfleet-agent.service` -- the unit
-- `/etc/shellfleet/env.example` -- annotated environment template
+- `/usr/bin/shellfleet-agent` — the binary
+- `/lib/systemd/system/shellfleet-agent.service` — the unit
+- `/etc/shellfleet/env.example` — annotated environment template
 
 On first install, `/etc/shellfleet/env` is seeded from the example. Edit it
 to point at your server, then:

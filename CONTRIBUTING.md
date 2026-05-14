@@ -4,7 +4,7 @@
 
 1. Open an issue first if the change is non-trivial.
 2. Fork, branch off `main`, keep PRs focused.
-3. **Sign the [CLA](CLA.md)** -- the bot will comment on your first PR.
+3. **Sign the [CLA](CLA.md)** — the bot will comment on your first PR.
 4. Sign your commits (`git commit -S`). Branch protection on `main`
    rejects unsigned commits.
 5. Follow the existing code style; CI will tell you if you didn't.
@@ -64,7 +64,7 @@ with a one-click link. Log in with GitHub, agree once, done for all
 future contributions. Subsequent PRs won't re-prompt.
 
 Contributing on behalf of a company? Ask your employer to sign the
-corporate CLA -- open an issue tagged `cla:corporate` and we'll send the
+corporate CLA — open an issue tagged `cla:corporate` and we'll send the
 form.
 
 ## Commit hygiene
@@ -77,7 +77,7 @@ form.
   `feat(server): add WebAuthn enrollment endpoint`,
   `fix(agent): handle reconnect after suspend`.
 - **No `Co-Authored-By: Claude`** trailers. AI-assisted code is fine,
-  but you are the author for licensing purposes -- you sign the CLA, not
+  but you are the author for licensing purposes — you sign the CLA, not
   the model.
 - Squash before opening the PR if the branch is messy; a maintainer may
   squash on merge regardless.
@@ -95,7 +95,7 @@ form.
 **Discuss in an issue first:**
 
 - New top-level features (sidebar pages, dashboard widgets)
-- Anything that adds a background loop on the agent -- see the idle-cost
+- Anything that adds a background loop on the agent — see the idle-cost
   budget below
 - Database schema changes
 - New dependencies, especially heavy ones

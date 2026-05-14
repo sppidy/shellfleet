@@ -1,6 +1,6 @@
 # Metrics plugin (CE)
 
-ShellFleet doesn't store time-series -- that's Prometheus's job. The
+ShellFleet doesn't store time-series — that's Prometheus's job. The
 metrics plugin turns the dashboard into a thin renderer for **your
 existing Prometheus**: define named panel templates in YAML, the server
 queries Prometheus on demand with the agent's instance label substituted
@@ -14,7 +14,7 @@ without ShellFleet becoming a TSDB.
 | | CE | EE (sidecar, future) |
 |---|---|---|
 | Prometheus | one URL | multiple, federated, per-tenant |
-| Datadog / New Relic / Grafana Cloud | -- | yes |
+| Datadog / New Relic / Grafana Cloud | — | yes |
 | Free-form PromQL from the client | never | never (same posture, more sources) |
 | Panel templates | unlimited | + per-tenant overrides |
 
@@ -64,7 +64,7 @@ replaced server-side before the request goes upstream:
 | `{hostname}`   | alias for `{instance}` |
 
 So `node_cpu_seconds_total{instance="{instance}"}` for agent `host-a-id`
-becomes `node_cpu_seconds_total{instance="host-a"}` -- assuming your
+becomes `node_cpu_seconds_total{instance="host-a"}` — assuming your
 node_exporter labels the host as `host-a`. If Prometheus labels it as
 `host-a.internal:9100`, add the mapping:
 

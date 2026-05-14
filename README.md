@@ -14,7 +14,7 @@ Apt repo: <https://shellfleet-repo.sppidy.in/>  ·  Container images: <https://g
 > stacks. A dashboard request is the only thing that triggers those code
 > paths. See "Idle cost" below.
 >
-> ShellFleet **doesn't compete with Prometheus -- it delegates to it**. The
+> ShellFleet **doesn't compete with Prometheus — it delegates to it**. The
 > agent doesn't scrape, doesn't keep a TSDB, doesn't run an exporter. Point
 > the dashboard at your existing Prometheus via the metrics plugin (named
 > panel templates in YAML, queried on demand) and the per-agent **Metrics**
@@ -46,7 +46,7 @@ graph TD
 
     CF --> WEB
     CF --> SERVER
-    WEB -- "wss /ui/ws" --> SERVER
+    WEB — "wss /ui/ws" --> SERVER
 
     subgraph agents["shellfleet-agent · each host · .deb via apt repo"]
         A1["systemd service control + system stats"]
@@ -59,7 +59,7 @@ graph TD
         A8["backups — tar/gzip → local or S3 — gated by env"]
     end
 
-    SERVER -- "wss /agent/ws" --> agents
+    SERVER — "wss /agent/ws" --> agents
 
     subgraph metrics["(optional) Metrics plugin — server-side only"]
         M1["YAML panel templates → server queries your Prometheus on demand"]
@@ -72,11 +72,11 @@ graph TD
 
 ## Repository layout
 
-This superproject pins four submodules -- each is its own GitHub repo:
+This superproject pins four submodules — each is its own GitHub repo:
 
 | Path     | Repo                              | Stack       | Purpose                                                  |
 |----------|-----------------------------------|-------------|----------------------------------------------------------|
-| `web/`   | `sppidy/shellfleet-web`           | Next.js 16  | Dashboard SPA -- sidebar, per-agent tabs, command palette |
+| `web/`   | `sppidy/shellfleet-web`           | Next.js 16  | Dashboard SPA — sidebar, per-agent tabs, command palette |
 | `server/`| `sppidy/shellfleet-server`        | axum + SQLx | WS hub, REST API, GitHub OAuth, SQLite store at `/data`  |
 | `agent/` | `sppidy/shellfleet-agent`         | Rust + Tokio| Per-host daemon. Shipped as a `.deb`                     |
 | `shared/`| `sppidy/shellfleet-shared`        | Rust crate  | Wire-format `Message` enum + `PROTOCOL_VERSION`          |
@@ -89,14 +89,14 @@ Top-level files:
 | `Dockerfile.server`        | Multi-stage Rust build → distroless runtime                        |
 | `Dockerfile.web`           | Next.js standalone build → node:slim runtime                       |
 | `Dockerfile.agent`         | Local-test agent image (referenced by the commented compose stanza)|
-| `.github/workflows/`       | `agent-deb.yml` -- multi-arch (amd64 + arm64) .deb build + apt repo |
+| `.github/workflows/`       | `agent-deb.yml` — multi-arch (amd64 + arm64) .deb build + apt repo |
 | `docs/QUICKSTART.md`       | 5-min install using published container images                     |
 | `docs/CLOUDFLARE.md`       | WAF rate-limit rules, headers, origin cert                         |
-| `docs/METRICS.md`          | Metrics plugin -- point the dashboard at your Prometheus           |
+| `docs/METRICS.md`          | Metrics plugin — point the dashboard at your Prometheus           |
 | `metrics.example.yaml`     | Drop-in starter config for the metrics plugin                       |
-| `docs/KUBERNETES.md`       | K8s support -- install paths, RBAC posture, limitations            |
-| `docs/HELM.md`             | Helm chart reference -- every value + upgrade / uninstall          |
-| `docs/WEBHOOKS.md`         | Outbound webhook fan-out -- events, sinks, env-var matrix          |
+| `docs/KUBERNETES.md`       | K8s support — install paths, RBAC posture, limitations            |
+| `docs/HELM.md`             | Helm chart reference — every value + upgrade / uninstall          |
+| `docs/WEBHOOKS.md`         | Outbound webhook fan-out — events, sinks, env-var matrix          |
 | `helm/shellfleet-agent/`   | In-cluster install chart for the k8s flavor of the agent           |
 | `Dockerfile.agent.k8s`     | Build the k8s-flavor agent image (used by the Helm chart)          |
 | `CONTRIBUTING.md`, `CLA.md`| Contribution flow + Individual Contributor License Agreement       |
@@ -173,7 +173,7 @@ The `.env` on the docker host carries:
 
 ## Local development
 
-The web and server build with no agent attached -- you'll see "no agents
+The web and server build with no agent attached — you'll see "no agents
 connected".
 
 ```bash
@@ -213,7 +213,7 @@ panels:
 
 Drop the file at `METRICS_CONFIG_PATH`, restart the server, and a Metrics
 tab appears on every agent. The server substitutes `{instance}` (and
-`{agent_id}`, `{hostname}`) into each query -- the browser sends a panel
+`{agent_id}`, `{hostname}`) into each query — the browser sends a panel
 **id**, never raw PromQL.
 
 Worked example with `process_exporter` (top-10 processes by CPU + RSS as
@@ -253,8 +253,8 @@ releases UI, and namespace-scoped RBAC overlays are EE. See
 [`docs/HELM.md`](docs/HELM.md) for every chart value.
 
 > **CE/EE rule of thumb:** in-cluster Pod, kubeconfig-on-a-host, single
-> kube-apiserver, read + exec/logs -- **CE**. Multi-cluster, namespace-scoped
-> RBAC, Helm releases, Operator-with-CRDs -- **EE**.
+> kube-apiserver, read + exec/logs — **CE**. Multi-cluster, namespace-scoped
+> RBAC, Helm releases, Operator-with-CRDs — **EE**.
 
 ## Wire format
 
@@ -284,7 +284,7 @@ rollout.
   license-keyed cap.
 - **Audit log.** All sign-ins, MFA events, and meaningful agent /
   scheduler actions land in the `audit` table. Visible at `/activity`.
-  **7-day local retention** -- an hourly task drops older rows. EE will
+  **7-day local retention** — an hourly task drops older rows. EE will
   offer long retention + SIEM export.
 - **CSRF.** Double-submit cookie + `X-CSRF` header on every mutating
   `/api/*` route. The web client routes mutations through
@@ -303,7 +303,7 @@ rollout.
 - **Brute-force defence.** Per-login MFA throttle locks after 10 bad
   TOTP attempts for 15 minutes. Same shape on `/api/device/approve`.
 - **Constant-time recovery-code compare.** SHA-256 hash equality runs
-  through `subtle::ConstantTimeEq` -- loop time doesn't leak which
+  through `subtle::ConstantTimeEq` — loop time doesn't leak which
   position matched.
 - **WebSocket RBAC.** The `/ui/ws` upgrade pins the user's login at
   connect time and re-resolves the role from the DB on every mutating
@@ -320,10 +320,10 @@ rollout.
 - **Per-real-IP rate limiting.** Token bucket on the anonymous-attacker
   surface (`/auth/*`, `/api/me`, `/api/auth/mfa/verify`) keyed off
   `CF-Connecting-IP`. 30 burst, 30 req/min steady. Defence-in-depth on
-  top of Cloudflare's edge rate limiter -- see
+  top of Cloudflare's edge rate limiter — see
   [`docs/CLOUDFLARE.md`](docs/CLOUDFLARE.md).
 
-### Roadmap -- Enterprise Edition
+### Roadmap — Enterprise Edition
 
 The CE feature set is the **safety floor**: every operator gets 2FA,
 basic RBAC, and a short local audit log. The Enterprise Edition ships
@@ -342,7 +342,7 @@ API and adds:
 - **AI log analysis.** "Summarize the last hour of journal entries on
   host-a", "what's anomalous in this output?", "explain this error".
   Configurable via OpenAI-compatible env vars (`EE_AI_API_URL`,
-  `EE_AI_API_KEY`, `EE_AI_MODEL`) -- works with OpenAI, Ollama, vLLM,
+  `EE_AI_API_KEY`, `EE_AI_MODEL`) — works with OpenAI, Ollama, vLLM,
   OpenRouter, or any drop-in.
 - **Support SLA** + a managed hosted control plane.
 
@@ -350,18 +350,18 @@ CE remains fully functional without EE; EE without CE is meaningless.
 
 ## Idle cost
 
-Continuous loops on the agent -- full inventory:
+Continuous loops on the agent — full inventory:
 
-1. WebSocket heartbeat -- 25 s ping (well under 1 ms each).
+1. WebSocket heartbeat — 25 s ping (well under 1 ms each).
 2. Health probes the operator configured. Zero by default.
-3. Apt-update window scheduler -- 60 s tick that does DateTime math; only
+3. Apt-update window scheduler — 60 s tick that does DateTime math; only
    spawns `apt-get upgrade` when a configured cron expression matches.
    Defaults to nothing.
-4. Backup scheduler -- same shape, gated behind `BACKUPS_ENABLED`.
+4. Backup scheduler — same shape, gated behind `BACKUPS_ENABLED`.
 
 That's it. No continuous polling for stats, container lists, image lists,
 network/volume/stack lists, or prune previews. **Metrics collection is
-out of scope** -- node_exporter (or whatever exporter you run) is its own
+out of scope** — node_exporter (or whatever exporter you run) is its own
 process, scraped by your Prometheus, queried by the dashboard server on
 demand. The agent is uninvolved. When no UI is connected, average CPU is
 0%. Idle RSS measured at ~4 MB.
@@ -389,7 +389,7 @@ gh workflow run agent-deb.yml --ref main
 ## Contributing
 
 Pull requests welcome. Read [`CONTRIBUTING.md`](CONTRIBUTING.md)
-first -- it covers dev setup, the signed-commit requirement on `main`,
+first — it covers dev setup, the signed-commit requirement on `main`,
 and the [`CLA`](CLA.md) flow. The CLA is one click on your first PR via
 [cla-assistant.io](https://cla-assistant.io/).
 

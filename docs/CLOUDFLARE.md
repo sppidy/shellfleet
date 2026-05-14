@@ -3,7 +3,7 @@
 The live deploy fronts the origin with Cloudflare. The server already has
 defence-in-depth headers, per-actor + per-real-IP rate limiting, and
 CSRF/RBAC, but Cloudflare is the first line of defence. The edge sees the
-real attacker IP before TLS terminates on your origin -- that's where
+real attacker IP before TLS terminates on your origin — that's where
 IP-keyed throttling belongs.
 
 This is the minimum config for ShellFleet behind Cloudflare. Assumes:
@@ -16,7 +16,7 @@ This is the minimum config for ShellFleet behind Cloudflare. Assumes:
 ## Headers
 
 The origin's IP-keyed throttler reads client IP from `CF-Connecting-IP`.
-Cloudflare sets this on every proxied request -- nothing to configure.
+Cloudflare sets this on every proxied request — nothing to configure.
 But: **never expose the origin's port directly without Cloudflare in
 front**, because anyone who reaches the origin directly can spoof
 `CF-Connecting-IP` to dodge the throttle. The deploy uses Tailscale ACLs
@@ -28,7 +28,7 @@ an `allowed_ips` check at the origin.)
 Free plan gives you **5 rate-limiting rules**. Configure them in
 **Security → WAF → Rate limiting rules**.
 
-### Rule 1 -- Auth flood (login + callback + MFA verify)
+### Rule 1 — Auth flood (login + callback + MFA verify)
 
 ```
 If incoming requests match:
@@ -46,7 +46,7 @@ Covers the OAuth dance, post-OAuth MFA challenge, and `/auth/logout`.
 10/minute is plenty for a human to log in and out several times; an
 attacker brute-forcing TOTP codes gets stopped here first.
 
-### Rule 2 -- Session probe flood
+### Rule 2 — Session probe flood
 
 ```
 If incoming requests match:
@@ -62,7 +62,7 @@ Then:
 60/min is generous for a real user. Flooding here keeps DB connections
 busy and is a precursor to session-fixation probes.
 
-### Rule 3 -- Device approve
+### Rule 3 — Device approve
 
 ```
 If incoming requests match:
@@ -79,7 +79,7 @@ Even though only authed admins reach this endpoint, a stolen admin
 session shouldn't get to brute-force the 8-char user_code at line speed.
 The origin already has a per-actor throttle on top.
 
-### Rule 4 -- General API ceiling
+### Rule 4 — General API ceiling
 
 ```
 If incoming requests match:
@@ -97,7 +97,7 @@ Global ceiling that catches anonymous abuse against the API plane. Set
 high so authed power users (kicking off many container ops) don't trip
 it. Excludes paths covered by rules 1-3 to avoid double-counting.
 
-### Rule 5 -- WebSocket flood
+### Rule 5 — WebSocket flood
 
 ```
 If incoming requests match:
@@ -114,7 +114,7 @@ Then:
 A real client opens at most one WS per page load and reconnects on
 network blips. 10 upgrades/minute leaves headroom for flapping networks;
 anything beyond is reconnect storms or scripted abuse. Doesn't affect
-bytes on an established connection -- that's Cloudflare's per-connection
+bytes on an established connection — that's Cloudflare's per-connection
 limits.
 
 ## Page Rules / Cache
@@ -131,14 +131,14 @@ Next.js gives them content-hashed filenames so cache busting is automatic.
 
 Enable under **Security → Bots**. Low-cost defence against scripted
 attackers using common bot signatures, zero latency for real users.
-Don't pay for "Super Bot Fight Mode" yet -- only worth it with customer
+Don't pay for "Super Bot Fight Mode" yet — only worth it with customer
 traffic.
 
 ## Origin certificates
 
 Use a Cloudflare Origin Certificate on the server side (not a public
 cert from Let's Encrypt). The origin cert is signed by Cloudflare's
-private CA and is only valid through the Cloudflare edge -- if someone
+private CA and is only valid through the Cloudflare edge — if someone
 connects to the origin directly, the TLS handshake fails. This is
 "authenticated origin pulls" or an origin cert on the server side;
 either is meaningful defence-in-depth.
@@ -161,11 +161,11 @@ Expect: ~10x `401` then a flip to `429` (Cloudflare) and ultimately
 
 ## What's not configured here
 
-- **WAF custom rules for SQLi / XSS** -- Cloudflare's managed rules
+- **WAF custom rules for SQLi / XSS** — Cloudflare's managed rules
   already cover these. Don't add overlapping rules.
-- **Country blocking** -- ShellFleet has legitimate users so geo-blocking
+- **Country blocking** — ShellFleet has legitimate users so geo-blocking
   is too blunt. Revisit if the deploy is ever single-country.
-- **mTLS on /api/agent/ws** -- agents auth via per-agent token +
+- **mTLS on /api/agent/ws** — agents auth via per-agent token +
   Tailscale ACL. mTLS would be belt-and-suspenders but the operational
   cost (cert distribution to every agent) doesn't match the threat model
   yet.

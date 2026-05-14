@@ -18,7 +18,7 @@ so a Discord 503 mid-rollout is visible immediately.
 |                              | the 50s architectural grace. Transient WS blips that reconnect                   |                          |
 |                              | within the grace are silent.                                                     |                          |
 | `agent.connect`              | The agent registers AFTER its `agent.disconnect` had already                     | `connected`              |
-|                              | fired. Reconnects within the grace window do NOT fire this --                    |                          |
+|                              | fired. Reconnects within the grace window do NOT fire this —                    |                          |
 |                              | the operator was never told the agent left, so no "back"                         |                          |
 |                              | notification for that blip. First-time registers are silent too.                 |                          |
 
@@ -85,7 +85,7 @@ WS read-loop exits ──► Pending(grace) ─┬─ agent re-registers within 
                                           → next register fires `agent.connect`
 ```
 
-Grace window is fixed at **50 seconds** -- two missed 25s heartbeats.
+Grace window is fixed at **50 seconds** — two missed 25s heartbeats.
 That's a real "this agent is gone" signal but still under the agent's 75s
 idle watchdog so a healthy systemd / kubelet restart reconnects inside the
 grace and stays silent. No operator knob; the grace tracks the 25s/75s
@@ -101,7 +101,7 @@ pair. Net behaviour:
 
 | Sink                       | Body shape                                                         |
 |----------------------------|--------------------------------------------------------------------|
-| `WEBHOOK_URL` + `format=json`   | JSON: `{event, agent_id, status, log, error, at}` -- the structured event. |
+| `WEBHOOK_URL` + `format=json`   | JSON: `{event, agent_id, status, log, error, at}` — the structured event. |
 | `WEBHOOK_URL` + `format=slack`  | Slack-shaped `{text}` with `:white_check_mark:` / `:x:` icons.     |
 | `SLACK_WEBHOOK_URL`        | Same Slack-shaped body, distinct URL.                              |
 | `DISCORD_WEBHOOK_URL`      | `{content}` with status icons + Discord-native code blocks.        |
@@ -150,7 +150,7 @@ TELEGRAM_CHAT_ID=-100123456789
 ```
 
 (Use `@channelname` for public channels, the numeric `chat_id` for
-private chats -- DM your bot, then GET `/getUpdates` to find the id.)
+private chats — DM your bot, then GET `/getUpdates` to find the id.)
 
 ### Generic JSON receiver
 
@@ -186,7 +186,7 @@ webhook.health_probe.transition · sink=slack · code=400 body={"error":"channel
 
 `code` is the upstream HTTP status. Bodies are captured for non-2xx
 responses (truncated to 200 chars) so you can see why. Failures don't
-retry -- a missed delivery shows up as a single `ok=false` audit row,
+retry — a missed delivery shows up as a single `ok=false` audit row,
 and the next event re-attempts all configured sinks.
 
 ## What doesn't fire (yet)
@@ -199,5 +199,5 @@ and the next event re-attempts all configured sinks.
   "sppidy logged in" is noise; the operational events above are the
   only ones that fan out.
 
-If a non-listed event would be useful, file an issue -- it's a ~20-line
+If a non-listed event would be useful, file an issue — it's a ~20-line
 drop-in.

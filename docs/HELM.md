@@ -1,4 +1,4 @@
-# Helm chart reference -- `shellfleet-agent`
+# Helm chart reference — `shellfleet-agent`
 
 Located at [`../helm/shellfleet-agent/`](../helm/shellfleet-agent/).
 Installs the k8s flavor of the agent as a single-replica `Deployment`
@@ -64,17 +64,17 @@ helm upgrade sysmgr ./helm/shellfleet-agent \
 
 Two paths:
 
-1. **First install** -- leave `token.existingSecret` empty. The agent
+1. **First install** — leave `token.existingSecret` empty. The agent
    prints a pairing code, you approve at `/device`, and the token lands
    at `/etc/shellfleet/agent-token` inside the container. **A Pod restart
    wipes it.** Promote to a Secret for permanence (steps below).
 
-2. **Re-install or DR** -- pre-create a Secret and reference it:
+2. **Re-install or DR** — pre-create a Secret and reference it:
 
 ```bash
 # Capture the token from the running Pod:
 kubectl -n shellfleet exec deploy/sysmgr-shellfleet-agent \
-  -- cat /etc/shellfleet/agent-token.txt > /tmp/agent-token.txt
+  — cat /etc/shellfleet/agent-token.txt > /tmp/agent-token.txt
 
 # Save as a Secret. Key MUST be `agent-token.txt` so the chart's
 # subPath mount lands at the right path:
@@ -102,7 +102,7 @@ ClusterRoleBinding so disabling one doesn't disturb the others.
 
 | key              | default                                |
 | ---------------- | -------------------------------------- |
-| `replicaCount`   | `1` (don't increase -- agent is singleton) |
+| `replicaCount`   | `1` (don't increase — agent is singleton) |
 | `resources.requests.cpu`    | `50m`                       |
 | `resources.requests.memory` | `64Mi`                      |
 | `resources.limits.cpu`      | `500m`                      |
@@ -131,7 +131,7 @@ helm upgrade sysmgr ./helm/shellfleet-agent \
   --set image.tag=<new-tag>
 ```
 
-`Recreate` strategy on the Deployment -- old Pod is killed before the new
+`Recreate` strategy on the Deployment — old Pod is killed before the new
 one starts. The agent pairs once, so a brief disconnect while the new Pod
 registers is the only visible effect.
 
@@ -160,20 +160,20 @@ docker logs shellfleet-server-1 2>&1 \
 
 ## Troubleshooting
 
-**Agent crashes with rustls panic on startup** -- the binary needs a
+**Agent crashes with rustls panic on startup** — the binary needs a
 process-level CryptoProvider. Recent images install `ring` at startup;
 if you pinned an old image, upgrade past `1.1.0-ci202604280311`.
 
-**Logs/exec returns "client error (Connect)"** -- identity resolution
+**Logs/exec returns "client error (Connect)"** — identity resolution
 picked something other than the in-cluster SA. Confirm with:
 
 ```bash
 kubectl -n shellfleet exec deploy/sysmgr-shellfleet-agent \
-  -- ls /var/run/secrets/kubernetes.io/serviceaccount/
+  — ls /var/run/secrets/kubernetes.io/serviceaccount/
 ```
 
 If `KUBECONFIG` is in `extraEnv` and points at a stale file, drop it.
 
-**`exec` button gives "[ session ended ]" immediately** -- target
+**`exec` button gives "[ session ended ]" immediately** — target
 container is distroless (no `/bin/sh`). Try a different container or
 use `kubectl debug`.

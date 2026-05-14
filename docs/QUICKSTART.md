@@ -1,4 +1,4 @@
-# ShellFleet -- quickstart
+# ShellFleet — quickstart
 
 **Audience:** you have Docker and a host with a public DNS name.
 **Time:** ~10 minutes to a working dashboard with one paired host.
@@ -53,11 +53,11 @@ On a small Linux VM (1 vCPU, 1 GB RAM is plenty):
 
 - Docker 25+ with the `compose` plugin.
 - A DNS A/AAAA record pointing `your-host.example.com` at the VM.
-- TLS termination in front of the stack -- Caddy / nginx / Cloudflare
+- TLS termination in front of the stack — Caddy / nginx / Cloudflare
   Tunnel / Traefik. The stack listens HTTP on `:3000` (web) and `:8080`
   (server). Forward two WebSocket paths: `/ui/ws` (browser ↔ server)
   and `/agent/ws` (agent ↔ server). Same TLS origin for both is fine.
-- A GitHub OAuth app -- register at
+- A GitHub OAuth app — register at
   <https://github.com/settings/developers> with:
   - **Homepage URL:** `https://your-host.example.com/`
   - **Authorization callback URL:** `https://your-host.example.com/auth/callback`
@@ -144,7 +144,7 @@ ALLOWED_GITHUB_USERS=your-github-login
 
 ## 3 · TLS in front (one of these)
 
-### Option A -- Caddy (auto Let's Encrypt)
+### Option A — Caddy (auto Let's Encrypt)
 
 `Caddyfile`:
 
@@ -174,15 +174,15 @@ volumes:
   caddy_config:
 ```
 
-### Option B -- Cloudflare Tunnel
+### Option B — Cloudflare Tunnel
 
 `cloudflared tunnel create shellfleet`, then map `/ui/ws` and `/agent/ws`
 to `http://server:8080` and the rest to `http://web:3000`. See
 [`docs/CLOUDFLARE.md`](CLOUDFLARE.md) for WAF rate-limit rules.
 
-### Option C -- your existing nginx
+### Option C — your existing nginx
 
-WebSocket-capable forwarding for `/ui/ws` and `/agent/ws` -- make sure
+WebSocket-capable forwarding for `/ui/ws` and `/agent/ws` — make sure
 the upstream config has:
 
 ```nginx
@@ -211,7 +211,7 @@ overview with zero agents.
 
 Pick the install shape that matches your host.
 
-### Path A -- apt repo, host agent (most common)
+### Path A — apt repo, host agent (most common)
 
 For Linux VMs / bare metal with systemd + (optionally) Docker:
 
@@ -238,10 +238,10 @@ sudo systemctl restart shellfleet-agent
 sudo journalctl -u shellfleet-agent -n 20
 ```
 
-### Path B -- apt repo, k8s flavor (host with KUBECONFIG)
+### Path B — apt repo, k8s flavor (host with KUBECONFIG)
 
 Install the k8s-flavor package instead. It Conflicts/Replaces the standard
-package -- you can't have both:
+package — you can't have both:
 
 ```bash
 # (same apt repo setup as Path A, then…)
@@ -257,7 +257,7 @@ sudo systemctl restart shellfleet-agent
 The agent advertises `"k8s"` capability, and the dashboard shows the
 **Kubernetes** tab when you select that agent.
 
-### Path C -- Helm, in-cluster Pod
+### Path C — Helm, in-cluster Pod
 
 Install the agent as a Pod inside a cluster. See
 [`docs/KUBERNETES.md`](KUBERNETES.md) for the full walkthrough and
@@ -336,7 +336,7 @@ examples for Slack / Discord / Telegram / generic JSON.
 ### Per-agent S3 backup destination
 
 When a backup job's `dest` is `s3://bucket/prefix`, the agent uploads via
-the AWS SDK -- no `awscli` needed. Standard AWS env vars work, plus
+the AWS SDK — no `awscli` needed. Standard AWS env vars work, plus
 `AWS_ENDPOINT_URL` for S3-compatible backends (MinIO, Cloudflare R2,
 Backblaze B2, Wasabi, ...). Drop the relevant block into `/etc/shellfleet/env`
 on each agent. Recipes for each backend are in
@@ -356,7 +356,7 @@ docker pull ghcr.io/sppidy/shellfleet/agent:latest
 docker pull ghcr.io/sppidy/shellfleet/agent-k8s:latest
 ```
 
-No login required -- GHCR project is public.
+No login required — GHCR project is public.
 
 ---
 
@@ -366,7 +366,7 @@ The agent advertises a capability set on connect (`systemd`, `docker`,
 `swarm`, `k8s`). The dashboard hides tabs for capabilities the agent
 didn't claim, so a k8s-only Pod agent shows `overview · k8s · metrics
 · health · config` and a no-docker host hides the Docker tab.
-Automatic -- nothing to configure.
+Automatic — nothing to configure.
 
 ---
 
@@ -375,8 +375,8 @@ Automatic -- nothing to configure.
 - Issues / questions → open one in `sppidy/shellfleet` on GitHub.
 - Architecture deep-dive → [README.md](../README.md).
 - Topic-specific docs:
-  - [`KUBERNETES.md`](KUBERNETES.md) -- k8s install paths, RBAC posture
-  - [`HELM.md`](HELM.md) -- chart reference + every value
-  - [`METRICS.md`](METRICS.md) -- Prometheus plugin schema + worked example
-  - [`WEBHOOKS.md`](WEBHOOKS.md) -- outbound notification fan-out reference
-  - [`CLOUDFLARE.md`](CLOUDFLARE.md) -- WAF rate-limit rules
+  - [`KUBERNETES.md`](KUBERNETES.md) — k8s install paths, RBAC posture
+  - [`HELM.md`](HELM.md) — chart reference + every value
+  - [`METRICS.md`](METRICS.md) — Prometheus plugin schema + worked example
+  - [`WEBHOOKS.md`](WEBHOOKS.md) — outbound notification fan-out reference
+  - [`CLOUDFLARE.md`](CLOUDFLARE.md) — WAF rate-limit rules
