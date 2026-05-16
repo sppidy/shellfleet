@@ -1283,8 +1283,13 @@ async fn handle_ui_socket(
                             continue;
                         }
                     }
-                    // EE fine-grained RBAC: check resource-level permissions
-                    if ee::ee_active() {
+                    // EE fine-grained RBAC: check resource-level permissions (skip for admins)
+                    if ee::ee_active() && !auth::is_dev_mode() {
+                        let is_admin = matches!(
+                            crate::db::get_user(&state.db, &login).await,
+                            Ok(Some(row)) if row.role == "admin"
+                        );
+                        if !is_admin {
                         if let Some((res_type, action)) = ee_resource_for_message(&message) {
                             if !ee_check_permission(&login, res_type, &agent_id, action).await {
                                 let _ = tx.send(UiMessage::PermissionDenied {
@@ -1294,6 +1299,7 @@ async fn handle_ui_socket(
                                 });
                                 continue;
                             }
+                        }
                         }
                     }
                     // CE RBAC over the WebSocket plane. The HTTP rbac
