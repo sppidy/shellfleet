@@ -1283,6 +1283,19 @@ async fn handle_ui_socket(
                             continue;
                         }
                     }
+                    // EE fine-grained RBAC: check resource-level permissions
+                    if ee::ee_active() {
+                        if let Some((res_type, action)) = ee_resource_for_message(&message) {
+                            if !ee_check_permission(&login, res_type, &agent_id, action).await {
+                                let _ = tx.send(UiMessage::PermissionDenied {
+                                    agent_id: agent_id.clone(),
+                                    variant_type: res_type.to_string(),
+                                    reason: format!("no {action} permission on {res_type}"),
+                                });
+                                continue;
+                            }
+                        }
+                    }
                     // CE RBAC over the WebSocket plane. The HTTP rbac
                     // middleware doesn't run here — without this gate
                     // a viewer with a verified session could
@@ -1375,6 +1388,55 @@ async fn ee_fetch_allowed_agents(login: &str) -> Option<Vec<String>> {
             .filter_map(|v| v.as_str().map(String::from))
             .collect(),
     )
+}
+
+fn ee_resource_for_message(msg: &Message) -> Option<(&'static str, &'static str)> {
+    use Message::*;
+    match msg {
+        ControlServiceRequest { .. } => Some(("service", "write")),
+        ListServicesRequest => Some(("service", "read")),
+        StartTerminalRequest { .. } | TerminalData { .. } | TerminalResize { .. } => {
+            Some(("terminal", "exec"))
+        }
+        DockerContainerActionRequest { .. } | DockerCreateContainerRequest { .. } => {
+            Some(("container", "write"))
+        }
+        DockerExecStartRequest { .. } => Some(("container", "exec")),
+        ReadConfigRequest { .. } => Some(("config", "read")),
+        WriteConfigRequest { .. } => Some(("config", "write")),
+        BackupRunRequest { .. } | BackupRestoreRequest { .. } => Some(("backup", "write")),
+        K8sApplyRequest { .. } | K8sScaleRequest { .. } | K8sDeletePodRequest { .. } => {
+            Some(("k8s", "write"))
+        }
+        K8sExecRequest { .. } => Some(("k8s", "exec")),
+        _ => None,
+    }
+}
+
+async fn ee_check_permission(login: &str, resource_type: &str, resource_id: &str, action: &str) -> bool {
+    let Some(ee_url) = ee::ee_sidecar_url() else { return true };
+    let secret = std::env::var("EE_INTERNAL_SECRET").unwrap_or_default();
+    let url = format!("{}/api/ee/rbac/check", ee_url.trim_end_matches('/'));
+    let body = serde_json::json!({
+        "login": login,
+        "resource_type": resource_type,
+        "resource_id": resource_id,
+        "action": action,
+    });
+    match reqwest::Client::new()
+        .post(&url)
+        .bearer_auth(&secret)
+        .json(&body)
+        .timeout(std::time::Duration::from_secs(3))
+        .send()
+        .await
+    {
+        Ok(resp) if resp.status().is_success() => {
+            let data: serde_json::Value = resp.json().await.unwrap_or_default();
+            data["allowed"].as_bool().unwrap_or(true)
+        }
+        _ => true, // fail-open to CE RBAC if EE is unreachable
+    }
 }
 
 fn ee_filter_agent_list(
