@@ -1203,6 +1203,8 @@ async fn handle_ui_socket(
     let client_id = state.ui_id_counter.fetch_add(1, Ordering::Relaxed);
     state.ui_clients.lock().await.insert(client_id, tx.clone());
 
+    let allowed_agents = ee_fetch_allowed_agents(&login).await;
+
     {
         let map = state.agents.lock().await;
         let agents: Vec<String> = map.keys().cloned().collect();
@@ -1210,6 +1212,7 @@ async fn handle_ui_socket(
             .iter()
             .map(|(id, entry)| (id.clone(), entry.capabilities.clone()))
             .collect();
+        let (agents, capabilities) = ee_filter_agent_list(agents, capabilities, &allowed_agents);
         let _ = tx.send(UiMessage::ListAgentsResponse { agents, capabilities });
     }
 
@@ -1263,9 +1266,20 @@ async fn handle_ui_socket(
                         .iter()
                         .map(|(id, entry)| (id.clone(), entry.capabilities.clone()))
                         .collect();
+                    let (agents, capabilities) = ee_filter_agent_list(agents, capabilities, &allowed_agents);
                     let _ = tx.send(UiMessage::ListAgentsResponse { agents, capabilities });
                 }
                 UiMessage::SendToAgent { agent_id, message } => {
+                    if let Some(ref allowed) = allowed_agents {
+                        if !allowed.contains(&agent_id) {
+                            let _ = tx.send(UiMessage::PermissionDenied {
+                                agent_id: agent_id.clone(),
+                                variant_type: "agent_access".to_string(),
+                                reason: "not in your allowed agents".to_string(),
+                            });
+                            continue;
+                        }
+                    }
                     // CE RBAC over the WebSocket plane. The HTTP rbac
                     // middleware doesn't run here — without this gate
                     // a viewer with a verified session could
@@ -1326,4 +1340,55 @@ async fn handle_ui_socket(
     send_task.abort();
     state.ui_clients.lock().await.remove(&client_id);
     tracing::info!(client_id, "ui client disconnected");
+}
+
+async fn ee_fetch_allowed_agents(login: &str) -> Option<Vec<String>> {
+    let ee_url = ee::ee_sidecar_url()?;
+    let secret = std::env::var("EE_INTERNAL_SECRET").unwrap_or_default();
+    let url = format!(
+        "{}/api/ee/rbac/users/{}/allowed-agents",
+        ee_url.trim_end_matches('/'),
+        urlencoding::encode(login),
+    );
+    let resp = reqwest::Client::new()
+        .post(&url)
+        .bearer_auth(&secret)
+        .json(&serde_json::json!({ "agents": Vec::<String>::new() }))
+        .timeout(std::time::Duration::from_secs(5))
+        .send()
+        .await
+        .ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let data: serde_json::Value = resp.json().await.ok()?;
+    let agents = data["agents"].as_array()?;
+    if agents.is_empty() {
+        return None;
+    }
+    Some(
+        agents
+            .iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect(),
+    )
+}
+
+fn ee_filter_agent_list(
+    agents: Vec<String>,
+    capabilities: HashMap<String, Vec<String>>,
+    allowed: &Option<Vec<String>>,
+) -> (Vec<String>, HashMap<String, Vec<String>>) {
+    let Some(allowed) = allowed else {
+        return (agents, capabilities);
+    };
+    let filtered: Vec<String> = agents
+        .into_iter()
+        .filter(|a| allowed.contains(a))
+        .collect();
+    let filtered_caps: HashMap<String, Vec<String>> = capabilities
+        .into_iter()
+        .filter(|(k, _)| allowed.contains(k))
+        .collect();
+    (filtered, filtered_caps)
 }
