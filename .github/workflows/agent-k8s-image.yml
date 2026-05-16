@@ -45,7 +45,7 @@ jobs:
       sha_short: ${{ steps.tags.outputs.sha_short }}
     steps:
       - name: Checkout main repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
@@ -63,7 +63,7 @@ jobs:
           git submodule update --init --recursive --depth 1 agent shared
 
       - name: Set up Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -104,7 +104,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Set up Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
