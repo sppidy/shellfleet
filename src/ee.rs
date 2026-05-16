@@ -1,5 +1,6 @@
 use axum::{
-    extract::State,
+    body::Body,
+    extract::{Request, State},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
     routing::{get, post},
@@ -143,4 +144,49 @@ async fn agents_handler(
         })
         .collect();
     (StatusCode::OK, axum::Json(agents)).into_response()
+}
+
+pub async fn ee_proxy_handler(req: Request) -> impl IntoResponse {
+    let Some(ee_url) = ee_sidecar_url() else {
+        return (StatusCode::SERVICE_UNAVAILABLE, "EE not active").into_response();
+    };
+    let secret = internal_secret().unwrap_or_default();
+
+    let path = req.uri().path_and_query()
+        .map(|pq| pq.as_str())
+        .unwrap_or(req.uri().path());
+    let url = format!("{}{}", ee_url.trim_end_matches('/'), path);
+    let method = req.method().clone();
+
+    let body_bytes = match axum::body::to_bytes(req.into_body(), 1024 * 1024).await {
+        Ok(b) => b,
+        Err(_) => return (StatusCode::PAYLOAD_TOO_LARGE, "body too large").into_response(),
+    };
+
+    let client = reqwest::Client::new();
+    let mut builder = client.request(
+        reqwest::Method::from_bytes(method.as_str().as_bytes()).unwrap_or(reqwest::Method::GET),
+        &url,
+    )
+    .bearer_auth(&secret)
+    .timeout(std::time::Duration::from_secs(30));
+
+    if !body_bytes.is_empty() {
+        builder = builder
+            .header("content-type", "application/json")
+            .body(body_bytes.to_vec());
+    }
+
+    match builder.send().await {
+        Ok(resp) => {
+            let status = StatusCode::from_u16(resp.status().as_u16())
+                .unwrap_or(StatusCode::BAD_GATEWAY);
+            let body = resp.text().await.unwrap_or_default();
+            (status, [(axum::http::header::CONTENT_TYPE, "application/json")], body).into_response()
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "EE proxy failed");
+            (StatusCode::BAD_GATEWAY, "EE sidecar unavailable").into_response()
+        }
+    }
 }

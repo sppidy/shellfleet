@@ -447,9 +447,11 @@ async fn main() {
     if ee::ee_active() {
         tracing::info!(
             url = %ee::ee_sidecar_url().unwrap_or_default(),
-            "EE sidecar detected — mounting /internal routes"
+            "EE sidecar detected — mounting /internal routes + /api/ee proxy"
         );
-        app = app.nest("/internal", ee::routes().with_state(state.clone()));
+        app = app
+            .nest("/internal", ee::routes().with_state(state.clone()))
+            .route("/api/ee/{*path}", axum::routing::any(ee::ee_proxy_handler));
     }
 
     let app = app
