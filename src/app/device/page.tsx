@@ -113,14 +113,30 @@ export default function DeviceAuthPage() {
                     lineHeight: 1.4,
                   }}
                 >
-                  {`┌──────────────────────────────────────┐
-│  on the new host run:                │
-│                                      │
-│    $ journalctl -u shellfleet-agent  │
-│      -n 20                           │
-│                                      │
-│  it will print an 8-char code.       │
-└──────────────────────────────────────┘`}
+                  {`┌──────────────────────────────────────────┐
+│  1. Install the agent on the new host:   │
+│                                          │
+│  curl -fsSL https://shellfleet-repo.     │
+│    sppidy.in/shellfleet.gpg              │
+│    | sudo tee /etc/apt/keyrings/         │
+│    shellfleet.asc > /dev/null            │
+│                                          │
+│  echo "deb [signed-by=/etc/apt/keyrings/ │
+│    shellfleet.asc] https://shellfleet-   │
+│    repo.sppidy.in stable main"           │
+│    | sudo tee /etc/apt/sources.list.d/   │
+│    shellfleet.list                       │
+│                                          │
+│  sudo apt update                         │
+│  sudo apt install -y shellfleet-agent    │
+│                                          │
+│  2. Start pairing:                       │
+│                                          │
+│  sudo shellfleet-agent --pair            │
+│                                          │
+│  3. It prints an 8-char code below.      │
+│     Enter it here to approve.            │
+└──────────────────────────────────────────┘`}
                 </pre>
 
                 <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
