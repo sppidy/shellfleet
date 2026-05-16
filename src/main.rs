@@ -1283,23 +1283,23 @@ async fn handle_ui_socket(
                             continue;
                         }
                     }
-                    // EE fine-grained RBAC: check resource-level permissions (skip for admins)
+                    // EE ACL enforcement (skip for admins)
                     if ee::ee_active() && !auth::is_dev_mode() {
                         let is_admin = matches!(
                             crate::db::get_user(&state.db, &login).await,
                             Ok(Some(row)) if row.role == "admin"
                         );
                         if !is_admin {
-                        if let Some((res_type, action)) = ee_resource_for_message(&message) {
-                            if !ee_check_permission(&login, res_type, &agent_id, action).await {
-                                let _ = tx.send(UiMessage::PermissionDenied {
-                                    agent_id: agent_id.clone(),
-                                    variant_type: res_type.to_string(),
-                                    reason: format!("no {action} permission on {res_type}"),
-                                });
-                                continue;
+                            if let Some(action) = ee_action_for_message(&message) {
+                                if !ee_check_permission(&login, action, &agent_id).await {
+                                    let _ = tx.send(UiMessage::PermissionDenied {
+                                        agent_id: agent_id.clone(),
+                                        variant_type: action.to_string(),
+                                        reason: format!("denied: {action}"),
+                                    });
+                                    continue;
+                                }
                             }
-                        }
                         }
                     }
                     // CE RBAC over the WebSocket plane. The HTTP rbac
@@ -1367,15 +1367,12 @@ async fn handle_ui_socket(
 async fn ee_fetch_allowed_agents(login: &str) -> Option<Vec<String>> {
     let ee_url = ee::ee_sidecar_url()?;
     let secret = std::env::var("EE_INTERNAL_SECRET").unwrap_or_default();
-    let url = format!(
-        "{}/api/ee/rbac/users/{}/allowed-agents",
-        ee_url.trim_end_matches('/'),
-        urlencoding::encode(login),
-    );
+    let url = format!("{}/api/ee/acl/user-agents", ee_url.trim_end_matches('/'));
+    let body = serde_json::json!({ "login": login });
     let resp = reqwest::Client::new()
         .post(&url)
         .bearer_auth(&secret)
-        .json(&serde_json::json!({ "agents": Vec::<String>::new() }))
+        .json(&body)
         .timeout(std::time::Duration::from_secs(5))
         .send()
         .await
@@ -1384,50 +1381,64 @@ async fn ee_fetch_allowed_agents(login: &str) -> Option<Vec<String>> {
         return None;
     }
     let data: serde_json::Value = resp.json().await.ok()?;
-    let agents = data["agents"].as_array()?;
-    if agents.is_empty() {
+    // patterns is null = no restriction, patterns is array = filter
+    if data["patterns"].is_null() {
         return None;
     }
+    let patterns = data["patterns"].as_array()?;
+    if patterns.is_empty() {
+        return Some(Vec::new());
+    }
     Some(
-        agents
+        patterns
             .iter()
             .filter_map(|v| v.as_str().map(String::from))
             .collect(),
     )
 }
 
-fn ee_resource_for_message(msg: &Message) -> Option<(&'static str, &'static str)> {
+fn ee_action_for_message(msg: &Message) -> Option<&'static str> {
     use Message::*;
     match msg {
-        ControlServiceRequest { .. } => Some(("service", "write")),
-        ListServicesRequest => Some(("service", "read")),
+        ControlServiceRequest { .. } => Some("service:Stop"),
+        ListServicesRequest => Some("service:List"),
         StartTerminalRequest { .. } | TerminalData { .. } | TerminalResize { .. } => {
-            Some(("terminal", "exec"))
+            Some("agent:Terminal")
         }
-        DockerContainerActionRequest { .. } | DockerCreateContainerRequest { .. } => {
-            Some(("container", "write"))
-        }
-        DockerExecStartRequest { .. } => Some(("container", "exec")),
-        ReadConfigRequest { .. } => Some(("config", "read")),
-        WriteConfigRequest { .. } => Some(("config", "write")),
-        BackupRunRequest { .. } | BackupRestoreRequest { .. } => Some(("backup", "write")),
-        K8sApplyRequest { .. } | K8sScaleRequest { .. } | K8sDeletePodRequest { .. } => {
-            Some(("k8s", "write"))
-        }
-        K8sExecRequest { .. } => Some(("k8s", "exec")),
+        DockerContainerActionRequest { .. } => Some("container:Stop"),
+        DockerCreateContainerRequest { .. } => Some("container:Create"),
+        DockerExecStartRequest { .. } => Some("container:Exec"),
+        DockerLogsRequest { .. } => Some("container:Logs"),
+        ReadConfigRequest { .. } => Some("config:Read"),
+        WriteConfigRequest { .. } => Some("config:Write"),
+        BackupRunRequest { .. } => Some("backup:Run"),
+        BackupRestoreRequest { .. } => Some("backup:Restore"),
+        K8sApplyRequest { .. } => Some("k8s:Apply"),
+        K8sScaleRequest { .. } => Some("k8s:Scale"),
+        K8sDeletePodRequest { .. } => Some("k8s:Delete"),
+        K8sExecRequest { .. } => Some("k8s:Exec"),
+        AptRefreshRequest => Some("apt:Refresh"),
+        AptUpgradeRequest { .. } => Some("apt:Upgrade"),
+        SwarmStackDeployRequest { .. } => Some("swarm:Deploy"),
+        SwarmServiceActionRequest { .. } => Some("swarm:Scale"),
+        DockerImagePullRequest { .. } => Some("docker:ImagePull"),
+        DockerImageRemoveRequest { .. } => Some("docker:ImageRemove"),
+        DockerSystemPruneRequest { .. } => Some("docker:Prune"),
+        DockerNetworkCreateRequest { .. } => Some("network:Create"),
+        DockerNetworkRemoveRequest { .. } => Some("network:Remove"),
+        DockerVolumeRemoveRequest { .. } => Some("volume:Remove"),
         _ => None,
     }
 }
 
-async fn ee_check_permission(login: &str, resource_type: &str, resource_id: &str, action: &str) -> bool {
+async fn ee_check_permission(login: &str, action: &str, resource: &str) -> bool {
     let Some(ee_url) = ee::ee_sidecar_url() else { return true };
     let secret = std::env::var("EE_INTERNAL_SECRET").unwrap_or_default();
-    let url = format!("{}/api/ee/rbac/check", ee_url.trim_end_matches('/'));
+    let url = format!("{}/api/ee/acl/evaluate", ee_url.trim_end_matches('/'));
     let body = serde_json::json!({
         "login": login,
-        "resource_type": resource_type,
-        "resource_id": resource_id,
         "action": action,
+        "resource": resource,
     });
     match reqwest::Client::new()
         .post(&url)
@@ -1441,7 +1452,7 @@ async fn ee_check_permission(login: &str, resource_type: &str, resource_id: &str
             let data: serde_json::Value = resp.json().await.unwrap_or_default();
             data["allowed"].as_bool().unwrap_or(true)
         }
-        _ => true, // fail-open to CE RBAC if EE is unreachable
+        _ => true, // fail-open if EE unreachable
     }
 }
 
@@ -1450,16 +1461,23 @@ fn ee_filter_agent_list(
     capabilities: HashMap<String, Vec<String>>,
     allowed: &Option<Vec<String>>,
 ) -> (Vec<String>, HashMap<String, Vec<String>>) {
-    let Some(allowed) = allowed else {
+    let Some(patterns) = allowed else {
         return (agents, capabilities);
     };
-    let filtered: Vec<String> = agents
-        .into_iter()
-        .filter(|a| allowed.contains(a))
-        .collect();
+    let matches = |agent: &str| -> bool {
+        patterns.iter().any(|p| {
+            if p == "*" { return true; }
+            if p.ends_with('*') {
+                let prefix = &p[..p.len() - 1];
+                return agent.starts_with(prefix);
+            }
+            p == agent
+        })
+    };
+    let filtered: Vec<String> = agents.into_iter().filter(|a| matches(a)).collect();
     let filtered_caps: HashMap<String, Vec<String>> = capabilities
         .into_iter()
-        .filter(|(k, _)| allowed.contains(k))
+        .filter(|(k, _)| matches(k))
         .collect();
     (filtered, filtered_caps)
 }
