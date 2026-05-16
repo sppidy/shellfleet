@@ -452,6 +452,12 @@ function HomeBody() {
               <span>Users &amp; seats</span>
             </button>
           )}
+          {role === 'admin' && (
+            <button type="button" className="nav-item" onClick={() => router.push('/policy')}>
+              <span className="ico">⚡</span>
+              <span>Access policy</span>
+            </button>
+          )}
         </div>
 
         <div className="nav-section">
