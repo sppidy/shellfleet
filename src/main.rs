@@ -7,6 +7,7 @@ mod db;
 mod device_auth;
 mod ee;
 mod fan_out;
+mod invites;
 mod health;
 mod labels;
 mod metrics;
@@ -409,6 +410,7 @@ async fn main() {
         .nest("/probe-library", probe_library::routes())
         .nest("/auth/mfa", mfa::routes())
         .nest("/users", users::routes())
+        .nest("/invites", invites::routes())
         .nest("/metrics", metrics::routes())
         .route("/me", get(me_handler))
         .route("/healthz", get(healthz))
@@ -442,7 +444,8 @@ async fn main() {
         .route("/healthz", get(healthz))
         .nest("/auth", auth::auth_routes(state.clone()))
         .nest("/api", api_routes)
-        .merge(ws_routes);
+        .merge(ws_routes)
+        .merge(invites::public_routes().with_state(state.clone()));
 
     if ee::ee_active() {
         tracing::info!(

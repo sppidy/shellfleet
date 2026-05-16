@@ -201,12 +201,15 @@ fn random_oauth_state() -> String {
 }
 
 async fn login_handler(jar: CookieJar) -> impl IntoResponse {
-    if let Some(ee_url) = crate::ee::ee_sidecar_url() {
+    if crate::ee::ee_active() && env::var("EE_OIDC_ISSUER").ok().filter(|s| !s.is_empty()).is_some() {
+        let ee_public = env::var("EE_PUBLIC_URL")
+            .or_else(|_| env::var("UI_URL"))
+            .unwrap_or_else(|_| "https://dashboard.example.com".to_string());
         let ui_url = env::var("UI_URL")
             .unwrap_or_else(|_| "https://dashboard.example.com/".to_string());
         let sso_url = format!(
             "{}/auth/sso/login?redirect_uri={}",
-            ee_url.trim_end_matches('/'),
+            ee_public.trim_end_matches('/'),
             urlencoding::encode(&ui_url),
         );
         return Redirect::temporary(&sso_url).into_response();

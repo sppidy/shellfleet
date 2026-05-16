@@ -288,6 +288,22 @@ pub async fn init() -> Result<SqlitePool, sqlx::Error> {
     .execute(&pool)
     .await?;
 
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS invites (
+            code TEXT PRIMARY KEY,
+            role TEXT NOT NULL DEFAULT 'viewer',
+            created_by TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            expires_at INTEGER NOT NULL,
+            used_by TEXT,
+            used_at INTEGER
+        );
+        "#,
+    )
+    .execute(&pool)
+    .await?;
+
     migrate_legacy_tokens(&pool).await?;
 
     Ok(pool)
@@ -1425,5 +1441,75 @@ pub async fn set_ee_seat_limit(pool: &SqlitePool, seats: i64) -> Result<(), sqlx
     .execute(pool)
     .await?;
     Ok(())
+}
+
+#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize)]
+pub struct InviteRow {
+    pub code: String,
+    pub role: String,
+    pub created_by: String,
+    pub created_at: i64,
+    pub expires_at: i64,
+    pub used_by: Option<String>,
+    pub used_at: Option<i64>,
+}
+
+pub async fn create_invite(
+    pool: &SqlitePool,
+    code: &str,
+    role: &str,
+    created_by: &str,
+    expires_at: i64,
+) -> Result<(), sqlx::Error> {
+    let now = crate::now_unix();
+    sqlx::query(
+        "INSERT INTO invites (code, role, created_by, created_at, expires_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+    )
+    .bind(code)
+    .bind(role)
+    .bind(created_by)
+    .bind(now)
+    .bind(expires_at)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn get_invite(pool: &SqlitePool, code: &str) -> Result<Option<InviteRow>, sqlx::Error> {
+    sqlx::query_as::<_, InviteRow>(
+        "SELECT code, role, created_by, created_at, expires_at, used_by, used_at FROM invites WHERE code = ?1",
+    )
+    .bind(code)
+    .fetch_optional(pool)
+    .await
+}
+
+pub async fn redeem_invite(pool: &SqlitePool, code: &str, login: &str) -> Result<bool, sqlx::Error> {
+    let now = crate::now_unix();
+    let result = sqlx::query(
+        "UPDATE invites SET used_by = ?2, used_at = ?3 WHERE code = ?1 AND used_by IS NULL",
+    )
+    .bind(code)
+    .bind(login)
+    .bind(now)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected() > 0)
+}
+
+pub async fn list_invites(pool: &SqlitePool) -> Result<Vec<InviteRow>, sqlx::Error> {
+    sqlx::query_as::<_, InviteRow>(
+        "SELECT code, role, created_by, created_at, expires_at, used_by, used_at FROM invites ORDER BY created_at DESC",
+    )
+    .fetch_all(pool)
+    .await
+}
+
+pub async fn delete_invite(pool: &SqlitePool, code: &str) -> Result<bool, sqlx::Error> {
+    let r = sqlx::query("DELETE FROM invites WHERE code = ?1")
+        .bind(code)
+        .execute(pool)
+        .await?;
+    Ok(r.rows_affected() > 0)
 }
 
