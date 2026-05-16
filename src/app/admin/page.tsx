@@ -20,20 +20,6 @@ interface UsersResponse {
   seats_used: number;
 }
 
-interface EeRole {
-  id: number;
-  name: string;
-  description: string | null;
-}
-
-interface EePermission {
-  id: number;
-  role_id: number;
-  resource_type: string;
-  resource_pattern: string;
-  action: string;
-}
-
 const RELATIVE = (ts: number) => {
   if (!ts) return 'never';
   const delta = Math.max(0, Math.floor(Date.now() / 1000) - ts);
@@ -52,13 +38,6 @@ export default function AdminPage() {
 
   // EE RBAC state
   const [eeAvailable, setEeAvailable] = useState(false);
-  const [roles, setRoles] = useState<EeRole[]>([]);
-  const [selectedRole, setSelectedRole] = useState<EeRole | null>(null);
-  const [permissions, setPermissions] = useState<EePermission[]>([]);
-  const [newRoleName, setNewRoleName] = useState('');
-  const [newRoleDesc, setNewRoleDesc] = useState('');
-  const [newPerm, setNewPerm] = useState({ resource_type: 'agent', resource_pattern: '*', action: '*' });
-  const [assignLogin, setAssignLogin] = useState('');
 
   // Invite state
   const [invites, setInvites] = useState<{ code: string; role: string; created_by: string; expires_at: number; used_by: string | null }[]>([]);
@@ -94,21 +73,10 @@ export default function AdminPage() {
     }
   }, []);
 
-  const fetchRoles = useCallback(async () => {
+  const checkEe = useCallback(async () => {
     try {
-      const res = await apiFetch('/api/ee/rbac/roles');
-      if (res.status === 404 || res.status === 502) { setEeAvailable(false); return; }
-      if (!res.ok) return;
-      setEeAvailable(true);
-      setRoles(await res.json());
-    } catch { setEeAvailable(false); }
-  }, []);
-
-  const fetchPermissions = useCallback(async (roleId: number) => {
-    try {
-      const res = await apiFetch(`/api/ee/rbac/roles/${roleId}/permissions`);
-      if (!res.ok) return;
-      setPermissions(await res.json());
+      const res = await apiFetch('/api/ee/acl/actions');
+      if (res.ok) setEeAvailable(true);
     } catch { /* ignore */ }
   }, []);
 
@@ -198,17 +166,12 @@ export default function AdminPage() {
   };
 
   useEffect(() => {
-    if (status === 'authed') { fetchUsers(); fetchRoles(); fetchInvites(); fetchOrgs(); }
-  }, [status, fetchUsers, fetchRoles, fetchInvites, fetchOrgs]);
+    if (status === 'authed') { fetchUsers(); checkEe(); fetchInvites(); fetchOrgs(); }
+  }, [status, fetchUsers, checkEe, fetchInvites, fetchOrgs]);
 
   useEffect(() => {
     if (selectedOrg) fetchOrgDetails(selectedOrg.id);
   }, [selectedOrg, fetchOrgDetails]);
-
-  useEffect(() => {
-    if (selectedRole) fetchPermissions(selectedRole.id);
-    else setPermissions([]);
-  }, [selectedRole, fetchPermissions]);
 
   const setRole = useCallback(async (login: string, newRole: 'admin' | 'viewer') => {
     setPending(login); setError(null);
@@ -234,59 +197,6 @@ export default function AdminPage() {
     finally { setPending(null); }
   }, [fetchUsers]);
 
-  const createRole = async () => {
-    if (!newRoleName.trim()) return;
-    setError(null);
-    try {
-      const res = await apiFetch('/api/ee/rbac/roles', {
-        method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ name: newRoleName.trim(), description: newRoleDesc.trim() || null }),
-      });
-      if (!res.ok) throw new Error(await res.text());
-      setNewRoleName(''); setNewRoleDesc('');
-      await fetchRoles();
-    } catch (e) { setError(e instanceof Error ? e.message : 'failed'); }
-  };
-
-  const deleteRole = async (id: number) => {
-    setError(null);
-    try {
-      await apiFetch(`/api/ee/rbac/roles/${id}`, { method: 'DELETE' });
-      if (selectedRole?.id === id) setSelectedRole(null);
-      await fetchRoles();
-    } catch (e) { setError(e instanceof Error ? e.message : 'failed'); }
-  };
-
-  const addPermission = async () => {
-    if (!selectedRole) return;
-    setError(null);
-    try {
-      const res = await apiFetch(`/api/ee/rbac/roles/${selectedRole.id}/permissions`, {
-        method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(newPerm),
-      });
-      if (!res.ok) throw new Error(await res.text());
-      await fetchPermissions(selectedRole.id);
-    } catch (e) { setError(e instanceof Error ? e.message : 'failed'); }
-  };
-
-  const removePermission = async (permId: number) => {
-    try {
-      await apiFetch(`/api/ee/rbac/permissions/${permId}`, { method: 'DELETE' });
-      if (selectedRole) await fetchPermissions(selectedRole.id);
-    } catch { /* ignore */ }
-  };
-
-  const assignRole = async () => {
-    if (!selectedRole || !assignLogin.trim()) return;
-    try {
-      await apiFetch('/api/ee/rbac/assignments', {
-        method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ login: assignLogin.trim(), role_id: selectedRole.id }),
-      });
-      setAssignLogin('');
-    } catch (e) { setError(e instanceof Error ? e.message : 'failed'); }
-  };
 
   if (status !== 'authed') {
     return (<div className="center-screen"><Loader2Icon className="w-6 h-6 animate-spin" style={{ color: 'var(--fg-2)' }} /></div>);
@@ -309,7 +219,7 @@ export default function AdminPage() {
             <span className="here">admin</span>
           </div>
           <div className="topbar-actions">
-            <button className="btn" onClick={() => { fetchUsers(); fetchRoles(); }}>↻ refresh</button>
+            <button className="btn" onClick={() => { fetchUsers(); fetchInvites(); fetchOrgs(); }}>↻ refresh</button>
           </div>
         </div>
 
@@ -433,96 +343,8 @@ export default function AdminPage() {
               </div>
             </div>}
 
-            {/* EE ROLES + PERMISSIONS */}
+            {/* EE: Orgs */}
             {eeAvailable && (<>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 12 }}>
-                <div className="panel">
-                  <div className="panel-head">
-                    <div className="panel-title"><span className="ico">⚙</span> ROLES <span className="meta">EE</span></div>
-                  </div>
-                  <div className="panel-body" style={{ padding: 12 }}>
-                    <div style={{ display: 'flex', gap: 6, marginBottom: 12 }}>
-                      <input className="input" placeholder="Role name" value={newRoleName} onChange={(e) => setNewRoleName(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && createRole()} style={{ flex: 1 }} />
-                      <input className="input" placeholder="Description" value={newRoleDesc} onChange={(e) => setNewRoleDesc(e.target.value)} style={{ flex: 1 }} />
-                      <button className="btn btn-accent" onClick={createRole}>+</button>
-                    </div>
-                    {roles.length === 0 ? (
-                      <div className="mono muted" style={{ fontSize: 12 }}>No custom roles. Create one to control per-user machine access.</div>
-                    ) : (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                        {roles.map((r) => (
-                          <div key={r.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 8px', borderRadius: 4, cursor: 'pointer', background: selectedRole?.id === r.id ? 'var(--bg-2)' : 'transparent' }} onClick={() => setSelectedRole(r)}>
-                            <span className="mono" style={{ flex: 1, color: 'var(--fg)', fontSize: 13 }}>{r.name}</span>
-                            <span className="mono muted" style={{ fontSize: 11 }}>{r.description}</span>
-                            <button className="btn btn-sm" style={{ color: 'var(--err)', padding: '2px 6px' }} onClick={(e) => { e.stopPropagation(); deleteRole(r.id); }}>✕</button>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                <div className="panel">
-                  <div className="panel-head">
-                    <div className="panel-title">
-                      <span className="ico">⊡</span> PERMISSIONS
-                      {selectedRole && <span className="meta"> — {selectedRole.name}</span>}
-                    </div>
-                  </div>
-                  <div className="panel-body" style={{ padding: 12 }}>
-                    {!selectedRole ? (
-                      <div className="mono muted" style={{ fontSize: 12 }}>Select a role to manage its permissions.</div>
-                    ) : (
-                      <>
-                        <div style={{ display: 'flex', gap: 6, marginBottom: 10, flexWrap: 'wrap' }}>
-                          <select className="input" value={newPerm.resource_type} onChange={(e) => setNewPerm({ ...newPerm, resource_type: e.target.value })} style={{ width: 110 }}>
-                            <option value="agent">agent</option>
-                            <option value="service">service</option>
-                            <option value="container">container</option>
-                            <option value="terminal">terminal</option>
-                            <option value="config">config</option>
-                            <option value="backup">backup</option>
-                            <option value="k8s">k8s</option>
-                          </select>
-                          <input className="input" placeholder="Pattern (* or prefix*)" value={newPerm.resource_pattern} onChange={(e) => setNewPerm({ ...newPerm, resource_pattern: e.target.value })} style={{ width: 130 }} />
-                          <select className="input" value={newPerm.action} onChange={(e) => setNewPerm({ ...newPerm, action: e.target.value })} style={{ width: 90 }}>
-                            <option value="*">* (all)</option>
-                            <option value="read">read</option>
-                            <option value="write">write</option>
-                            <option value="exec">exec</option>
-                            <option value="delete">delete</option>
-                          </select>
-                          <button className="btn btn-accent" onClick={addPermission}>+</button>
-                        </div>
-                        {permissions.length === 0 ? (
-                          <div className="mono muted" style={{ fontSize: 12 }}>No permissions yet.</div>
-                        ) : (
-                          <table className="tbl">
-                            <thead><tr><th>TYPE</th><th>PATTERN</th><th>ACTION</th><th style={{ width: 30 }}></th></tr></thead>
-                            <tbody>
-                              {permissions.map((p) => (
-                                <tr key={p.id}>
-                                  <td className="mono">{p.resource_type}</td>
-                                  <td className="mono">{p.resource_pattern}</td>
-                                  <td className="mono">{p.action}</td>
-                                  <td><button className="btn btn-sm" style={{ color: 'var(--err)', padding: '2px 6px' }} onClick={() => removePermission(p.id)}>✕</button></td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        )}
-                        <div style={{ marginTop: 12, borderTop: '1px solid var(--bd)', paddingTop: 10 }}>
-                          <div className="mono muted" style={{ fontSize: 11, marginBottom: 4 }}>ASSIGN TO USER</div>
-                          <div style={{ display: 'flex', gap: 6 }}>
-                            <input className="input" placeholder="username" value={assignLogin} onChange={(e) => setAssignLogin(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && assignRole()} style={{ flex: 1 }} />
-                            <button className="btn btn-accent" onClick={assignRole}>assign</button>
-                          </div>
-                        </div>
-                      </>
-                    )}
-                  </div>
-                </div>
-              </div>
 
               {/* TENANCY */}
               <div className="panel" style={{ marginTop: 12 }}>
