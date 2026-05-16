@@ -60,6 +60,11 @@ export default function AdminPage() {
   const [newPerm, setNewPerm] = useState({ resource_type: 'agent', resource_pattern: '*', action: '*' });
   const [assignLogin, setAssignLogin] = useState('');
 
+  // Invite state
+  const [invites, setInvites] = useState<{ code: string; role: string; created_by: string; expires_at: number; used_by: string | null }[]>([]);
+  const [inviteRole, setInviteRole] = useState('viewer');
+  const [lastInviteUrl, setLastInviteUrl] = useState<string | null>(null);
+
   useEffect(() => {
     if (status === 'guest') router.replace('/login');
     if (status === 'pending_mfa') router.replace('/mfa');
@@ -96,9 +101,37 @@ export default function AdminPage() {
     } catch { /* ignore */ }
   }, []);
 
+  const fetchInvites = useCallback(async () => {
+    try {
+      const res = await apiFetch('/api/invites');
+      if (res.ok) setInvites(await res.json());
+    } catch { /* ignore */ }
+  }, []);
+
+  const createInvite = async () => {
+    setError(null);
+    try {
+      const res = await apiFetch('/api/invites', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ role: inviteRole, ttl_hours: 24 }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const data = await res.json();
+      setLastInviteUrl(`${window.location.origin}${data.url}`);
+      await fetchInvites();
+    } catch (e) { setError(e instanceof Error ? e.message : 'failed'); }
+  };
+
+  const deleteInvite = async (code: string) => {
+    try {
+      await apiFetch(`/api/invites/${code}`, { method: 'DELETE' });
+      await fetchInvites();
+    } catch { /* ignore */ }
+  };
+
   useEffect(() => {
-    if (status === 'authed') { fetchUsers(); fetchRoles(); }
-  }, [status, fetchUsers, fetchRoles]);
+    if (status === 'authed') { fetchUsers(); fetchRoles(); fetchInvites(); }
+  }, [status, fetchUsers, fetchRoles, fetchInvites]);
 
   useEffect(() => {
     if (selectedRole) fetchPermissions(selectedRole.id);
@@ -272,6 +305,53 @@ export default function AdminPage() {
                                 </button>
                               </div>
                             </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            </div>
+
+            {/* INVITES */}
+            <div className="panel" style={{ marginTop: 12 }}>
+              <div className="panel-head">
+                <div className="panel-title"><span className="ico">✉</span> INVITE LINKS</div>
+              </div>
+              <div className="panel-body" style={{ padding: 12 }}>
+                <div style={{ display: 'flex', gap: 6, marginBottom: 10, alignItems: 'center' }}>
+                  <select className="input" value={inviteRole} onChange={(e) => setInviteRole(e.target.value)} style={{ width: 100 }}>
+                    <option value="viewer">viewer</option>
+                    <option value="admin">admin</option>
+                  </select>
+                  <button className="btn btn-accent" onClick={createInvite}>generate invite link</button>
+                  {lastInviteUrl && (
+                    <button className="btn" onClick={() => { navigator.clipboard.writeText(lastInviteUrl); }}>
+                      copy link
+                    </button>
+                  )}
+                </div>
+                {lastInviteUrl && (
+                  <div className="mono" style={{ fontSize: 12, color: 'var(--accent)', marginBottom: 10, wordBreak: 'break-all' }}>
+                    {lastInviteUrl}
+                  </div>
+                )}
+                {invites.length > 0 && (
+                  <table className="tbl">
+                    <thead><tr><th>CODE</th><th>ROLE</th><th>STATUS</th><th style={{ width: 40 }}></th></tr></thead>
+                    <tbody>
+                      {invites.map((inv) => {
+                        const expired = Math.floor(Date.now() / 1000) > inv.expires_at;
+                        const used = !!inv.used_by;
+                        return (
+                          <tr key={inv.code}>
+                            <td className="mono" style={{ fontSize: 12 }}>{inv.code.slice(0, 8)}...</td>
+                            <td className="mono">{inv.role}</td>
+                            <td className="mono" style={{ color: used ? 'var(--fg-2)' : expired ? 'var(--err)' : 'var(--accent)' }}>
+                              {used ? `used by ${inv.used_by}` : expired ? 'expired' : 'active'}
+                            </td>
+                            <td><button className="btn btn-sm" style={{ color: 'var(--err)', padding: '2px 6px' }} onClick={() => deleteInvite(inv.code)}>✕</button></td>
                           </tr>
                         );
                       })}
