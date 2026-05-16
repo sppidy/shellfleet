@@ -201,6 +201,17 @@ fn random_oauth_state() -> String {
 }
 
 async fn login_handler(jar: CookieJar) -> impl IntoResponse {
+    if let Some(ee_url) = crate::ee::ee_sidecar_url() {
+        let ui_url = env::var("UI_URL")
+            .unwrap_or_else(|_| "https://dashboard.example.com/".to_string());
+        let sso_url = format!(
+            "{}/auth/sso/login?redirect_uri={}",
+            ee_url.trim_end_matches('/'),
+            urlencoding::encode(&ui_url),
+        );
+        return Redirect::temporary(&sso_url).into_response();
+    }
+
     let client_id = env::var("GITHUB_CLIENT_ID").unwrap_or_else(|_| "dummy_id".to_string());
     let redirect_uri = env::var("OAUTH_REDIRECT_URL")
         .unwrap_or_else(|_| "https://dashboard.example.com/auth/callback".to_string());
@@ -290,6 +301,11 @@ pub fn issue_jwt(sub: &str, role: Role, mfa: bool, ttl_secs: i64) -> Result<Stri
         &EncodingKey::from_secret(secret.as_bytes()),
     )
     .map_err(|e| e.to_string())
+}
+
+pub fn issue_internal_jwt(login: &str, role: &str, mfa: bool) -> String {
+    let r = Role::parse(role);
+    issue_jwt(login, r, mfa, 86400).unwrap_or_default()
 }
 
 async fn callback_handler(
@@ -405,12 +421,13 @@ async fn callback_handler(
         "viewer"
     };
 
+    let seat_cap = crate::db::seat_limit(&state.db).await;
     let upsert = match crate::db::upsert_login_with_seat_check(
         &state.db,
         &user_data.login,
         default_role,
         now,
-        crate::CE_USER_LIMIT as i64,
+        seat_cap,
     )
     .await
     {
@@ -426,8 +443,8 @@ async fn callback_handler(
         crate::db::SeatedUpsert::SeatCapReached => {
             tracing::warn!(
                 login = %user_data.login,
-                limit = crate::CE_USER_LIMIT,
-                "rejecting new sign-in: CE seat cap reached"
+                limit = seat_cap,
+                "rejecting new sign-in: seat cap reached"
             );
             crate::db::record_audit(
                 &state.db,
@@ -436,15 +453,14 @@ async fn callback_handler(
                 None,
                 "auth.login.seat_cap_reached",
                 false,
-                Some(&format!("limit={}", crate::CE_USER_LIMIT)),
+                Some(&format!("limit={seat_cap}")),
             )
             .await;
             return (
                 StatusCode::FORBIDDEN,
                 format!(
-                    "This ShellFleet Community Edition is at its {}-user seat cap. \
+                    "This ShellFleet instance is at its {seat_cap}-user seat cap. \
                      Ask an existing admin to remove a seat at /admin, or upgrade to EE.",
-                    crate::CE_USER_LIMIT
                 ),
             )
                 .into_response();

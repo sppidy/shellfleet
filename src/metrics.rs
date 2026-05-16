@@ -53,6 +53,57 @@ use std::sync::{Arc, OnceLock};
 
 use crate::{auth, AppState};
 
+async fn proxy_get_to_ee(ee_url: &str, path: &str) -> axum::response::Response {
+    let url = format!("{}{}", ee_url.trim_end_matches('/'), path);
+    let secret = std::env::var("EE_INTERNAL_SECRET").unwrap_or_default();
+    match reqwest::Client::new()
+        .get(&url)
+        .bearer_auth(&secret)
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await
+    {
+        Ok(resp) => {
+            let status = StatusCode::from_u16(resp.status().as_u16())
+                .unwrap_or(StatusCode::BAD_GATEWAY);
+            let body = resp.text().await.unwrap_or_default();
+            (status, [(axum::http::header::CONTENT_TYPE, "application/json")], body).into_response()
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "EE metrics proxy failed");
+            (StatusCode::BAD_GATEWAY, "EE sidecar unavailable").into_response()
+        }
+    }
+}
+
+async fn proxy_post_json_to_ee(
+    ee_url: &str,
+    path: &str,
+    body: &impl Serialize,
+) -> axum::response::Response {
+    let url = format!("{}{}", ee_url.trim_end_matches('/'), path);
+    let secret = std::env::var("EE_INTERNAL_SECRET").unwrap_or_default();
+    match reqwest::Client::new()
+        .post(&url)
+        .bearer_auth(&secret)
+        .json(body)
+        .timeout(std::time::Duration::from_secs(30))
+        .send()
+        .await
+    {
+        Ok(resp) => {
+            let status = StatusCode::from_u16(resp.status().as_u16())
+                .unwrap_or(StatusCode::BAD_GATEWAY);
+            let body = resp.text().await.unwrap_or_default();
+            (status, [(axum::http::header::CONTENT_TYPE, "application/json")], body).into_response()
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "EE metrics proxy failed");
+            (StatusCode::BAD_GATEWAY, "EE sidecar unavailable").into_response()
+        }
+    }
+}
+
 const DEFAULT_CONFIG_PATH: &str = "/etc/shellfleet/metrics.yaml";
 const PROM_TIMEOUT_SECS: u64 = 10;
 const MAX_POINTS: usize = 5_000;
@@ -301,6 +352,9 @@ async fn panels_handler(
     if let Err(err) = auth::current_user(&jar, &state.db).await {
         return err.into_response();
     }
+    if let Some(ee_url) = crate::ee::ee_sidecar_url() {
+        return proxy_get_to_ee(&ee_url, "/api/ee/metrics/panels").await;
+    }
     let Some(cfg) = config() else {
         return Json(PanelsResponse { enabled: false, panels: Vec::new() }).into_response();
     };
@@ -318,7 +372,7 @@ async fn panels_handler(
     Json(PanelsResponse { enabled: true, panels }).into_response()
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 struct QueryRequest {
     panel: String,
     agent_id: String,
@@ -401,12 +455,14 @@ async fn query_handler(
     State(state): State<Arc<AppState>>,
     Json(body): Json<QueryRequest>,
 ) -> impl IntoResponse {
-    // Read access requires an authed session. Viewers are explicitly
-    // allowed to see graphs.
     let claims = match auth::current_user(&jar, &state.db).await {
         Ok(c) => c,
         Err(err) => return err.into_response(),
     };
+
+    if let Some(ee_url) = crate::ee::ee_sidecar_url() {
+        return proxy_post_json_to_ee(&ee_url, "/api/ee/metrics/query", &body).await;
+    }
 
     let Some(cfg) = config() else {
         return (StatusCode::SERVICE_UNAVAILABLE, "metrics plugin not configured").into_response();

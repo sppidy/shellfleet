@@ -5,6 +5,7 @@ mod crypto;
 mod csrf;
 mod db;
 mod device_auth;
+mod ee;
 mod fan_out;
 mod health;
 mod labels;
@@ -146,62 +147,6 @@ pub struct AppState {
 /// tracks those two underlying timeouts.
 const DISCONNECT_GRACE: std::time::Duration = std::time::Duration::from_secs(50);
 
-/// Replace any `token=…` query parameter value in `uri` with
-/// `token=REDACTED`. Used by the request-trace span so the legacy
-/// `?token=` agent-auth fallback doesn't bleed into application logs
-/// while it's still accepted. Trailing `&`-separated keys other than
-/// `token` are passed through unchanged. Best-effort string ops
-/// rather than a full URI parser — TraceLayer is hot-path so we
-/// avoid the allocator overhead of `url::Url`.
-fn redact_token_query(uri: &str) -> String {
-    let (path, query) = match uri.split_once('?') {
-        Some((p, q)) => (p, q),
-        None => return uri.to_string(),
-    };
-    let redacted: Vec<String> = query
-        .split('&')
-        .map(|kv| match kv.split_once('=') {
-            Some(("token", _)) => "token=REDACTED".to_string(),
-            _ => kv.to_string(),
-        })
-        .collect();
-    format!("{path}?{}", redacted.join("&"))
-}
-
-#[cfg(test)]
-mod redact_tests {
-    use super::redact_token_query;
-
-    #[test]
-    fn no_query_unchanged() {
-        assert_eq!(redact_token_query("/agent/ws"), "/agent/ws");
-    }
-
-    #[test]
-    fn token_redacted() {
-        assert_eq!(
-            redact_token_query("/agent/ws?token=deadbeef"),
-            "/agent/ws?token=REDACTED",
-        );
-    }
-
-    #[test]
-    fn other_params_kept() {
-        assert_eq!(
-            redact_token_query("/agent/ws?foo=1&token=secret&bar=2"),
-            "/agent/ws?foo=1&token=REDACTED&bar=2",
-        );
-    }
-
-    #[test]
-    fn no_token_param_kept() {
-        assert_eq!(
-            redact_token_query("/x?foo=bar"),
-            "/x?foo=bar",
-        );
-    }
-}
-
 async fn broadcast_agent_list(state: &AppState) {
     let (agents, capabilities) = {
         let map = state.agents.lock().await;
@@ -266,8 +211,38 @@ async fn audit_handler(
     State(state): State<Arc<AppState>>,
     Query(q): Query<AuditQuery>,
 ) -> impl IntoResponse {
-    // Auth + RBAC are enforced by the rbac middleware layered on
-    // api_routes; by the time we get here the request is authed.
+    if let Some(ee_url) = ee::ee_sidecar_url() {
+        let limit = q.limit.unwrap_or(200).clamp(1, 1000);
+        let url = format!(
+            "{}/api/ee/audit?limit={}",
+            ee_url.trim_end_matches('/'),
+            limit
+        );
+        let secret = std::env::var("EE_INTERNAL_SECRET").unwrap_or_default();
+        match reqwest::Client::new()
+            .get(&url)
+            .bearer_auth(&secret)
+            .timeout(std::time::Duration::from_secs(10))
+            .send()
+            .await
+        {
+            Ok(resp) => {
+                let status = StatusCode::from_u16(resp.status().as_u16())
+                    .unwrap_or(StatusCode::BAD_GATEWAY);
+                let body = resp.text().await.unwrap_or_default();
+                return (
+                    status,
+                    [(axum::http::header::CONTENT_TYPE, "application/json")],
+                    body,
+                )
+                    .into_response();
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "EE audit proxy failed, falling back to CE");
+            }
+        }
+    }
+
     let limit = q.limit.unwrap_or(200).clamp(1, 1000);
     match db::recent_audit(&state.db, limit).await {
         Ok(rows) => axum::Json(rows).into_response(),
@@ -460,35 +435,24 @@ async fn main() {
         .with_state(state.clone());
 
     let trace_layer = TraceLayer::new_for_http()
-        .make_span_with(
-            |req: &axum::http::Request<axum::body::Body>| {
-                // Redact `token=...` from any logged URI. While the
-                // legacy `?token=` agent-auth fallback is still
-                // accepted, we don't want it landing in `tracing`
-                // request spans (which propagate to stdout, journald,
-                // and any downstream log aggregator). Once the
-                // fallback is removed this redaction can come out.
-                let raw_uri = req.uri().to_string();
-                let safe_uri = if raw_uri.contains("token=") {
-                    redact_token_query(&raw_uri)
-                } else {
-                    raw_uri
-                };
-                tracing::info_span!(
-                    "request",
-                    method = %req.method(),
-                    uri = %safe_uri,
-                )
-            },
-        )
         .on_response(DefaultOnResponse::new().level(Level::INFO))
         .on_failure(DefaultOnFailure::new().level(Level::WARN));
 
-    let app = Router::new()
+    let mut app = Router::new()
         .route("/healthz", get(healthz))
         .nest("/auth", auth::auth_routes(state.clone()))
         .nest("/api", api_routes)
-        .merge(ws_routes)
+        .merge(ws_routes);
+
+    if ee::ee_active() {
+        tracing::info!(
+            url = %ee::ee_sidecar_url().unwrap_or_default(),
+            "EE sidecar detected — mounting /internal routes"
+        );
+        app = app.nest("/internal", ee::routes().with_state(state.clone()));
+    }
+
+    let app = app
         // Per-real-IP token-bucket limiter on the anonymous-attacker
         // surface (/auth/*, /api/me, /api/auth/mfa/verify,
         // /api/auth/mfa/status). Defence-in-depth on top of the edge
@@ -520,34 +484,22 @@ async fn main() {
 
 async fn agent_ws_handler(
     headers: axum::http::HeaderMap,
-    Query(query): Query<HashMap<String, String>>,
     ws: WebSocketUpgrade,
     State(state): State<Arc<AppState>>,
 ) -> impl IntoResponse {
-    // Prefer the `Authorization: Bearer <token>` header. The
-    // `?token=` query-string path is kept ONE release as a
-    // transitional fallback so existing agents (which still build
-    // the URL with `?token=`) keep working through the rollout.
-    // Logged with a warning so operators can see migration
-    // progress; the next release will drop the query path.
-    let header_token = headers
+    let token = match headers
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|h| h.to_str().ok())
         .and_then(|s| {
-            // Tolerate `Bearer <t>` and `bearer <t>`.
             s.strip_prefix("Bearer ")
                 .or_else(|| s.strip_prefix("bearer "))
         })
         .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty());
-
-    let used_query = header_token.is_none();
-    let token = match header_token.or_else(|| query.get("token").cloned()) {
-        Some(t) if !t.is_empty() => t,
-        _ => {
-            tracing::warn!(
-                "agent ws upgrade missing token (no Authorization header, no ?token=)"
-            );
+        .filter(|s| !s.is_empty())
+    {
+        Some(t) => t,
+        None => {
+            tracing::warn!("agent ws upgrade missing Authorization header");
             return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
         }
     };
@@ -560,25 +512,6 @@ async fn agent_ws_handler(
     if !legacy_match && !is_approved {
         tracing::warn!("unauthorized agent connection attempt");
         return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
-    }
-
-    if used_query {
-        // TODO(v24): drop the `?token=` query-string fallback. v23 was
-        // the deprecation release — every shipped agent build from v23
-        // onwards uses the `Authorization: Bearer` header. Once
-        // operators have rolled all agents to v23+, the
-        // `Query<HashMap<...>>` extractor + the `header_token.or_else(…)`
-        // chain above can be replaced with a single
-        // `headers.get(AUTHORIZATION)` extraction. Audit production
-        // logs first: if NO "legacy ?token= query-string auth" warnings
-        // have appeared for one full deploy cycle, the path is unused
-        // and safe to remove. Also drop `redact_token_query` + the
-        // `make_span_with` wrapper in the trace layer that exists
-        // only to scrub this query param.
-        tracing::warn!(
-            "agent ws using legacy ?token= query-string auth — please upgrade the agent; \
-             the query path will be removed in v24"
-        );
     }
 
     ws.on_upgrade(move |socket| handle_agent_socket(socket, state, token))

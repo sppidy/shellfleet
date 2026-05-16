@@ -25,7 +25,7 @@ use axum_extra::extract::cookie::CookieJar;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-use crate::{auth, AppState, CE_USER_LIMIT};
+use crate::{auth, AppState};
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
@@ -36,7 +36,7 @@ pub fn routes() -> Router<Arc<AppState>> {
 #[derive(Serialize)]
 struct ListResponse {
     users: Vec<crate::db::UserListRow>,
-    seat_limit: usize,
+    seat_limit: i64,
     seats_used: usize,
 }
 
@@ -53,9 +53,10 @@ async fn list_handler(jar: CookieJar, State(state): State<Arc<AppState>>) -> imp
         }
     };
     let seats_used = users.len();
+    let seat_cap = crate::db::seat_limit(&state.db).await;
     Json(ListResponse {
         users,
-        seat_limit: CE_USER_LIMIT,
+        seat_limit: seat_cap,
         seats_used,
     })
     .into_response()

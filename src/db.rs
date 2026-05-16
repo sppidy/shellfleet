@@ -276,6 +276,18 @@ pub async fn init() -> Result<SqlitePool, sqlx::Error> {
         .execute(&pool)
         .await;
 
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS ee_license (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            seats INTEGER NOT NULL DEFAULT 3,
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+        "#,
+    )
+    .execute(&pool)
+    .await?;
+
     migrate_legacy_tokens(&pool).await?;
 
     Ok(pool)
@@ -1391,5 +1403,27 @@ pub async fn upsert_login_with_seat_check(
 
     tx.commit().await?;
     Ok(SeatedUpsert::Created(row))
+}
+
+pub async fn seat_limit(pool: &SqlitePool) -> i64 {
+    sqlx::query_scalar::<_, i64>("SELECT seats FROM ee_license WHERE id = 1")
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or(crate::CE_USER_LIMIT as i64)
+}
+
+pub async fn set_ee_seat_limit(pool: &SqlitePool, seats: i64) -> Result<(), sqlx::Error> {
+    let now = crate::now_unix();
+    sqlx::query(
+        "INSERT INTO ee_license (id, seats, updated_at) VALUES (1, ?1, ?2) \
+         ON CONFLICT(id) DO UPDATE SET seats = ?1, updated_at = ?2",
+    )
+    .bind(seats)
+    .bind(now)
+    .execute(pool)
+    .await?;
+    Ok(())
 }
 
