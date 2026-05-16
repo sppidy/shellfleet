@@ -21,6 +21,7 @@ import HealthProbes from '@/components/HealthProbes';
 import Backups from '@/components/Backups';
 import AgentLabels from '@/components/AgentLabels';
 import CommandPalette from '@/components/CommandPalette';
+import AiAnalysis from '@/components/AiAnalysis';
 import { Loader2Icon, MenuIcon, XIcon } from 'lucide-react';
 
 type Tab =
@@ -32,7 +33,8 @@ type Tab =
   | 'updates'
   | 'health'
   | 'backups'
-  | 'config';
+  | 'config'
+  | 'ai';
 
 const TABS: Tab[] = [
   'dashboard',
@@ -44,6 +46,7 @@ const TABS: Tab[] = [
   'health',
   'backups',
   'config',
+  'ai',
 ];
 
 const TAB_DEFS: { id: Tab; label: string; badge?: () => string | null }[] = [
@@ -56,6 +59,7 @@ const TAB_DEFS: { id: Tab; label: string; badge?: () => string | null }[] = [
   { id: 'health', label: 'health' },
   { id: 'backups', label: 'backups' },
   { id: 'config', label: 'config' },
+  { id: 'ai', label: 'ai ✦' },
 ];
 
 // Old top-level tabs that have moved under "docker". Keep the names
@@ -142,6 +146,7 @@ function HomeBody() {
   const [unreadCount, setUnreadCount] = useState<number>(0);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [backupsEnabled, setBackupsEnabled] = useState(false);
+  const [eeActive, setEeActive] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -151,6 +156,12 @@ function HomeBody() {
         if (!res.ok) return;
         const data: { backups_enabled: boolean } = await res.json();
         if (!cancelled) setBackupsEnabled(data.backups_enabled);
+      } catch {
+        /* ignore */
+      }
+      try {
+        const res = await apiFetch('/api/ee/rbac/roles');
+        if (!cancelled && res.ok) setEeActive(true);
       } catch {
         /* ignore */
       }
@@ -316,6 +327,7 @@ function HomeBody() {
     // systemd-driven surfaces: apt update window + journalctl
     // streaming. K8s-only Pod agents skip these.
     if ((t.id === 'updates' || t.id === 'journal') && !systemdAvailable) return false;
+    if (t.id === 'ai' && !eeActive) return false;
     return true;
   });
 
@@ -647,6 +659,8 @@ function HomeBody() {
                 <HealthProbes agentId={selectedAgent} />
               ) : activeTab === 'backups' && backupsEnabled ? (
                 <Backups agentId={selectedAgent} />
+              ) : activeTab === 'ai' ? (
+                <AiAnalysis agentId={selectedAgent} />
               ) : (
                 <ConfigEditor agentId={selectedAgent} />
               )}

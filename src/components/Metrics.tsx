@@ -17,6 +17,7 @@ interface PanelInfo {
 interface PanelsResponse {
   enabled: boolean;
   panels: PanelInfo[];
+  sources?: string[];
 }
 
 interface Series {
@@ -259,10 +260,12 @@ function PanelCard({
   agentId,
   panel,
   range,
+  source,
 }: {
   agentId: string;
   panel: PanelInfo;
   range: Range;
+  source?: string;
 }) {
   const [data, setData] = useState<QueryResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -275,7 +278,7 @@ function PanelCard({
     apiFetch('/api/metrics/query', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ panel: panel.id, agent_id: agentId, range }),
+      body: JSON.stringify({ panel: panel.id, agent_id: agentId, range, ...(source ? { source } : {}) }),
     })
       .then(async (res) => {
         if (cancelled) return;
@@ -296,7 +299,7 @@ function PanelCard({
     return () => {
       cancelled = true;
     };
-  }, [agentId, panel.id, range]);
+  }, [agentId, panel.id, range, source]);
 
   return (
     <div className="panel">
@@ -352,6 +355,8 @@ export default function Metrics({ agentId }: { agentId: string }) {
   const [panels, setPanels] = useState<PanelInfo[] | null>(null);
   const [pluginEnabled, setPluginEnabled] = useState<boolean | null>(null);
   const [range, setRange] = useState<Range>('1h');
+  const [sources, setSources] = useState<string[]>([]);
+  const [activeSource, setActiveSource] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
@@ -362,12 +367,16 @@ export default function Metrics({ agentId }: { agentId: string }) {
       const data = (await res.json()) as PanelsResponse;
       setPluginEnabled(data.enabled);
       setPanels(data.panels);
+      if (data.sources && data.sources.length > 0) {
+        setSources(data.sources);
+        if (!activeSource) setActiveSource(data.sources[0]);
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'failed');
       setPluginEnabled(false);
       setPanels([]);
     }
-  }, []);
+  }, [activeSource]);
 
   useEffect(() => {
     void refresh();
@@ -450,6 +459,18 @@ export default function Metrics({ agentId }: { agentId: string }) {
                 </button>
               ))}
             </div>
+            {sources.length > 1 && (
+              <select
+                className="input"
+                value={activeSource}
+                onChange={(e) => setActiveSource(e.target.value)}
+                style={{ fontSize: 11, padding: '3px 6px', height: 26 }}
+              >
+                {sources.map((s) => (
+                  <option key={s} value={s}>{s}</option>
+                ))}
+              </select>
+            )}
             <button className="btn sm" onClick={refresh} title="Refresh panel list">
               ↻
             </button>
@@ -465,7 +486,7 @@ export default function Metrics({ agentId }: { agentId: string }) {
         }}
       >
         {panels.map((p) => (
-          <PanelCard key={p.id} agentId={agentId} panel={p} range={range} />
+          <PanelCard key={p.id} agentId={agentId} panel={p} range={range} source={activeSource || undefined} />
         ))}
       </div>
     </div>
