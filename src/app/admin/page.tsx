@@ -314,8 +314,8 @@ export default function AdminPage() {
               </div>
             </div>
 
-            {/* INVITES */}
-            <div className="panel" style={{ marginTop: 12 }}>
+            {/* INVITES (EE only) */}
+            {eeAvailable && <div className="panel" style={{ marginTop: 12 }}>
               <div className="panel-head">
                 <div className="panel-title"><span className="ico">✉</span> INVITE LINKS</div>
               </div>
@@ -359,7 +359,7 @@ export default function AdminPage() {
                   </table>
                 )}
               </div>
-            </div>
+            </div>}
 
             {/* EE ROLES + PERMISSIONS */}
             {eeAvailable && (
