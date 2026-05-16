@@ -44,6 +44,9 @@ async fn create_invite(
     State(state): State<Arc<AppState>>,
     axum::Json(body): axum::Json<CreateRequest>,
 ) -> impl IntoResponse {
+    if !crate::ee::ee_active() {
+        return (StatusCode::NOT_FOUND, "requires Enterprise Edition").into_response();
+    }
     let claims = match auth::require_admin(&jar, &state.db).await {
         Ok(c) => c,
         Err(e) => return e.into_response(),
@@ -82,6 +85,9 @@ async fn list_invites(
     jar: CookieJar,
     State(state): State<Arc<AppState>>,
 ) -> impl IntoResponse {
+    if !crate::ee::ee_active() {
+        return (StatusCode::NOT_FOUND, "requires Enterprise Edition").into_response();
+    }
     if let Err(e) = auth::require_admin(&jar, &state.db).await {
         return e.into_response();
     }

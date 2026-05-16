@@ -200,7 +200,27 @@ fn random_oauth_state() -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-async fn login_handler(jar: CookieJar) -> impl IntoResponse {
+const INVITE_COOKIE: &str = "pending_invite";
+
+#[derive(Deserialize)]
+struct LoginQuery {
+    #[serde(default)]
+    invite: Option<String>,
+}
+
+async fn login_handler(jar: CookieJar, Query(q): Query<LoginQuery>) -> impl IntoResponse {
+    let mut jar = jar;
+    if let Some(ref code) = q.invite {
+        let cookie = Cookie::build((INVITE_COOKIE, code.clone()))
+            .path("/")
+            .http_only(true)
+            .same_site(SameSite::Lax)
+            .secure(cookie_secure())
+            .max_age(time::Duration::seconds(600))
+            .build();
+        jar = jar.add(cookie);
+    }
+
     if crate::ee::ee_active() && env::var("EE_OIDC_ISSUER").ok().filter(|s| !s.is_empty()).is_some() {
         let ee_public = env::var("EE_PUBLIC_URL")
             .or_else(|_| env::var("UI_URL"))
@@ -418,8 +438,24 @@ async fn callback_handler(
     let now = crate::now_unix();
     let bootstrap_admin = env::var("BOOTSTRAP_ADMIN").ok();
     let user_count = crate::db::count_users(&state.db).await.unwrap_or(0);
+
+    // Check for a pending invite — overrides the default role assignment
+    let invite_code = jar.get(INVITE_COOKIE).map(|c| c.value().to_string());
+    let invite_role = if let Some(ref code) = invite_code {
+        match crate::db::get_invite(&state.db, code).await {
+            Ok(Some(inv)) if inv.used_by.is_none() && now <= inv.expires_at => {
+                Some(inv.role.clone())
+            }
+            _ => None,
+        }
+    } else {
+        None
+    };
+
     let default_role = if user_count == 0 || bootstrap_admin.as_deref() == Some(user_data.login.as_str()) {
         "admin"
+    } else if let Some(ref r) = invite_role {
+        r.as_str()
     } else {
         "viewer"
     };
@@ -503,6 +539,26 @@ async fn callback_handler(
         .build();
     clear_state.make_removal();
 
+    // Redeem invite if present
+    let mut clear_invite = None;
+    if let Some(ref code) = invite_code {
+        if crate::db::redeem_invite(&state.db, code, &user_data.login).await.unwrap_or(false) {
+            tracing::info!(login = %user_data.login, %code, "invite redeemed");
+            crate::db::record_audit(
+                &state.db, now, Some(&user_data.login), None,
+                "invite.redeemed", true, Some(&format!("code={code}")),
+            ).await;
+        }
+        let mut c = Cookie::build((INVITE_COOKIE, ""))
+            .path("/")
+            .http_only(true)
+            .same_site(SameSite::Lax)
+            .secure(cookie_secure())
+            .build();
+        c.make_removal();
+        clear_invite = Some(c);
+    }
+
     crate::db::record_audit(
         &state.db,
         now,
@@ -514,7 +570,11 @@ async fn callback_handler(
     )
     .await;
 
-    (jar.add(cookie).add(clear_state), Redirect::temporary(&dest)).into_response()
+    let mut final_jar = jar.add(cookie).add(clear_state);
+    if let Some(c) = clear_invite {
+        final_jar = final_jar.add(c);
+    }
+    (final_jar, Redirect::temporary(&dest)).into_response()
 }
 
 fn decode_claims(token: &str) -> Option<Claims> {
