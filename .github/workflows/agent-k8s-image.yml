@@ -45,7 +45,7 @@ jobs:
       sha_short: ${{ steps.tags.outputs.sha_short }}
     steps:
       - name: Checkout main repo
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
