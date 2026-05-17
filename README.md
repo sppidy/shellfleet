@@ -46,7 +46,7 @@ graph TD
 
     CF --> WEB
     CF --> SERVER
-    WEB — "wss /ui/ws" --> SERVER
+    WEB -- "wss /ui/ws" --> SERVER
 
     subgraph agents["shellfleet-agent · each host · .deb via apt repo"]
         A1["systemd service control + system stats"]
@@ -59,7 +59,7 @@ graph TD
         A8["backups — tar/gzip → local or S3 — gated by env"]
     end
 
-    SERVER — "wss /agent/ws" --> agents
+    SERVER -- "wss /agent/ws" --> agents
 
     subgraph metrics["(optional) Metrics plugin — server-side only"]
         M1["YAML panel templates → server queries your Prometheus on demand"]
