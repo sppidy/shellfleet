@@ -192,7 +192,7 @@ jobs:
           HTML
 
       - name: Download all .deb artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           # No `name:` filter → grabs every artifact uploaded by the
           # build matrix. Pattern grabs both flavors and both arches
