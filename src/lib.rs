@@ -73,6 +73,8 @@ pub enum Message {
         /// as "show every tab" so legacy agents still work.
         #[serde(default)]
         capabilities: Vec<String>,
+        #[serde(default)]
+        metadata: std::collections::HashMap<String, String>,
     },
 
     /// Server acknowledging registration
@@ -848,6 +850,28 @@ pub enum Message {
     /// Stop any active exec session. The PTY is killed and the docker exec
     /// child reaped. Idempotent — no error if no session was open.
     DockerExecStopRequest,
+
+    // ----- Drift detection (EE v3) -----
+    DriftSnapshotRequest {
+        snapshot_id: String,
+        #[serde(default)]
+        categories: Vec<String>,
+        #[serde(default)]
+        config_paths: Vec<String>,
+    },
+    DriftSnapshotResponse {
+        snapshot_id: String,
+        #[serde(default)]
+        packages: Vec<DriftPackage>,
+        #[serde(default)]
+        services: Vec<DriftService>,
+        #[serde(default)]
+        containers: Vec<DriftContainer>,
+        #[serde(default)]
+        configs: Vec<DriftConfigFile>,
+        #[serde(default)]
+        error: Option<String>,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -1211,6 +1235,35 @@ pub struct ServiceInfo {
     pub status: String,
     /// ACTIVE state from systemctl: active, inactive, failed, activating, …
     pub active_state: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct DriftPackage {
+    pub name: String,
+    pub version: String,
+    pub status: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct DriftService {
+    pub name: String,
+    pub active: String,
+    pub enabled: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct DriftContainer {
+    pub name: String,
+    pub image: String,
+    pub state: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct DriftConfigFile {
+    pub path: String,
+    pub hash: String,
+    pub size: u64,
+    pub mtime: i64,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
