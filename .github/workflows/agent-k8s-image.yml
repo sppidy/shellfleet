@@ -82,7 +82,7 @@ jobs:
           echo "tag=${{ env.REGISTRY }}/${IMAGE_NAME}:sha-${SHA_SHORT}-${{ matrix.arch }}" >> "$GITHUB_OUTPUT"
 
       - name: Build + push (${{ matrix.arch }})
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: ./Dockerfile.agent.k8s
