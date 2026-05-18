@@ -236,6 +236,7 @@ async fn main() {
         hostname,
         protocol_version: shared::PROTOCOL_VERSION,
         capabilities,
+        metadata: std::collections::HashMap::new(),
     });
 
     // Re-probe capabilities periodically so late-starting subsystems
@@ -1385,6 +1386,113 @@ async fn main() {
                                     }
                                 };
                                 let _ = tx.send(resp);
+                            }
+                            Message::DriftSnapshotRequest { snapshot_id, categories, config_paths } => {
+                                let tx_clone = tx.clone();
+                                tokio::spawn(async move {
+                                    let mut packages = Vec::new();
+                                    let mut services = Vec::new();
+                                    let mut containers = Vec::new();
+                                    let mut configs = Vec::new();
+
+                                    let cats: std::collections::HashSet<&str> =
+                                        if categories.is_empty() {
+                                            ["packages", "services", "containers", "configs"].into_iter().collect()
+                                        } else {
+                                            categories.iter().map(|s| s.as_str()).collect()
+                                        };
+
+                                    if cats.contains("packages") {
+                                        if let Ok(output) = tokio::process::Command::new("dpkg-query")
+                                            .args(["-W", "-f", "${Package}\t${Version}\t${Status}\n"])
+                                            .output()
+                                            .await
+                                        {
+                                            let stdout = String::from_utf8_lossy(&output.stdout);
+                                            for line in stdout.lines() {
+                                                let parts: Vec<&str> = line.splitn(3, '\t').collect();
+                                                if parts.len() >= 2 {
+                                                    packages.push(shared::DriftPackage {
+                                                        name: parts[0].to_string(),
+                                                        version: parts[1].to_string(),
+                                                        status: parts.get(2).unwrap_or(&"").to_string(),
+                                                    });
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    if cats.contains("services") {
+                                        if let Ok(output) = tokio::process::Command::new("systemctl")
+                                            .args(["list-units", "--type=service", "--no-pager", "--no-legend", "--plain"])
+                                            .output()
+                                            .await
+                                        {
+                                            let stdout = String::from_utf8_lossy(&output.stdout);
+                                            for line in stdout.lines() {
+                                                let parts: Vec<&str> = line.split_whitespace().collect();
+                                                if parts.len() >= 4 {
+                                                    services.push(shared::DriftService {
+                                                        name: parts[0].to_string(),
+                                                        active: parts[2].to_string(),
+                                                        enabled: parts[3].to_string(),
+                                                    });
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    if cats.contains("containers") {
+                                        if let Ok(output) = tokio::process::Command::new("docker")
+                                            .args(["ps", "-a", "--format", "{{.Names}}\t{{.Image}}\t{{.State}}"])
+                                            .output()
+                                            .await
+                                        {
+                                            let stdout = String::from_utf8_lossy(&output.stdout);
+                                            for line in stdout.lines() {
+                                                let parts: Vec<&str> = line.splitn(3, '\t').collect();
+                                                if parts.len() >= 3 {
+                                                    containers.push(shared::DriftContainer {
+                                                        name: parts[0].to_string(),
+                                                        image: parts[1].to_string(),
+                                                        state: parts[2].to_string(),
+                                                    });
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    if cats.contains("configs") {
+                                        for path in &config_paths {
+                                            if let Ok(meta) = tokio::fs::metadata(path).await {
+                                                if let Ok(content) = tokio::fs::read(path).await {
+                                                    use sha2::Digest;
+                                                    let hash = format!("{:x}", sha2::Sha256::digest(&content));
+                                                    let mtime = meta.modified()
+                                                        .ok()
+                                                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                                                        .map(|d| d.as_secs() as i64)
+                                                        .unwrap_or(0);
+                                                    configs.push(shared::DriftConfigFile {
+                                                        path: path.clone(),
+                                                        hash,
+                                                        size: meta.len(),
+                                                        mtime,
+                                                    });
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    let _ = tx_clone.send(Message::DriftSnapshotResponse {
+                                        snapshot_id,
+                                        packages,
+                                        services,
+                                        containers,
+                                        configs,
+                                        error: None,
+                                    });
+                                });
                             }
                             _ => {}
                         }
