@@ -15,3 +15,14 @@ graphify-out/
 .env
 .env.local
 .env.*.local
+
+# Build artifacts
+.next/
+
+# EE (private repo only)
+Dockerfile.ee
+docker-compose.ee.yml
+ee/
+
+# Local docs
+docs/
