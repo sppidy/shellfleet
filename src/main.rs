@@ -1,4 +1,6 @@
 mod anon_limiter;
+mod api_auth;
+mod api_v1;
 mod auth;
 mod backups;
 mod crypto;
@@ -431,6 +433,13 @@ async fn main() {
         .layer(axum::middleware::from_fn(csrf::middleware))
         .with_state(state.clone());
 
+    let v1_routes = api_v1::routes()
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            api_auth::middleware,
+        ))
+        .with_state(state.clone());
+
     let ws_routes = Router::new()
         .route("/agent/ws", get(agent_ws_handler))
         .route("/ui/ws", get(ui_ws_handler))
@@ -444,6 +453,7 @@ async fn main() {
         .route("/healthz", get(healthz))
         .nest("/auth", auth::auth_routes(state.clone()))
         .nest("/api", api_routes)
+        .nest("/api/v1", v1_routes)
         .merge(ws_routes)
         .merge(invites::public_routes().with_state(state.clone()));
 
@@ -676,7 +686,7 @@ async fn handle_agent_socket(socket: WebSocket, state: Arc<AppState>, token: Str
         };
         if let Ok(parsed_msg) = serde_json::from_str::<Message>(&text) {
             match parsed_msg {
-                Message::Register { hostname, protocol_version, capabilities } => {
+                Message::Register { hostname, protocol_version, capabilities, metadata } => {
                     let id = format!("{}-id", hostname);
                     agent_id_opt = Some(id.clone());
 
@@ -767,6 +777,27 @@ async fn handle_agent_socket(socket: WebSocket, state: Arc<AppState>, token: Str
                     // Push the agent's current probe set so it picks
                     // up any rules added while it was offline.
                     health::push_to_agent(&state, &id).await;
+
+                    if ee::ee_active() {
+                        let ee_url = ee::ee_sidecar_url().unwrap_or_default();
+                        let secret = std::env::var("EE_INTERNAL_SECRET").unwrap_or_default();
+                        let tag_body = serde_json::json!({
+                            "agent_id": id,
+                            "hostname": hostname,
+                            "capabilities": capabilities,
+                            "metadata": metadata,
+                        });
+                        let url = format!("{}/internal/tag-resolve", ee_url.trim_end_matches('/'));
+                        tokio::spawn(async move {
+                            let _ = reqwest::Client::new()
+                                .post(&url)
+                                .bearer_auth(&secret)
+                                .json(&tag_body)
+                                .timeout(std::time::Duration::from_secs(5))
+                                .send()
+                                .await;
+                        });
+                    }
                 }
                 Message::CapabilitiesUpdate { capabilities } => {
                     if let Some(id) = &agent_id_opt {
@@ -1055,6 +1086,26 @@ async fn handle_agent_socket(socket: WebSocket, state: Arc<AppState>, token: Str
                                 .await;
                             }
                         }
+                        if let Message::DriftSnapshotResponse {
+                            ref snapshot_id,
+                            ref packages,
+                            ref services,
+                            ref containers,
+                            ref configs,
+                            ..
+                        } = other
+                        {
+                            ee::forward_drift_snapshot(
+                                agent_id,
+                                snapshot_id,
+                                packages,
+                                services,
+                                containers,
+                                configs,
+                            )
+                            .await;
+                        }
+
                         let ui_msg = UiMessage::AgentMessage {
                             agent_id: agent_id.clone(),
                             message: other,
@@ -1181,7 +1232,8 @@ fn is_mutating_agent_message(msg: &Message) -> bool {
         | K8sListIngressesRequest
         | K8sListPvcsRequest
         | K8sListEventsRequest
-        | K8sDescribeRequest { .. } => false,
+        | K8sDescribeRequest { .. }
+        | DriftSnapshotRequest { .. } => false,
         // K8sLogsRequest / K8sLogsStop are deliberately NOT in this
         // list. Pod logs can leak Secrets, JWTs, and other sensitive
         // material; streaming them is admin-only via the default arm.

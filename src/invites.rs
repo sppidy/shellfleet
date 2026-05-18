@@ -1,8 +1,8 @@
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Path, State},
     http::StatusCode,
     response::{IntoResponse, Redirect},
-    routing::{delete, get, post},
+    routing::{delete, get},
     Router,
 };
 use axum_extra::extract::cookie::CookieJar;
@@ -116,12 +116,6 @@ async fn delete_invite(
             (StatusCode::INTERNAL_SERVER_ERROR, "failed").into_response()
         }
     }
-}
-
-#[derive(Deserialize)]
-struct AcceptQuery {
-    #[serde(default)]
-    code: Option<String>,
 }
 
 async fn accept_invite(

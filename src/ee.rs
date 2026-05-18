@@ -1,5 +1,4 @@
 use axum::{
-    body::Body,
     extract::{Request, State},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
@@ -144,6 +143,45 @@ async fn agents_handler(
         })
         .collect();
     (StatusCode::OK, axum::Json(agents)).into_response()
+}
+
+pub async fn forward_drift_snapshot(
+    agent_id: &str,
+    snapshot_id: &str,
+    packages: &[shared::DriftPackage],
+    services: &[shared::DriftService],
+    containers: &[shared::DriftContainer],
+    configs: &[shared::DriftConfigFile],
+) {
+    let Some(ee_url) = ee_sidecar_url() else {
+        return;
+    };
+    let secret = internal_secret().unwrap_or_default();
+    let url = format!(
+        "{}/internal/drift-snapshot",
+        ee_url.trim_end_matches('/')
+    );
+    let body = serde_json::json!({
+        "agent_id": agent_id,
+        "snapshot_id": snapshot_id,
+        "packages": packages,
+        "services": services,
+        "containers": containers,
+        "configs": configs,
+        "triggered_by": "agent",
+    });
+
+    let client = reqwest::Client::new();
+    if let Err(e) = client
+        .post(&url)
+        .bearer_auth(&secret)
+        .json(&body)
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await
+    {
+        tracing::warn!(error = %e, "failed to forward drift snapshot to EE");
+    }
 }
 
 pub async fn ee_proxy_handler(req: Request) -> impl IntoResponse {
