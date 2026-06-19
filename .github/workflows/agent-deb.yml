@@ -270,7 +270,10 @@ jobs:
           )
 
       - name: Sign Release file (optional)
-        if: env.APT_GPG_PRIVATE_KEY != ''
+        # NOTE: a step-level `if:` cannot read this step's own `env:` block,
+        # so the previous `env.APT_GPG_PRIVATE_KEY != ''` was ALWAYS false and
+        # the repo shipped unsigned. The `secrets` context IS allowed here.
+        if: ${{ secrets.APT_GPG_PRIVATE_KEY != '' }}
         env:
           APT_GPG_PRIVATE_KEY: ${{ secrets.APT_GPG_PRIVATE_KEY }}
           APT_GPG_PASSPHRASE: ${{ secrets.APT_GPG_PASSPHRASE }}

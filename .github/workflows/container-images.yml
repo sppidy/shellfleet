@@ -117,7 +117,10 @@ jobs:
             "${BASE}:${TAG}-arm64"
 
       - name: Also tag :latest
-        if: ${{ inputs.mark_latest != false }}
+        # On push/tag events `inputs.mark_latest` is '' which coerces to
+        # false, so `'' != false` was false and :latest never moved. Tag
+        # :latest on any non-dispatch event, or when dispatch opts in.
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.mark_latest }}
         run: |
           IMG="${{ matrix.image }}"
           TAG="${{ steps.tag.outputs.value }}"
