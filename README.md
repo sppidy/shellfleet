@@ -369,6 +369,19 @@ Cost banners on every UI surface that triggers a non-trivial agent call
 (Stats, Prune, Exec) document the cost model in-place so the operator
 never has to guess what's running in the background.
 
+## Telemetry
+
+ShellFleet sends a small **anonymous** usage report (default on) so the
+project can gauge roughly how many instances and users exist. Each report
+contains only: a random per-install id, the version, CE/EE edition, user +
+agent **counts**, and enabled-**feature names** — never logins, hostnames,
+IPs, or agent ids. A one-line notice is logged on the first send.
+
+Opt out at any time:
+
+- set `SHELLFLEET_TELEMETRY=off` in the server's environment, or
+- toggle it off on the **admin** page (`/admin`).
+
 ## Useful commands
 
 ```bash

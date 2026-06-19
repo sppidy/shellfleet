@@ -50,6 +50,12 @@ services:
       # Backups tab in the UI. Existing backup_jobs rows are preserved
       # across toggles.
       - BACKUPS_ENABLED=${BACKUPS_ENABLED:-false}
+      # Anonymous usage telemetry (default ON): reports only counts,
+      # version, CE/EE edition, and enabled-feature names — no PII. Set
+      # SHELLFLEET_TELEMETRY=off to disable (or toggle on the admin page).
+      # TELEMETRY_URL overrides the collector endpoint.
+      - SHELLFLEET_TELEMETRY=${SHELLFLEET_TELEMETRY:-on}
+      - TELEMETRY_URL=${TELEMETRY_URL:-}
     volumes:
       - server_data:/data
     healthcheck:
