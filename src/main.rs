@@ -1,3 +1,18 @@
+// W0 safety-net baseline: this crate predates a clippy gate. The lints
+// below are pre-existing, purely stylistic/pedantic, and are allowed
+// crate-wide so the CI `-D warnings` gate enforces the substantive lints
+// (correctness / perf / security) without a repo-wide cosmetic reformat.
+// Tracked for a focused cleanup in W6.
+#![allow(
+    clippy::collapsible_if,
+    clippy::redundant_pattern_matching,
+    clippy::match_like_matches_macro,
+    clippy::identity_op,
+    clippy::doc_lazy_continuation,
+    clippy::doc_overindented_list_items,
+    clippy::too_many_arguments
+)]
+
 mod anon_limiter;
 mod api_auth;
 mod api_v1;
@@ -1532,4 +1547,37 @@ fn ee_filter_agent_list(
         .filter(|(k, _)| matches(k))
         .collect();
     (filtered, filtered_caps)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reads_are_viewer_ok_and_writes_are_admin_only() {
+        // Pure reads → viewer-OK (not mutating).
+        assert!(!is_mutating_agent_message(&Message::SystemStatsRequest));
+        assert!(!is_mutating_agent_message(&Message::DockerListRequest));
+        assert!(!is_mutating_agent_message(&Message::K8sListPodsRequest));
+        // *Stop signals are deliberately classified as read-only.
+        assert!(!is_mutating_agent_message(&Message::StopTerminalRequest {
+            session_id: String::new(),
+        }));
+    }
+
+    #[test]
+    fn mutating_messages_fall_through_to_admin_only() {
+        // Control + terminal-open + data are mutating (default `_ => true`).
+        assert!(is_mutating_agent_message(&Message::ControlServiceRequest {
+            name: "nginx".into(),
+            action: "restart".into(),
+        }));
+        assert!(is_mutating_agent_message(&Message::StartTerminalRequest {
+            session_id: "s".into(),
+        }));
+        assert!(is_mutating_agent_message(&Message::TerminalData {
+            session_id: "s".into(),
+            data: vec![1, 2, 3],
+        }));
+    }
 }

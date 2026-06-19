@@ -76,3 +76,52 @@ pub fn decrypt(ciphertext: &str) -> Option<String> {
     let pt = cipher.decrypt(&nonce, ct_bytes.as_ref()).ok()?;
     String::from_utf8(pt).ok()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Once;
+
+    static INIT: Once = Once::new();
+
+    /// `key()` derives from `JWT_SECRET`. Set a deterministic one for the
+    /// round-trip if the environment doesn't already provide it.
+    fn ensure_secret() {
+        INIT.call_once(|| {
+            if env::var("JWT_SECRET").is_err() {
+                // SAFETY: one-time test setup; no other thread is reading
+                // JWT_SECRET at this point in the crypto tests.
+                unsafe {
+                    env::set_var(
+                        "JWT_SECRET",
+                        "test-jwt-secret-0123456789abcdef0123456789abcdef",
+                    );
+                }
+            }
+        });
+    }
+
+    #[test]
+    fn encrypt_then_decrypt_roundtrips() {
+        ensure_secret();
+        let pt = "hunter2 · the TOTP secret";
+        let ct = encrypt(pt);
+        assert!(ct.starts_with(PREFIX), "ciphertext must carry the v1 prefix");
+        assert_ne!(ct, pt);
+        assert_eq!(decrypt(&ct).as_deref(), Some(pt));
+    }
+
+    #[test]
+    fn decrypt_rejects_garbage_and_tampering() {
+        ensure_secret();
+        assert_eq!(decrypt("no-prefix-here"), None);
+        assert_eq!(decrypt("v1:bogus.bogus"), None);
+        // Flip the final ciphertext char: AEAD authentication must fail.
+        let ct = encrypt("secret");
+        let mut chars: Vec<char> = ct.chars().collect();
+        let last = chars.len() - 1;
+        chars[last] = if chars[last] == 'A' { 'B' } else { 'A' };
+        let tampered: String = chars.into_iter().collect();
+        assert_eq!(decrypt(&tampered), None, "tampered ciphertext must not decrypt");
+    }
+}

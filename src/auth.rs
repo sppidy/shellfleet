@@ -717,3 +717,24 @@ pub fn pending_mfa_claims(jar: &CookieJar) -> Option<Claims> {
 pub fn is_dev_mode() -> bool {
     dev_mode()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn role_parse_maps_admin_and_defaults_to_viewer() {
+        assert_eq!(Role::parse("admin"), Role::Admin);
+        assert_eq!(Role::parse("viewer"), Role::Viewer);
+        // Exact match only — anything else is the safe default.
+        assert_eq!(Role::parse("ADMIN"), Role::Viewer);
+        assert_eq!(Role::parse("root"), Role::Viewer);
+        assert_eq!(Role::parse(""), Role::Viewer);
+    }
+
+    #[test]
+    fn role_as_str_roundtrips_through_parse() {
+        assert_eq!(Role::parse(Role::Admin.as_str()), Role::Admin);
+        assert_eq!(Role::parse(Role::Viewer.as_str()), Role::Viewer);
+    }
+}

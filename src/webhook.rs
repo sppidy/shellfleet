@@ -740,3 +740,33 @@ pub fn fire_agent_connect(db: SqlitePool, agent_id: String, at: i64) {
         },
     );
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn truncate_returns_short_strings_unchanged() {
+        assert_eq!(truncate("hello", 10), "hello");
+    }
+
+    #[test]
+    fn truncate_cuts_on_utf8_boundary_without_panic() {
+        // Mixed 1/2/3-byte chars; a small cap forces a cut that, taken
+        // blindly, would land inside a multi-byte character.
+        let s = "héllo wörld ☃ über alles";
+        let out = truncate(s, 8);
+        assert!(out.contains("truncated"), "must carry the truncation marker");
+        let tail = out.rsplit('\n').next().unwrap();
+        assert!(s.ends_with(tail), "kept tail must be a valid char-boundary suffix");
+    }
+
+    #[test]
+    fn strip_ansi_drops_escapes_bidi_and_control() {
+        assert_eq!(strip_ansi("\u{1b}[31mhi\u{1b}[0m"), "hi");
+        // RTL override (Trojan-Source-style) is dropped.
+        assert_eq!(strip_ansi("a\u{202e}b"), "ab");
+        // Tabs / newlines / CR are preserved.
+        assert_eq!(strip_ansi("a\tb\nc\rd"), "a\tb\nc\rd");
+    }
+}

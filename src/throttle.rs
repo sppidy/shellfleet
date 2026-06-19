@@ -245,3 +245,30 @@ pub fn now_secs_f64() -> f64 {
         .map(|d| d.as_secs_f64())
         .unwrap_or(0.0)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::IpAddr;
+
+    #[test]
+    fn untrusted_peer_cannot_spoof_client_ip() {
+        // 192.0.2.1 (TEST-NET-1) is never in the default trusted
+        // (Cloudflare) proxy set, so forwarding headers must be ignored.
+        let peer: IpAddr = "192.0.2.1".parse().unwrap();
+        let mut headers = HeaderMap::new();
+        headers.insert("cf-connecting-ip", "8.8.8.8".parse().unwrap());
+        headers.insert("x-forwarded-for", "9.9.9.9".parse().unwrap());
+        assert_eq!(
+            real_client_ip(&headers, Some(peer)),
+            "192.0.2.1",
+            "an untrusted peer must not be able to spoof its client IP"
+        );
+    }
+
+    #[test]
+    fn missing_peer_falls_back_to_unknown() {
+        let headers = HeaderMap::new();
+        assert_eq!(real_client_ip(&headers, None), "unknown");
+    }
+}

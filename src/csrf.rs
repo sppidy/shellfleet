@@ -62,6 +62,14 @@ fn set_csrf_cookie(resp: &mut Response<Body>, token: &str) {
     }
 }
 
+/// Double-submit token comparison: the request is valid only when the
+/// header token is non-empty and exactly equals the cookie token.
+/// Behavior-preserving extraction of the previously-inline check so it
+/// can be unit-tested. (W4 will swap the `==` for a constant-time compare.)
+fn tokens_match(header: &str, cookie: &str) -> bool {
+    !header.is_empty() && header == cookie
+}
+
 pub async fn middleware(req: Request, next: Next) -> Response<Body> {
     let auth_present = cookie_value(&req, AUTH_COOKIE).is_some();
     let csrf_cookie = cookie_value(&req, CSRF_COOKIE).map(|s| s.to_string());
@@ -74,7 +82,7 @@ pub async fn middleware(req: Request, next: Next) -> Response<Body> {
             .map(|s| s.to_string());
         let cookie_val = csrf_cookie.clone();
         let ok = match (header_val, cookie_val) {
-            (Some(h), Some(c)) if !h.is_empty() && h == c => true,
+            (Some(h), Some(c)) => tokens_match(&h, &c),
             _ => false,
         };
         if !ok {
@@ -110,4 +118,19 @@ pub async fn middleware(req: Request, next: Next) -> Response<Body> {
     }
 
     resp
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tokens_match_only_when_equal_and_nonempty() {
+        assert!(tokens_match("abc123", "abc123"));
+        assert!(!tokens_match("abc123", "different"));
+        // An empty token must never validate, even against another empty.
+        assert!(!tokens_match("", ""));
+        assert!(!tokens_match("abc", ""));
+        assert!(!tokens_match("", "abc"));
+    }
 }

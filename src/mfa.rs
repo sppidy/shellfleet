@@ -496,3 +496,51 @@ async fn disable_handler(
     .await;
     (StatusCode::OK, "ok").into_response()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn verify_totp_accepts_current_code_and_rejects_others() {
+        let secret = "JBSWY3DPEHPK3PXP"; // RFC-style base32 secret
+        let secret_bytes = BASE32_NOPAD.decode(secret.as_bytes()).unwrap();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let step = current_step(now);
+        let code = format!("{:0width$}", hotp(&secret_bytes, step), width = TOTP_DIGITS as usize);
+        assert!(verify_totp(secret, &code), "the current TOTP must verify");
+        // A code many steps away is outside the ±1 acceptance window.
+        let far = format!(
+            "{:0width$}",
+            hotp(&secret_bytes, step + 100),
+            width = TOTP_DIGITS as usize
+        );
+        assert!(!verify_totp(secret, &far), "out-of-window code must be rejected");
+    }
+
+    #[test]
+    fn verify_totp_rejects_malformed_inputs() {
+        assert!(!verify_totp("JBSWY3DPEHPK3PXP", "not-a-number"));
+        assert!(!verify_totp("JBSWY3DPEHPK3PXP", ""));
+        assert!(!verify_totp("!!! not base32 !!!", "123456"));
+    }
+
+    #[test]
+    fn totp_skew_window_accepts_adjacent_steps() {
+        let secret = "JBSWY3DPEHPK3PXP";
+        let secret_bytes = BASE32_NOPAD.decode(secret.as_bytes()).unwrap();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let step = current_step(now);
+        // Previous and next step codes must both be accepted (±1 skew).
+        let prev = format!("{:0width$}", hotp(&secret_bytes, step - 1), width = TOTP_DIGITS as usize);
+        let next = format!("{:0width$}", hotp(&secret_bytes, step + 1), width = TOTP_DIGITS as usize);
+        assert!(verify_totp(secret, &prev), "previous step within skew");
+        assert!(verify_totp(secret, &next), "next step within skew");
+    }
+}
