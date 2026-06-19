@@ -140,11 +140,19 @@ fn is_user_allowed(login: &str) -> bool {
     allowed_users().iter().any(|u| u == login)
 }
 
-fn cookie_secure() -> bool {
-    match env::var("COOKIE_SECURE").ok().as_deref() {
-        Some("0") | Some("false") | Some("no") => false,
-        _ => true,
-    }
+/// Whether auth/CSRF cookies carry the `Secure` attribute. Default on; set
+/// COOKIE_SECURE to 0/false/no/off (case-insensitive) to disable for plain-HTTP
+/// local dev. Shared with the CSRF cookie in csrf.rs so the session and CSRF
+/// cookies never disagree on the flag.
+pub(crate) fn cookie_secure() -> bool {
+    !matches!(
+        env::var("COOKIE_SECURE")
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase()
+            .as_str(),
+        "0" | "false" | "no" | "off"
+    )
 }
 
 fn jwt_secret() -> String {
