@@ -103,7 +103,15 @@ fn default_mfa() -> bool {
 
 #[derive(Debug, Deserialize)]
 struct GithubTokenResponse {
-    access_token: String,
+    // GitHub returns HTTP 200 with an {error, error_description} body on
+    // failures (bad/reused code, redirect_uri mismatch), so access_token is
+    // optional and we surface the error rather than a generic parse-500.
+    #[serde(default)]
+    access_token: Option<String>,
+    #[serde(default)]
+    error: Option<String>,
+    #[serde(default)]
+    error_description: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -388,14 +396,28 @@ async fn callback_handler(
         Ok(data) => data,
         Err(e) => {
             tracing::error!(error = %e, "failed to parse oauth token response");
-            return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to parse access token")
-                .into_response();
+            return (StatusCode::BAD_GATEWAY, "Failed to parse access token").into_response();
+        }
+    };
+
+    let access_token = match token_data.access_token {
+        Some(t) => t,
+        None => {
+            // GitHub signalled an error in a 200 body — surface the real
+            // cause (commonly a misconfigured GITHUB_CLIENT_SECRET or
+            // OAUTH_REDIRECT_URL) instead of a generic 500.
+            tracing::error!(
+                error = token_data.error.as_deref().unwrap_or("unknown"),
+                description = token_data.error_description.as_deref().unwrap_or(""),
+                "GitHub OAuth token endpoint returned an error"
+            );
+            return (StatusCode::BAD_GATEWAY, "GitHub rejected the OAuth code").into_response();
         }
     };
 
     let user_res = match client
         .get("https://api.github.com/user")
-        .header("Authorization", format!("Bearer {}", token_data.access_token))
+        .header("Authorization", format!("Bearer {access_token}"))
         .header("User-Agent", "shellfleet")
         .send()
         .await
@@ -407,6 +429,12 @@ async fn callback_handler(
                 .into_response();
         }
     };
+
+    if !user_res.status().is_success() {
+        let status = user_res.status();
+        tracing::error!(%status, "github /user returned non-success");
+        return (StatusCode::BAD_GATEWAY, "GitHub user lookup failed").into_response();
+    }
 
     let user_data = match user_res.json::<GithubUser>().await {
         Ok(data) => data,

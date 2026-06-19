@@ -707,7 +707,11 @@ async fn handle_agent_socket(socket: WebSocket, state: Arc<AppState>, token: Str
             // heartbeat after start.
             _ => continue,
         };
-        if let Ok(parsed_msg) = serde_json::from_str::<Message>(&text) {
+        let parsed = serde_json::from_str::<Message>(&text);
+        if let Err(ref e) = parsed {
+            tracing::warn!(error = %e, "dropped un-parseable agent message");
+        }
+        if let Ok(parsed_msg) = parsed {
             match parsed_msg {
                 Message::Register { hostname, protocol_version, capabilities, metadata } => {
                     let id = format!("{}-id", hostname);
@@ -1335,7 +1339,11 @@ async fn handle_ui_socket(
             WsMessage::Close(_) => break,
             _ => continue,
         };
-        if let Ok(parsed_msg) = serde_json::from_str::<UiMessage>(&text) {
+        let parsed = serde_json::from_str::<UiMessage>(&text);
+        if let Err(ref e) = parsed {
+            tracing::warn!(error = %e, "dropped un-parseable UI message");
+        }
+        if let Ok(parsed_msg) = parsed {
             match parsed_msg {
                 UiMessage::ListAgentsRequest => {
                     let map = state.agents.lock().await;
