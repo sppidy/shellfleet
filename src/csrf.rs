@@ -67,7 +67,9 @@ fn set_csrf_cookie(resp: &mut Response<Body>, token: &str) {
 /// Behavior-preserving extraction of the previously-inline check so it
 /// can be unit-tested. (W4 will swap the `==` for a constant-time compare.)
 fn tokens_match(header: &str, cookie: &str) -> bool {
-    !header.is_empty() && header == cookie
+    use subtle::ConstantTimeEq;
+    // Constant-time compare to avoid leaking the CSRF token via timing.
+    !header.is_empty() && bool::from(header.as_bytes().ct_eq(cookie.as_bytes()))
 }
 
 pub async fn middleware(req: Request, next: Next) -> Response<Body> {

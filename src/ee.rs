@@ -27,6 +27,11 @@ fn internal_secret() -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
+fn ct_eq(a: &str, b: &str) -> bool {
+    use subtle::ConstantTimeEq;
+    a.as_bytes().ct_eq(b.as_bytes()).into()
+}
+
 fn verify_internal_auth(headers: &HeaderMap) -> bool {
     let Some(expected) = internal_secret() else {
         return false;
@@ -35,7 +40,7 @@ fn verify_internal_auth(headers: &HeaderMap) -> bool {
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|h| h.to_str().ok())
         .and_then(|s| s.strip_prefix("Bearer "))
-        .map(|t| t.trim() == expected)
+        .map(|t| ct_eq(t.trim(), &expected))
         .unwrap_or(false)
 }
 
