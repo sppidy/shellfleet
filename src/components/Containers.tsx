@@ -19,6 +19,9 @@ import { useCanWrite } from './providers/SessionProvider';
 
 const REFRESH_MS = 10_000;
 const TIMEOUT_MS = 8_000;
+// Upper bound for how long an action (restart / scale / image pull) can sit
+// "waiting" before we assume the response was lost and free the row's buttons.
+const ACTION_TIMEOUT_MS = 60_000;
 
 type SwarmActionState = null | { name: string; action: 'scale' | 'update' | 'remove' };
 type ContainerActionState = { id: string; action: DockerContainerAction };
@@ -107,6 +110,29 @@ export default function Containers({ agentId }: { agentId: string }) {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agentId, sendToAgent, onAgentMessage]);
+
+  // Stale-action guards: an action's pending state only clears when its
+  // response arrives. If the agent drops the message or disconnects mid-op,
+  // free the row after ACTION_TIMEOUT_MS so its buttons don't stay stuck.
+  useEffect(() => {
+    if (!containerAction) return;
+    const id = containerAction.id;
+    const t = setTimeout(() => {
+      setContainerAction(null);
+      setContainerActionLog({ id, success: false, text: 'timed out waiting for agent response' });
+    }, ACTION_TIMEOUT_MS);
+    return () => clearTimeout(t);
+  }, [containerAction]);
+
+  useEffect(() => {
+    if (!pendingAction) return;
+    const name = pendingAction.name;
+    const t = setTimeout(() => {
+      setPendingAction(null);
+      setActionLog({ name, success: false, text: 'timed out waiting for agent response' });
+    }, ACTION_TIMEOUT_MS);
+    return () => clearTimeout(t);
+  }, [pendingAction]);
 
   if (unsupported && !docker) {
     return (

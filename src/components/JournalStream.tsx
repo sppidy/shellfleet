@@ -34,7 +34,7 @@ function newStreamId(): string {
 }
 
 export default function JournalStream({ agentId }: { agentId: string }) {
-  const { sendToAgent, onAgentMessage } = useWebSocket();
+  const { sendToAgent, onAgentMessage, isConnected } = useWebSocket();
   const canWrite = useCanWrite();
 
   const [streamState, setStreamState] = useState<StreamState>('idle');
@@ -129,6 +129,17 @@ export default function JournalStream({ agentId }: { agentId: string }) {
     setStreamId(id);
     setStreamState('streaming');
   }, [agentId, sendToAgent, units, priority, since, grep, identifier, lines, follow]);
+
+  // A WS reconnect tears down the agent-side stream, so a live tail would
+  // silently freeze. Re-request on the disconnect→reconnect edge while we're
+  // still meant to be streaming.
+  const wasConnected = useRef(isConnected);
+  useEffect(() => {
+    if (isConnected && !wasConnected.current && streamState === 'streaming') {
+      start();
+    }
+    wasConnected.current = isConnected;
+  }, [isConnected, streamState, start]);
 
   const stop = useCallback(() => {
     if (streamId) {
