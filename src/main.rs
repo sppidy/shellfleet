@@ -353,6 +353,15 @@ async fn main() {
                     }
                 };
                 last_read = tokio::time::Instant::now();
+                // The server pings every ~25s and drops the connection after
+                // ~50s without a Pong. tokio-tungstenite auto-queues the Pong,
+                // but on a split stream it is only sent when the write half is
+                // polled — which, on a fully idle agent, never happens. Flush
+                // the write half on each Ping so the Pong actually goes out and
+                // the idle connection stays up (no reconnect churn).
+                if matches!(msg, WsMessage::Ping(_)) {
+                    let _ = write.flush().await;
+                }
                 if let WsMessage::Text(text) = msg {
                     if let Ok(parsed_msg) = serde_json::from_str::<Message>(&text) {
                         match parsed_msg {
