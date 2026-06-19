@@ -363,7 +363,11 @@ async fn main() {
                     let _ = write.flush().await;
                 }
                 if let WsMessage::Text(text) = msg {
-                    if let Ok(parsed_msg) = serde_json::from_str::<Message>(&text) {
+                    let parsed = serde_json::from_str::<Message>(&text);
+                    if let Err(ref e) = parsed {
+                        eprintln!("dropped un-parseable protocol message: {e}");
+                    }
+                    if let Ok(parsed_msg) = parsed {
                         match parsed_msg {
                             Message::ListServicesRequest => {
                                 let tx_clone = tx.clone();
