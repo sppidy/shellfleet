@@ -423,7 +423,7 @@ async fn main() {
     if backups_enabled() {
         api_routes = api_routes.nest("/backups", backups::routes());
     }
-    let api_routes = api_routes
+    let mut api_routes = api_routes
         .nest("/probe-library", probe_library::routes())
         .nest("/auth/mfa", mfa::routes())
         .nest("/users", users::routes())
@@ -432,7 +432,17 @@ async fn main() {
         .route("/me", get(me_handler))
         .route("/healthz", get(healthz))
         .route("/audit", get(audit_handler))
-        .route("/features", get(features_handler))
+        .route("/features", get(features_handler));
+    if ee::ee_active() {
+        // EE proxy lives INSIDE the authenticated /api nest so it inherits
+        // the api auth + CSRF + RBAC layers below. The handler resolves the
+        // session and injects verified `x-shellfleet-{login,role}` headers;
+        // it builds a fresh upstream request, so any client-supplied
+        // identity headers are never forwarded. EE then trusts those
+        // headers because they only arrive behind the internal-secret gate.
+        api_routes = api_routes.route("/ee/{*path}", axum::routing::any(ee::ee_proxy_handler));
+    }
+    let api_routes = api_routes
         // Cap any single JSON / form body. The largest legitimate
         // request is a SwarmStackDeployRequest carrying a compose YAML,
         // realistically well under 256 KiB. 1 MiB is generous and
@@ -475,11 +485,9 @@ async fn main() {
     if ee::ee_active() {
         tracing::info!(
             url = %ee::ee_sidecar_url().unwrap_or_default(),
-            "EE sidecar detected — mounting /internal routes + /api/ee proxy"
+            "EE sidecar detected — mounting /internal routes (the /api/ee proxy is mounted inside the authenticated /api nest)"
         );
-        app = app
-            .nest("/internal", ee::routes().with_state(state.clone()))
-            .route("/api/ee/{*path}", axum::routing::any(ee::ee_proxy_handler));
+        app = app.nest("/internal", ee::routes().with_state(state.clone()));
     }
 
     let app = app
@@ -1432,27 +1440,44 @@ async fn handle_ui_socket(
 }
 
 async fn ee_fetch_allowed_agents(login: &str) -> Option<Vec<String>> {
+    // None when EE is NOT configured (CE-only deploy) = no restriction.
     let ee_url = ee::ee_sidecar_url()?;
     let secret = std::env::var("EE_INTERNAL_SECRET").unwrap_or_default();
     let url = format!("{}/api/ee/acl/user-agents", ee_url.trim_end_matches('/'));
     let body = serde_json::json!({ "login": login });
-    let resp = reqwest::Client::new()
+    // EE IS configured, so any transport/parse failure must FAIL CLOSED
+    // (empty allow-list = no agents visible) rather than degrade to
+    // "no restriction" — an attacker who can disrupt the sidecar must not
+    // gain broader visibility.
+    let resp = match reqwest::Client::new()
         .post(&url)
         .bearer_auth(&secret)
         .json(&body)
         .timeout(std::time::Duration::from_secs(5))
         .send()
         .await
-        .ok()?;
-    if !resp.status().is_success() {
-        return None;
-    }
-    let data: serde_json::Value = resp.json().await.ok()?;
-    // patterns is null = no restriction, patterns is array = filter
+    {
+        Ok(r) if r.status().is_success() => r,
+        other => {
+            tracing::warn!(
+                login = %login,
+                ok = other.is_ok(),
+                "EE allowed-agents fetch failed; failing closed (empty allow-list)"
+            );
+            return Some(Vec::new());
+        }
+    };
+    let data: serde_json::Value = match resp.json().await {
+        Ok(d) => d,
+        Err(_) => return Some(Vec::new()),
+    };
+    // `patterns: null` is an explicit EE verdict = "no restriction".
     if data["patterns"].is_null() {
         return None;
     }
-    let patterns = data["patterns"].as_array()?;
+    let Some(patterns) = data["patterns"].as_array() else {
+        return Some(Vec::new());
+    };
     if patterns.is_empty() {
         return Some(Vec::new());
     }
@@ -1517,9 +1542,20 @@ async fn ee_check_permission(login: &str, action: &str, resource: &str) -> bool 
     {
         Ok(resp) if resp.status().is_success() => {
             let data: serde_json::Value = resp.json().await.unwrap_or_default();
-            data["allowed"].as_bool().unwrap_or(true)
+            // Malformed / missing `allowed` => deny (fail closed).
+            data["allowed"].as_bool().unwrap_or(false)
         }
-        _ => true, // fail-open if EE unreachable
+        _ => {
+            // EE is configured but unreachable / non-2xx: FAIL CLOSED.
+            // (CE-only deploys returned early above with allow, so this
+            // only denies when the EE policy engine was expected to answer.)
+            tracing::warn!(
+                login = %login,
+                action = %action,
+                "EE permission check failed; denying (fail closed)"
+            );
+            false
+        }
     }
 }
 

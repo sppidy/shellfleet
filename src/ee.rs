@@ -1,10 +1,11 @@
 use axum::{
-    extract::{Request, State},
+    extract::{OriginalUri, Request, State},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
     routing::{get, post},
     Router,
 };
+use axum_extra::extract::cookie::CookieJar;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -184,15 +185,32 @@ pub async fn forward_drift_snapshot(
     }
 }
 
-pub async fn ee_proxy_handler(req: Request) -> impl IntoResponse {
+pub async fn ee_proxy_handler(
+    State(state): State<Arc<AppState>>,
+    jar: CookieJar,
+    OriginalUri(orig_uri): OriginalUri,
+    req: Request,
+) -> impl IntoResponse {
     let Some(ee_url) = ee_sidecar_url() else {
         return (StatusCode::SERVICE_UNAVAILABLE, "EE not active").into_response();
     };
+    // Resolve the authenticated principal. RBAC already ran in the /api
+    // layer; this also gives us the DB-resolved role. EE trusts the
+    // identity we forward precisely because this path is only reachable
+    // behind CE auth + the EE-side internal-secret gate.
+    let claims = match auth::current_user(&jar, &state.db).await {
+        Ok(c) => c,
+        Err(e) => return e.into_response(),
+    };
     let secret = internal_secret().unwrap_or_default();
 
-    let path = req.uri().path_and_query()
+    // The proxy route is nested under `/api`, so `req.uri()` is
+    // prefix-stripped — forward the FULL original path (`/api/ee/...`)
+    // which is what the EE sidecar serves.
+    let path = orig_uri
+        .path_and_query()
         .map(|pq| pq.as_str())
-        .unwrap_or(req.uri().path());
+        .unwrap_or_else(|| orig_uri.path());
     let url = format!("{}{}", ee_url.trim_end_matches('/'), path);
     let method = req.method().clone();
 
@@ -202,11 +220,16 @@ pub async fn ee_proxy_handler(req: Request) -> impl IntoResponse {
     };
 
     let client = reqwest::Client::new();
+    // Build a FRESH upstream request: client-supplied headers (including
+    // any spoofed x-shellfleet-* / Authorization) are deliberately NOT
+    // copied. We attach the internal bearer plus the CE-verified identity.
     let mut builder = client.request(
         reqwest::Method::from_bytes(method.as_str().as_bytes()).unwrap_or(reqwest::Method::GET),
         &url,
     )
     .bearer_auth(&secret)
+    .header("x-shellfleet-login", claims.sub.as_str())
+    .header("x-shellfleet-role", claims.role.as_str())
     .timeout(std::time::Duration::from_secs(30));
 
     if !body_bytes.is_empty() {
