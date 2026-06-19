@@ -63,6 +63,66 @@ pub fn parse_dest(dest: &str) -> Result<Dest, String> {
     Ok(Dest::Local(PathBuf::from(trimmed)))
 }
 
+/// Optional allow-list of host paths the server is permitted to back up
+/// (read) and restore into (write). Set `SHELLFLEET_BACKUP_ROOTS` to a
+/// colon-separated list of directory prefixes to confine both operations;
+/// leave it unset to preserve the historical behaviour of honouring any
+/// path the server names. Confining is opt-in so existing deployments
+/// don't break, but operators who don't fully trust the control plane can
+/// pin the agent's filesystem reach with one env var.
+fn backup_roots() -> Option<Vec<PathBuf>> {
+    let raw = std::env::var("SHELLFLEET_BACKUP_ROOTS").ok()?;
+    let roots: Vec<PathBuf> = raw
+        .split(':')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+        .collect();
+    if roots.is_empty() {
+        None
+    } else {
+        Some(roots)
+    }
+}
+
+/// Lexically resolve `.`/`..` without touching the filesystem so a
+/// `roots`-relative prefix check can't be defeated by `../` traversal.
+fn normalize_lexical(p: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut out = PathBuf::new();
+    for comp in p.components() {
+        match comp {
+            Component::ParentDir => {
+                out.pop();
+            }
+            Component::CurDir => {}
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
+}
+
+/// True iff `p` lives under one of `roots`. Requires a lexical prefix
+/// match (kills `../` escapes); additionally, if `p` already exists, its
+/// canonical (symlink-resolved) path must also stay under a root — so a
+/// symlink inside an allowed dir can't point the operation outside it.
+/// A not-yet-existing target (e.g. a fresh restore root) passes on the
+/// lexical check alone, since its real ancestor will be created in-tree.
+fn within_roots(p: &Path, roots: &[PathBuf]) -> bool {
+    let lex = normalize_lexical(p);
+    let lex_ok = roots.iter().any(|r| lex.starts_with(normalize_lexical(r)));
+    if !lex_ok {
+        return false;
+    }
+    if let Ok(canon) = p.canonicalize() {
+        return roots.iter().any(|r| {
+            let rc = r.canonicalize().unwrap_or_else(|_| normalize_lexical(r));
+            canon.starts_with(&rc)
+        });
+    }
+    true
+}
+
 fn timestamp() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let secs = SystemTime::now()
@@ -261,6 +321,26 @@ pub async fn run_backup(
     }
     if existing.is_empty() {
         return (false, String::new(), 0, log, Some("no requested paths exist on this host".into()));
+    }
+    // Confine sources to the allow-list when one is configured.
+    if let Some(roots) = backup_roots() {
+        let bad: Vec<&str> = existing
+            .iter()
+            .filter(|p| !within_roots(Path::new(p), &roots))
+            .map(|s| s.as_str())
+            .collect();
+        if !bad.is_empty() {
+            return (
+                false,
+                String::new(),
+                0,
+                log,
+                Some(format!(
+                    "path(s) outside SHELLFLEET_BACKUP_ROOTS allow-list: {}",
+                    bad.join(", ")
+                )),
+            );
+        }
     }
     if existing.len() != paths.len() {
         log.push_str("WARN: skipping missing path(s): ");
@@ -520,6 +600,19 @@ pub async fn restore(
     if dest_root_trim.is_empty() {
         return (false, String::new(), Some("dest_root is empty".into()));
     }
+    // A restore writes/overwrites files under dest_root, so it's the most
+    // dangerous path the server controls. Confine it to the allow-list when set.
+    if let Some(roots) = backup_roots() {
+        if !within_roots(Path::new(dest_root_trim), &roots) {
+            return (
+                false,
+                String::new(),
+                Some(format!(
+                    "restore dest_root {dest_root_trim:?} is outside the SHELLFLEET_BACKUP_ROOTS allow-list"
+                )),
+            );
+        }
+    }
     if let Err(e) = std::fs::create_dir_all(dest_root_trim) {
         return (
             false,
@@ -679,5 +772,40 @@ pub async fn restore(
         log.push_str(&format!("restored {local} into {dest_root_trim}\n"));
         truncate(&mut log, LOG_CAP);
         (true, log, None)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_resolves_dotdot() {
+        assert_eq!(normalize_lexical(Path::new("/srv/data/../etc")), PathBuf::from("/srv/etc"));
+        assert_eq!(normalize_lexical(Path::new("/a/./b")), PathBuf::from("/a/b"));
+    }
+
+    #[test]
+    fn within_roots_allows_inside() {
+        let roots = vec![PathBuf::from("/srv/backups")];
+        assert!(within_roots(Path::new("/srv/backups/db"), &roots));
+        assert!(within_roots(Path::new("/srv/backups"), &roots));
+    }
+
+    #[test]
+    fn within_roots_rejects_outside_and_traversal() {
+        let roots = vec![PathBuf::from("/srv/backups")];
+        assert!(!within_roots(Path::new("/etc/shadow"), &roots));
+        // `..` escape out of an allowed root must be denied.
+        assert!(!within_roots(Path::new("/srv/backups/../../etc"), &roots));
+    }
+
+    #[test]
+    fn parse_dest_round_trips() {
+        assert!(matches!(parse_dest("/var/x"), Ok(Dest::Local(_))));
+        assert!(matches!(parse_dest("file:///var/x"), Ok(Dest::Local(_))));
+        assert!(matches!(parse_dest("s3://bucket/prefix"), Ok(Dest::S3 { .. })));
+        assert!(parse_dest("s3://").is_err());
+        assert!(parse_dest("ftp://x").is_err());
     }
 }
