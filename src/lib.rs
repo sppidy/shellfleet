@@ -794,7 +794,7 @@ pub enum Message {
 
     // ----- System prune (v13) -----
     /// `dry_run=true` returns what *would* be pruned via `docker system df -v`
-    /// + a synthesised summary; `dry_run=false` runs `docker system prune -af`.
+    /// plus a synthesised summary; `dry_run=false` runs `docker system prune -af`.
     /// No background loops — only fires when the UI asks.
     DockerSystemPruneRequest {
         #[serde(default)]
