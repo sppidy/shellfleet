@@ -63,6 +63,19 @@ pub async fn init() -> Result<SqlitePool, sqlx::Error> {
     .execute(&pool)
     .await?;
 
+    // Small key/value store for instance-scoped settings (anonymous
+    // telemetry instance id + opt-out toggle, etc.).
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS meta (
+            key   TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
+        "#,
+    )
+    .execute(&pool)
+    .await?;
+
     sqlx::query(
         r#"
         CREATE TABLE IF NOT EXISTS pending_devices (
@@ -1261,6 +1274,36 @@ pub async fn count_users(pool: &SqlitePool) -> Result<i64, sqlx::Error> {
     sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM users")
         .fetch_one(pool)
         .await
+}
+
+pub async fn get_meta(pool: &SqlitePool, key: &str) -> Result<Option<String>, sqlx::Error> {
+    sqlx::query_scalar::<_, String>("SELECT value FROM meta WHERE key = ?")
+        .bind(key)
+        .fetch_optional(pool)
+        .await
+}
+
+pub async fn set_meta(pool: &SqlitePool, key: &str, value: &str) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO meta (key, value) VALUES (?1, ?2) \
+         ON CONFLICT(key) DO UPDATE SET value = ?2",
+    )
+    .bind(key)
+    .bind(value)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Anonymous, stable per-install identifier for telemetry. Minted once
+/// (random UUID) and persisted in `meta`; carries no PII.
+pub async fn ensure_instance_id(pool: &SqlitePool) -> Result<String, sqlx::Error> {
+    if let Some(id) = get_meta(pool, "instance_id").await? {
+        return Ok(id);
+    }
+    let id = uuid::Uuid::new_v4().to_string();
+    set_meta(pool, "instance_id", &id).await?;
+    Ok(id)
 }
 
 pub async fn set_user_role(

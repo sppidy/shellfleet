@@ -34,6 +34,7 @@ data-encoding = "2.11"
 # Constant-time equality + AES-GCM at-rest encryption for TOTP secrets.
 subtle = "2.6"
 aes-gcm = "0.10"
+uuid = { version = "1", features = ["v4"] }
 
 # Cookie max-age uses the cookie crate's `time::Duration`.
 time = "0.3"

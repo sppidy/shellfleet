@@ -34,6 +34,7 @@ mod probe_library;
 mod rbac;
 mod security_headers;
 mod throttle;
+mod telemetry;
 mod tokens;
 mod update_windows;
 mod users;
@@ -405,6 +406,7 @@ async fn main() {
     });
 
     update_windows::spawn_scheduler(state.clone());
+    telemetry::spawn_reporter(state.clone());
     if backups_enabled() {
         backups::spawn_scheduler(state.clone());
         tracing::info!("backups: enabled (BACKUPS_ENABLED is set)");
@@ -429,6 +431,7 @@ async fn main() {
         .nest("/users", users::routes())
         .nest("/invites", invites::routes())
         .nest("/metrics", metrics::routes())
+        .nest("/telemetry", telemetry::routes())
         .route("/me", get(me_handler))
         .route("/healthz", get(healthz))
         .route("/audit", get(audit_handler))
