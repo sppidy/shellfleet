@@ -55,6 +55,10 @@ export default function AdminPage() {
   const [inviteRole, setInviteRole] = useState('viewer');
   const [lastInviteUrl, setLastInviteUrl] = useState<string | null>(null);
 
+  // Telemetry opt-out state
+  const [telemetry, setTelemetry] = useState<{ enabled: boolean; toggle: boolean; instance_id: string; env_forced_off: boolean } | null>(null);
+  const [telemetryPending, setTelemetryPending] = useState(false);
+
   useEffect(() => {
     if (status === 'guest') router.replace('/login');
     if (status === 'pending_mfa') router.replace('/mfa');
@@ -86,6 +90,26 @@ export default function AdminPage() {
       if (res.ok) setInvites(await res.json());
     } catch { /* ignore */ }
   }, []);
+
+  const fetchTelemetry = useCallback(async () => {
+    try {
+      const res = await apiFetch('/api/telemetry');
+      if (res.ok) setTelemetry(await res.json());
+    } catch { /* ignore */ }
+  }, []);
+
+  const toggleTelemetry = async () => {
+    if (!telemetry || telemetry.env_forced_off) return;
+    setTelemetryPending(true);
+    try {
+      const res = await apiFetch('/api/telemetry', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ enabled: !telemetry.toggle }),
+      });
+      if (res.ok) await fetchTelemetry();
+    } catch { /* ignore */ }
+    finally { setTelemetryPending(false); }
+  };
 
   const createInvite = async () => {
     setError(null);
@@ -166,8 +190,8 @@ export default function AdminPage() {
   };
 
   useEffect(() => {
-    if (status === 'authed') { fetchUsers(); checkEe(); fetchInvites(); fetchOrgs(); }
-  }, [status, fetchUsers, checkEe, fetchInvites, fetchOrgs]);
+    if (status === 'authed') { fetchUsers(); checkEe(); fetchInvites(); fetchOrgs(); fetchTelemetry(); }
+  }, [status, fetchUsers, checkEe, fetchInvites, fetchOrgs, fetchTelemetry]);
 
   useEffect(() => {
     if (selectedOrg) fetchOrgDetails(selectedOrg.id);
@@ -219,7 +243,7 @@ export default function AdminPage() {
             <span className="here">admin</span>
           </div>
           <div className="topbar-actions">
-            <button className="btn" onClick={() => { fetchUsers(); fetchInvites(); fetchOrgs(); }}>↻ refresh</button>
+            <button className="btn" onClick={() => { fetchUsers(); fetchInvites(); fetchOrgs(); fetchTelemetry(); }}>↻ refresh</button>
           </div>
         </div>
 
@@ -295,6 +319,42 @@ export default function AdminPage() {
                 )}
               </div>
             </div>
+
+            {/* TELEMETRY */}
+            {telemetry && (
+              <div className="panel" style={{ marginTop: 12 }}>
+                <div className="panel-head">
+                  <div className="panel-title">
+                    <span className="ico">📡</span> USAGE TELEMETRY
+                    <span className="meta" style={{ color: telemetry.enabled ? 'var(--accent)' : 'var(--fg-2)' }}>
+                      {telemetry.enabled ? 'reporting' : 'off'}
+                    </span>
+                  </div>
+                </div>
+                <div className="panel-body" style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <div className="mono muted" style={{ fontSize: 12 }}>
+                    Anonymous counts, version, and enabled-feature names — never hostnames, logins, IPs, or any content. Helps gauge how many fleets run ShellFleet.
+                  </div>
+                  <div className="mono" style={{ fontSize: 12, color: 'var(--fg-2)' }}>
+                    instance&nbsp;id: <span style={{ color: 'var(--fg-1)' }}>{telemetry.instance_id || '—'}</span>
+                  </div>
+                  {telemetry.env_forced_off ? (
+                    <div className="mono" style={{ fontSize: 12, color: 'var(--warn)' }}>
+                      Forced off by SHELLFLEET_TELEMETRY env — this toggle is disabled.
+                    </div>
+                  ) : (
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                      <button className="btn" disabled={telemetryPending} onClick={toggleTelemetry}>
+                        {telemetryPending ? '…' : telemetry.toggle ? 'disable telemetry' : 'enable telemetry'}
+                      </button>
+                      <span className="mono muted" style={{ fontSize: 12 }}>
+                        currently {telemetry.toggle ? 'enabled' : 'disabled'}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
 
             {/* INVITES (EE only) */}
             {eeAvailable && <div className="panel" style={{ marginTop: 12 }}>
