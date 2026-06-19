@@ -717,6 +717,45 @@ async fn handle_agent_socket(socket: WebSocket, state: Arc<AppState>, token: Str
         if let Ok(parsed_msg) = parsed {
             match parsed_msg {
                 Message::Register { hostname, protocol_version, capabilities, metadata } => {
+                    // Identity-binding guard: a per-agent token is bound to the
+                    // first hostname it registers with. Reject a token reused
+                    // under a DIFFERENT hostname — prevents one valid token from
+                    // impersonating another agent's id and hijacking its command
+                    // stream. The shared legacy AGENT_SECRET is exempt (it
+                    // intentionally serves many hosts).
+                    let legacy_token = std::env::var("AGENT_SECRET").unwrap_or_default();
+                    let is_legacy = !legacy_token.is_empty() && token == legacy_token;
+                    if !is_legacy {
+                        if let Ok(Some(bound)) = db::token_hostname(&state.db, &token).await {
+                            if !bound.is_empty() && bound != hostname {
+                                tracing::warn!(
+                                    %hostname, bound = %bound,
+                                    "agent token reused under a different hostname — rejecting (identity-binding guard)"
+                                );
+                                db::record_audit(
+                                    &state.db,
+                                    now_unix(),
+                                    None,
+                                    None,
+                                    "agent.register",
+                                    false,
+                                    Some(&format!("token bound to '{bound}', got '{hostname}'")),
+                                )
+                                .await;
+                                break;
+                            }
+                        }
+                    }
+                    // Protocol-version skew is advisory (legacy 0 is allowed);
+                    // surface it so an incompatible agent isn't silent.
+                    if protocol_version != 0 && protocol_version != shared::PROTOCOL_VERSION {
+                        tracing::warn!(
+                            %hostname,
+                            got = protocol_version,
+                            expected = shared::PROTOCOL_VERSION,
+                            "agent protocol-version skew"
+                        );
+                    }
                     let id = format!("{}-id", hostname);
                     agent_id_opt = Some(id.clone());
 

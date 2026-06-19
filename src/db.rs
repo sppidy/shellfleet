@@ -403,6 +403,16 @@ pub async fn token_exists(pool: &SqlitePool, token: &str) -> bool {
         .is_some()
 }
 
+/// The hostname a token is bound to (the host it first registered as), if
+/// any. Used to reject a token reused under a different hostname.
+pub async fn token_hostname(pool: &SqlitePool, token: &str) -> Result<Option<String>, sqlx::Error> {
+    let row = sqlx::query_scalar::<_, Option<String>>("SELECT hostname FROM tokens WHERE token = ?")
+        .bind(token)
+        .fetch_optional(pool)
+        .await?;
+    Ok(row.flatten())
+}
+
 pub async fn upsert_token_seen(
     pool: &SqlitePool,
     token: &str,

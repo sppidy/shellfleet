@@ -174,9 +174,18 @@ pub fn assert_jwt_secret_present() {
         std::process::exit(2);
     }
     if val == "dev" {
+        if !dev_flag_set() {
+            eprintln!(
+                "FATAL: JWT_SECRET=dev disables auth/RBAC/MFA/CSRF and is for local \
+                 development only. Refusing to start with a stray 'dev' secret. Set \
+                 SHELLFLEET_DEV=1 to intentionally enable dev mode, or use a real \
+                 32+ char secret (`openssl rand -hex 32`)."
+            );
+            std::process::exit(2);
+        }
         tracing::warn!(
-            "JWT_SECRET=dev — auth, RBAC, MFA, and CSRF are all disabled. \
-             This is for local development only. Do not deploy this configuration."
+            "JWT_SECRET=dev + SHELLFLEET_DEV — auth, RBAC, MFA, and CSRF are all \
+             disabled. Local development only; never deploy this configuration."
         );
         return;
     }
@@ -198,8 +207,18 @@ pub fn assert_jwt_secret_present() {
     }
 }
 
+fn dev_flag_set() -> bool {
+    matches!(
+        env::var("SHELLFLEET_DEV").unwrap_or_default().trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
+
 fn dev_mode() -> bool {
-    env::var("JWT_SECRET").unwrap_or_default() == "dev"
+    // Dev mode (disables auth/RBAC/MFA/CSRF) requires BOTH JWT_SECRET=dev AND
+    // an explicit SHELLFLEET_DEV opt-in, so a stray production JWT_SECRET=dev
+    // can't silently turn off every protection.
+    env::var("JWT_SECRET").unwrap_or_default() == "dev" && dev_flag_set()
 }
 
 fn random_oauth_state() -> String {
