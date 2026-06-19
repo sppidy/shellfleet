@@ -1303,3 +1303,101 @@ pub enum UiMessage {
         reason: String,
     },
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Round-trip via JSON-string stability (Message intentionally has no
+    /// PartialEq): serialize -> deserialize -> serialize, the two encodings
+    /// must match. Catches a forgotten field, a tag/content rename, or a
+    /// serde attribute regression on any covered variant.
+    fn assert_roundtrip(m: &Message) {
+        let j1 = serde_json::to_string(m).expect("serialize");
+        let back: Message = serde_json::from_str(&j1).expect("deserialize");
+        let j2 = serde_json::to_string(&back).expect("re-serialize");
+        assert_eq!(j1, j2, "round-trip changed the wire encoding");
+    }
+
+    #[test]
+    fn roundtrips_representative_variants() {
+        use std::collections::HashMap;
+        let mut metadata = HashMap::new();
+        metadata.insert("os".to_string(), "linux".to_string());
+
+        assert_roundtrip(&Message::Register {
+            hostname: "host-a".into(),
+            protocol_version: PROTOCOL_VERSION,
+            capabilities: vec!["systemd".into(), "docker".into()],
+            metadata,
+        });
+        // systemd family
+        assert_roundtrip(&Message::ControlServiceRequest {
+            name: "nginx".into(),
+            action: "restart".into(),
+        });
+        // terminal family (bytes survive the round-trip)
+        assert_roundtrip(&Message::TerminalData {
+            session_id: "sess-1".into(),
+            data: vec![0, 27, 91, 255, 10],
+        });
+        // k8s + docker unit variants
+        assert_roundtrip(&Message::K8sListPodsRequest);
+        assert_roundtrip(&Message::DockerListRequest);
+        // heartbeat unit variants
+        assert_roundtrip(&Message::Ping);
+        assert_roundtrip(&Message::Pong);
+    }
+
+    #[test]
+    fn legacy_register_without_v15_fields_defaults() {
+        // A pre-v15 agent sends only hostname; capabilities/metadata/version
+        // must default so it still connects (UI then "shows every tab").
+        let json = r#"{"type":"Register","payload":{"hostname":"legacy"}}"#;
+        let m: Message = serde_json::from_str(json).expect("legacy Register must parse");
+        match m {
+            Message::Register {
+                hostname,
+                protocol_version,
+                capabilities,
+                metadata,
+            } => {
+                assert_eq!(hostname, "legacy");
+                assert_eq!(protocol_version, 0, "missing protocol_version must default to 0");
+                assert!(capabilities.is_empty(), "missing capabilities must default empty");
+                assert!(metadata.is_empty(), "missing metadata must default empty");
+            }
+            _ => panic!("expected Register"),
+        }
+    }
+
+    #[test]
+    fn unknown_extra_field_in_known_variant_still_parses() {
+        // Forward-compat: a newer peer adds a field to a variant we know;
+        // we must ignore it, not fail the whole frame.
+        let json = r#"{"type":"ControlServiceRequest","payload":{"name":"nginx","action":"restart","added_in_v99":true}}"#;
+        let m: Message = serde_json::from_str(json).expect("unknown field must be ignored");
+        match m {
+            Message::ControlServiceRequest { name, action } => {
+                assert_eq!(name, "nginx");
+                assert_eq!(action, "restart");
+            }
+            _ => panic!("expected ControlServiceRequest"),
+        }
+    }
+
+    #[test]
+    fn k8s_logs_request_tail_and_follow_default() {
+        let json = r#"{"type":"K8sLogsRequest","payload":{"stream_id":"s","namespace":"default","pod_name":"p","container":null}}"#;
+        let m: Message = serde_json::from_str(json).expect("parse");
+        match m {
+            Message::K8sLogsRequest {
+                tail_lines, follow, ..
+            } => {
+                assert_eq!(tail_lines, 0, "omitted tail_lines must default to 0");
+                assert!(!follow, "omitted follow must default to false");
+            }
+            _ => panic!("expected K8sLogsRequest"),
+        }
+    }
+}
