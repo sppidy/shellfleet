@@ -258,11 +258,19 @@ async fn main() {
     // without needing a full agent restart.
     let tx_caps = tx.clone();
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_secs(30));
-        interval.tick().await; // skip the immediate first tick
+        // Probe fast (30s) during the boot window so late-starting subsystems
+        // (Docker coming up after the agent) get picked up quickly, then back
+        // off to a slow cadence once capabilities have stayed put — steady
+        // state rarely changes and each probe shells out. Any change snaps the
+        // cadence back to fast.
+        const FAST: Duration = Duration::from_secs(30);
+        const SLOW: Duration = Duration::from_secs(300);
+        const SETTLE_ROUNDS: u32 = 6; // ~3 min of stability before slowing down
+        let mut delay = FAST;
+        let mut idle_rounds: u32 = 0;
         let mut current = initial_caps;
         loop {
-            interval.tick().await;
+            tokio::time::sleep(delay).await;
             let mut fresh: Vec<String> = Vec::with_capacity(4);
             if systemd::systemd_available().await {
                 fresh.push("systemd".into());
@@ -286,6 +294,14 @@ async fn main() {
                     capabilities: fresh.clone(),
                 });
                 current = fresh;
+                // Something's in flux — probe fast again until it settles.
+                idle_rounds = 0;
+                delay = FAST;
+            } else {
+                idle_rounds = idle_rounds.saturating_add(1);
+                if idle_rounds >= SETTLE_ROUNDS {
+                    delay = SLOW;
+                }
             }
         }
     });
