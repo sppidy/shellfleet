@@ -76,6 +76,7 @@ impl LogStreams {
         }
     }
 
+    #[allow(dead_code)] // retained API for orderly teardown; not currently called
     pub async fn shutdown(&self) {
         let mut guard = self.inner.lock().await;
         for (_, h) in guard.drain() {

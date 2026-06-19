@@ -17,6 +17,7 @@ pub async fn systemd_available() -> bool {
 #[derive(Debug, Deserialize)]
 struct SystemctlJsonRow {
     unit: Option<String>,
+    #[allow(dead_code)] // present in `systemctl --output=json`; parsed but not surfaced
     load: Option<String>,
     active: Option<String>,
     sub: Option<String>,

@@ -1,3 +1,17 @@
+// W0 safety-net baseline: this crate predates a clippy gate. The lints
+// below are pre-existing and stylistic; they are allowed crate-wide so a
+// CI `-D warnings` gate enforces the substantive lints without churn.
+// Tracked for a focused cleanup in W6.
+#![allow(
+    clippy::collapsible_if,
+    clippy::ptr_arg,
+    clippy::unnecessary_cast,
+    clippy::unnecessary_sort_by,
+    clippy::trim_split_whitespace,
+    clippy::field_reassign_with_default,
+    clippy::doc_lazy_continuation
+)]
+
 mod apt;
 mod backup;
 mod config;
