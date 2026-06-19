@@ -118,14 +118,23 @@ The `.env` on the docker host carries:
 
 | Var                                              | Required | Notes                                                                        |
 |--------------------------------------------------|----------|------------------------------------------------------------------------------|
-| `JWT_SECRET`                                     | yes      | Signs session cookies                                                        |
+| `JWT_SECRET`                                     | yes      | Signs session cookies. `dev` disables all auth and now *also* requires `SHELLFLEET_DEV=1`, else the server refuses to start |
+| `SHELLFLEET_DEV`                                 | optional | Set to `1`/`true` to opt into dev mode when `JWT_SECRET=dev`; without it a stray `dev` secret is fatal at startup |
 | `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET`      | yes      | OAuth app                                                                    |
 | `ALLOWED_GITHUB_USERS`                           | yes      | Comma list of GitHub logins permitted to sign in                             |
 | `AGENT_SECRET`                                   | optional | Bare-token bootstrap path; intentionally empty in the live deploy            |
+| `COOKIE_SECURE`                                  | optional | `Secure` flag on auth + CSRF cookies. Default on; set `0/false/no/off` for plain-HTTP local dev |
 | `BACKUPS_ENABLED`                                | optional | `true` to mount `/api/backups/*` and run the backup scheduler                |
+| `SHELLFLEET_TELEMETRY` / `TELEMETRY_URL`         | optional | Anonymous usage telemetry (default on). `off` to disable; `TELEMETRY_URL` overrides the collector |
 | `WS_ALLOWED_ORIGINS`                             | optional | Extra origins allowed on `/ui/ws` (UI_URL is always allowed)                 |
 | `UPDATE_WEBHOOK_URL` / `UPDATE_WEBHOOK_FORMAT`   | optional | Outbound webhook on `update_window.result`. Format: `json` (default) or `slack`|
 | `METRICS_CONFIG_PATH`                            | optional | Path to the metrics plugin YAML. Default `/etc/shellfleet/metrics.yaml`. Missing/invalid → plugin disabled, Metrics tab hidden |
+
+Agent-side (set on the host running the agent, not the server):
+
+| Var                       | Required | Notes                                                                        |
+|---------------------------|----------|------------------------------------------------------------------------------|
+| `SHELLFLEET_BACKUP_ROOTS` | optional | Colon-separated allow-list of directory prefixes the agent may back up / restore into. Unset = any path (legacy behaviour). Set it to confine the agent's filesystem reach if you don't fully trust the control plane |
 
 ## Connecting an agent
 
@@ -310,6 +319,12 @@ rollout.
   via WS agent-control messages.
 - **JWT_SECRET fail-loud.** Server refuses to start if `JWT_SECRET` is
   unset, shorter than 32 chars, or the historical placeholder value.
+  `JWT_SECRET=dev` (which disables auth/RBAC/MFA/CSRF) additionally
+  requires an explicit `SHELLFLEET_DEV=1` opt-in, so a stray `dev`
+  secret in production is fatal rather than silently wide-open.
+- **Agent identity binding.** Each per-agent token is bound to the first
+  hostname it registers with; a token replayed under a different hostname
+  is rejected, so one valid token can't impersonate another agent's id.
 - **Defence-in-depth headers.** HSTS (`max-age=31536000;
   includeSubDomains`), `X-Content-Type-Options: nosniff`,
   `X-Frame-Options: DENY`, `Referrer-Policy: strict-origin-when-cross-origin`,
