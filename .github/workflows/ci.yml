@@ -1,0 +1,67 @@
+name: CI
+
+# W0 safety-net: the first PR-gating workflow. The existing workflows only
+# build + publish artifacts; this one runs lint + typecheck + tests so a
+# regression is caught before merge. Kept separate from the publish
+# workflows so it stays fast and runs on pull_request.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  rust:
+    name: rust (clippy + test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+          token: ${{ secrets.SUBMODULES_PAT }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Clippy (workspace, deny warnings)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Clippy (agent, kube feature)
+        run: cargo clippy -p agent --all-targets --features kube -- -D warnings
+      - name: Test (workspace)
+        run: cargo test --workspace
+      - name: Test (agent, kube feature)
+        run: cargo test -p agent --features kube
+
+  web:
+    name: web (lint + typecheck + test)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+          token: ${{ secrets.SUBMODULES_PAT }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+
+  helm:
+    name: helm (lint + template)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: azure/setup-helm@v4
+      - name: Lint chart
+        run: helm lint helm/shellfleet-agent
+      - name: Template smoke test (defaults render)
+        run: helm template sf helm/shellfleet-agent > /dev/null

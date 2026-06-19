@@ -4,4 +4,10 @@ members = [
     "server",
     "shared",
 ]
+# The EE sidecar (private, gitignored) is built standalone via its own
+# Dockerfile (which synthesizes a workspace). Excluding it here lets
+# `cargo` commands run at the repo root without erroring on the ee/ dir.
+exclude = [
+    "ee",
+]
 resolver = "2"
