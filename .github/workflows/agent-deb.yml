@@ -16,9 +16,10 @@ on:
   release:
     types: [published]
 
+# Least privilege by default: read-only at the top level so any new job
+# starts closed. The two jobs that publish opt into write explicitly below.
 permissions:
-  contents: write
-  pages: write
+  contents: read
 
 concurrency:
   group: agent-deb
@@ -28,6 +29,9 @@ jobs:
   build:
     name: Build .deb (${{ matrix.flavor }} · ${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
+    # Write needed only for the "Attach to GitHub Release" step on tags.
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:
@@ -141,6 +145,9 @@ jobs:
 
   publish-repo:
     name: Publish apt repo (gh-pages)
+    # Write needed to commit/push the gh-pages apt repo.
+    permissions:
+      contents: write
     needs: build
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest

@@ -5,7 +5,9 @@ services:
       context: .
       dockerfile: Dockerfile.server
     ports:
-      - "8080:8080"
+      # Bind to loopback only: nginx (the public ingress) proxies to
+      # 127.0.0.1:8080, so the API must not be reachable on other interfaces.
+      - "127.0.0.1:8080:8080"
     environment:
       # GitHub OAuth Configuration
       - GITHUB_CLIENT_ID=${GITHUB_CLIENT_ID}
@@ -74,7 +76,8 @@ services:
       context: .
       dockerfile: Dockerfile.web
     ports:
-      - "3000:3000"
+      # Loopback only — reached via nginx proxy_pass to 127.0.0.1:3000.
+      - "127.0.0.1:3000:3000"
     environment:
       - NEXT_PUBLIC_WS_URL=${NEXT_PUBLIC_WS_URL:-wss://dashboard.example.com/ui/ws}
     restart: unless-stopped

@@ -1,11 +1,19 @@
-FROM rust:latest AS builder
+# Pinned to a major Rust release line (not :latest) so builds are reproducible.
+FROM rust:1-bookworm AS builder
 WORKDIR /usr/src/app
 COPY . .
-RUN cargo build --release -p agent
+# --locked: build against the committed Cargo.lock, never silently resolve newer deps.
+RUN cargo build --release --locked -p agent
 
 FROM debian:bookworm-slim
 WORKDIR /app
-# Install systemd, dbus, and bash (needed for portable-pty and systemctl commands)
-RUN apt-get update && apt-get install -y systemd dbus bash && rm -rf /var/lib/apt/lists/*
+# systemd + dbus drive host service control; bash backs portable-pty shells.
+RUN apt-get update && apt-get install -y --no-install-recommends systemd dbus bash && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /usr/src/app/target/release/shellfleet-agent /app/agent
+# Run unprivileged by default. This image is primarily for local end-to-end
+# testing (see docker-compose.yml). Driving the *host's* systemd/dbus needs
+# root or explicit capabilities — override with `user: root` / add caps when
+# you mount the host bus socket.
+RUN useradd -r -u 10001 -s /usr/sbin/nologin shellfleet
+USER 10001
 CMD ["./agent"]

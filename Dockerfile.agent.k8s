@@ -29,8 +29,13 @@ RUN apt-get update && \
 
 COPY --from=builder /src/target/release/shellfleet-agent /usr/bin/shellfleet-agent
 
-# Token directory — pre-create with mode 0700 so the agent can write
-# the bearer token after pairing without touching /etc permissions.
-RUN install -d -m 0700 /etc/shellfleet
+# Run unprivileged: the k8s agent reaches the cluster API via its mounted
+# ServiceAccount token, never host privileges.
+RUN useradd -r -u 10001 -s /usr/sbin/nologin shellfleet
 
+# Token directory — owned by the agent user, mode 0700, so it can persist the
+# bearer token after pairing without touching root-owned paths.
+RUN install -d -m 0700 -o shellfleet -g shellfleet /etc/shellfleet
+
+USER 10001
 ENTRYPOINT ["/usr/bin/shellfleet-agent", "--pair"]

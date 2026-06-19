@@ -32,6 +32,10 @@ copy the token into a Kubernetes Secret and re-install with
   helm upgrade {{ .Release.Name }} shellfleet-agent \
     --set token.existingSecret={{ include "shellfleet-agent.fullname" . }}-token
 
+Then wipe the temp copy so the bearer token isn't left on disk:
+
+  shred -u /tmp/agent-token.txt   # or `rm -P` / `rm -f` if shred is unavailable
+
 {{- else }}
 
 🔑 Token wired from existing Secret `{{ .Values.token.existingSecret }}`.
