@@ -482,6 +482,34 @@ function HomeBody() {
           )}
         </div>
 
+        {eeActive && role === 'admin' && (
+          <>
+            <div className="nav-section">ENTERPRISE</div>
+            <div className="nav-list">
+              {[
+                { path: '/cost', label: 'Cost', feat: 'cost', icon: '⊞' },
+                { path: '/sla', label: 'SLA & uptime', feat: 'sla', icon: '▲' },
+                { path: '/ip-allowlist', label: 'IP allow-list', feat: 'ip-allowlist', icon: '⊟' },
+              ].map((n) => {
+                const locked = !hasFeature(eeFeatures, n.feat);
+                return (
+                  <button
+                    key={n.path}
+                    type="button"
+                    className={`nav-item ${locked ? 'nav-locked' : ''}`}
+                    onClick={() => router.push(n.path)}
+                    title={locked ? 'Not included in your EE license' : undefined}
+                  >
+                    <span className="ico">{n.icon}</span>
+                    <span>{n.label}</span>
+                    {locked && <span className="nav-badge" style={{ background: 'transparent' }}>🔒</span>}
+                  </button>
+                );
+              })}
+            </div>
+          </>
+        )}
+
         <div className="nav-section">
           <span>AGENTS</span>
           <span className="count">{agents.length} online</span>

@@ -224,6 +224,8 @@ body {
   font-family: var(--mono);
 }
 .nav-item:hover { background: var(--bg-2); color: var(--fg); }
+/* EE nav link whose feature isn't licensed: de-emphasised, still clickable (shows upsell). */
+.nav-locked { opacity: 0.5; }
 .nav-item.active {
   background: var(--accent-bg);
   color: var(--accent);

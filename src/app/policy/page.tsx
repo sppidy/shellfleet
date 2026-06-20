@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { apiFetch } from '@/lib/api';
 import { useSession } from '@/components/providers/SessionProvider';
+import EeFeatureGate from '@/components/EeFeatureGate';
 import { Loader2Icon } from 'lucide-react';
 
 const DEFAULT_DOC = `{
@@ -131,6 +132,7 @@ export default function PolicyPage() {
         </div>
 
         <div className="scroll">
+          <EeFeatureGate feature="acl" label="Access Policy (ACL)">
           <div className="pane">
             {error && (
               <div className="panel" style={{ borderColor: 'var(--err-bd)', marginBottom: 12 }}>
@@ -196,6 +198,7 @@ export default function PolicyPage() {
               </div>
             </div>
           </div>
+          </EeFeatureGate>
         </div>
       </main>
     </div>
