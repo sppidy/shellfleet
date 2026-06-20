@@ -271,4 +271,23 @@ mod tests {
         let headers = HeaderMap::new();
         assert_eq!(real_client_ip(&headers, None), "unknown");
     }
+
+    #[test]
+    fn trusted_proxy_peer_honours_forwarded_client_ip() {
+        // 173.245.48.1 is inside Cloudflare's 173.245.48.0/20, which is in the
+        // default trusted-proxy set — so forwarding headers from it ARE honoured.
+        let peer: IpAddr = "173.245.48.1".parse().unwrap();
+        let mut headers = HeaderMap::new();
+        headers.insert("cf-connecting-ip", "8.8.8.8".parse().unwrap());
+        assert_eq!(
+            real_client_ip(&headers, Some(peer)),
+            "8.8.8.8",
+            "a trusted proxy's CF-Connecting-IP must be honoured"
+        );
+
+        // With no CF/X-Real-IP header, the leftmost X-Forwarded-For hop wins.
+        let mut h2 = HeaderMap::new();
+        h2.insert("x-forwarded-for", "1.2.3.4, 10.0.0.1".parse().unwrap());
+        assert_eq!(real_client_ip(&h2, Some(peer)), "1.2.3.4");
+    }
 }
