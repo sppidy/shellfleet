@@ -127,6 +127,7 @@ The `.env` on the docker host carries:
 | `BACKUPS_ENABLED`                                | optional | `true` to mount `/api/backups/*` and run the backup scheduler                |
 | `SHELLFLEET_TELEMETRY` / `TELEMETRY_URL`         | optional | Anonymous usage telemetry (default on). `off` to disable; `TELEMETRY_URL` overrides the collector |
 | `WS_ALLOWED_ORIGINS`                             | optional | Extra origins allowed on `/ui/ws` (UI_URL is always allowed)                 |
+| `STALE_AGENT_REALERT_SECS`                       | optional | Re-fire an `agent.still_offline` webhook every N s while an agent stays offline (default 3600; `0` disables). Surfaces a silently-stranded agent that the one-shot `agent.disconnect` missed |
 | `UPDATE_WEBHOOK_URL` / `UPDATE_WEBHOOK_FORMAT`   | optional | Outbound webhook on `update_window.result`. Format: `json` (default) or `slack`|
 | `METRICS_CONFIG_PATH`                            | optional | Path to the metrics plugin YAML. Default `/etc/shellfleet/metrics.yaml`. Missing/invalid → plugin disabled, Metrics tab hidden |
 

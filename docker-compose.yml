@@ -40,6 +40,11 @@ services:
       - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL:-}
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
+      # While an agent stays offline past the disconnect grace, re-fire an
+      # `agent.still_offline` reminder (via the DISCONNECT_* sinks) every
+      # STALE_AGENT_REALERT_SECS so a silently-stranded agent stays visible.
+      # Default 3600 (1h); set 0 to disable the recurring reminder.
+      - STALE_AGENT_REALERT_SECS=${STALE_AGENT_REALERT_SECS:-3600}
       # Comma-separated extra origins permitted to upgrade /ui/ws.
       # The UI_URL origin is always allowed automatically. Use this if
       # you have additional dashboards (e.g. dev tunnels) that need the
