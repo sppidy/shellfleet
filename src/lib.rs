@@ -1347,6 +1347,36 @@ mod tests {
         // heartbeat unit variants
         assert_roundtrip(&Message::Ping);
         assert_roundtrip(&Message::Pong);
+        // backup family
+        assert_roundtrip(&Message::BackupRunRequest {
+            id: "job-1".into(),
+            name: "nightly".into(),
+            paths: vec!["/etc".into(), "/var/lib".into()],
+            dest: "s3://bucket/prefix".into(),
+            mode: BackupMode::default(),
+        });
+        assert_roundtrip(&Message::BackupRestoreResponse {
+            id: "job-1".into(),
+            archive_uri: "s3://bucket/a.tar.gz".into(),
+            dest_root: "/restore".into(),
+            success: true,
+            log: "ok".into(),
+            error: None,
+        });
+        // drift family
+        assert_roundtrip(&Message::DriftSnapshotRequest {
+            snapshot_id: "snap-1".into(),
+            categories: vec!["packages".into()],
+            config_paths: vec!["/etc/nginx/nginx.conf".into()],
+        });
+        assert_roundtrip(&Message::DriftSnapshotResponse {
+            snapshot_id: "snap-1".into(),
+            packages: vec![],
+            services: vec![],
+            containers: vec![],
+            configs: vec![],
+            error: None,
+        });
     }
 
     #[test]
