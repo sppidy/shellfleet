@@ -23,6 +23,7 @@ mod csrf;
 mod db;
 mod device_auth;
 mod ee;
+mod ee_recording;
 mod fan_out;
 mod invites;
 mod health;
@@ -152,6 +153,8 @@ pub struct AppState {
     pub pending_backup_lists: Mutex<HashMap<String, std::collections::VecDeque<PendingBackupListTx>>>,
     pub pending_backup_restores:
         Mutex<HashMap<String, std::collections::VecDeque<PendingBackupRestoreTx>>>,
+    /// Session-recording tap (EE). No-op unless EE_RECORD_TERMINALS is enabled.
+    pub recorder: ee_recording::Recorder,
 }
 
 /// Grace window between an agent's WS read-loop exiting and the
@@ -448,6 +451,7 @@ async fn main() {
         scheduled_apt_runs: Mutex::new(HashSet::new()),
         pending_backup_lists: Mutex::new(HashMap::new()),
         pending_backup_restores: Mutex::new(HashMap::new()),
+        recorder: ee_recording::Recorder::new(),
     });
 
     update_windows::spawn_scheduler(state.clone());
@@ -1221,6 +1225,10 @@ async fn handle_agent_socket(socket: WebSocket, state: Arc<AppState>, token: Str
                             .await;
                         }
 
+                        // Recording tap: mirror terminal OUTPUT (agent→user).
+                        if let Message::TerminalData { session_id, data } = &other {
+                            state.recorder.frame(session_id, "o", data).await;
+                        }
                         let ui_msg = UiMessage::AgentMessage {
                             agent_id: agent_id.clone(),
                             message: other,
@@ -1379,6 +1387,10 @@ async fn handle_ui_socket(
 
     let allowed_agents = ee_fetch_allowed_agents(&login).await;
 
+    // Terminal sessions this client opened, so recordings are stopped if the
+    // socket drops without an explicit StopTerminalRequest.
+    let mut rec_sessions: std::collections::HashSet<String> = std::collections::HashSet::new();
+
     {
         let map = state.agents.lock().await;
         let agents: Vec<String> = map.keys().cloned().collect();
@@ -1525,6 +1537,21 @@ async fn handle_ui_socket(
                             continue;
                         }
                     }
+                    // Recording tap: terminal session lifecycle + INPUT (user→agent).
+                    match &message {
+                        Message::StartTerminalRequest { session_id } => {
+                            state.recorder.start(session_id, &agent_id, &login, "host").await;
+                            rec_sessions.insert(session_id.clone());
+                        }
+                        Message::TerminalData { session_id, data } => {
+                            state.recorder.frame(session_id, "i", data).await;
+                        }
+                        Message::StopTerminalRequest { session_id } => {
+                            state.recorder.stop(session_id).await;
+                            rec_sessions.remove(session_id);
+                        }
+                        _ => {}
+                    }
                     if let Some(entry) = state.agents.lock().await.get(&agent_id) {
                         let _ = entry.tx.send(message);
                     }
@@ -1536,6 +1563,10 @@ async fn handle_ui_socket(
 
     send_task.abort();
     state.ui_clients.lock().await.remove(&client_id);
+    // Close any recordings still open for this client (abrupt disconnect).
+    for sid in rec_sessions {
+        state.recorder.stop(&sid).await;
+    }
     tracing::info!(client_id, "ui client disconnected");
 }
 
