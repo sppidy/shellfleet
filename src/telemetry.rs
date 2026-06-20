@@ -40,6 +40,16 @@ pub fn telemetry_enabled(env_value: Option<&str>, toggle_enabled: bool) -> bool 
     toggle_enabled
 }
 
+/// Resolve the collector URL, treating an empty `TELEMETRY_URL` as unset.
+/// docker-compose passes `TELEMETRY_URL=${TELEMETRY_URL:-}`, which sets the var
+/// to "" rather than leaving it unset — a bare unwrap_or_else would then POST to
+/// an empty URL and silently fail.
+fn resolve_telemetry_url(env_value: Option<String>) -> String {
+    env_value
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| DEFAULT_TELEMETRY_URL.into())
+}
+
 fn env_forced_off() -> bool {
     std::env::var("SHELLFLEET_TELEMETRY")
         .ok()
@@ -110,8 +120,7 @@ pub fn spawn_reporter(state: Arc<AppState>) {
                     );
                     announced = true;
                 }
-                let url = std::env::var("TELEMETRY_URL")
-                    .unwrap_or_else(|_| DEFAULT_TELEMETRY_URL.into());
+                let url = resolve_telemetry_url(std::env::var("TELEMETRY_URL").ok());
                 match reqwest::Client::new()
                     .post(&url)
                     .json(&report)
@@ -174,6 +183,18 @@ mod tests {
         // Toggle off (admin) disables even with env unset/on.
         assert!(!telemetry_enabled(None, false));
         assert!(!telemetry_enabled(Some("on"), false));
+    }
+
+    #[test]
+    fn empty_telemetry_url_falls_back_to_default() {
+        // Unset and empty (the docker-compose `:-` default) both use the default.
+        assert_eq!(resolve_telemetry_url(None), DEFAULT_TELEMETRY_URL);
+        assert_eq!(resolve_telemetry_url(Some(String::new())), DEFAULT_TELEMETRY_URL);
+        // A real override is honoured.
+        assert_eq!(
+            resolve_telemetry_url(Some("https://t.example.com/v1/telemetry".into())),
+            "https://t.example.com/v1/telemetry"
+        );
     }
 
     #[test]
