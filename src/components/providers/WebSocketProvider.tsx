@@ -2,6 +2,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { AgentMessagePayload, UiMessage } from '@/lib/types';
+import { reconnectDelay } from '@/lib/backoff';
 import { useSession } from './SessionProvider';
 import { useUi } from './UiProvider';
 
@@ -128,8 +129,7 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
         if (stoppedRef.current) return;
         // Exponential backoff capped at 15s. The provider auto-reconnects so
         // momentary network blips don't leave the dashboard stuck.
-        const attempt = Math.min(reconnectAttempt.current, 5);
-        const delay = Math.min(1000 * 2 ** attempt, 15000);
+        const delay = reconnectDelay(reconnectAttempt.current);
         reconnectAttempt.current += 1;
         reconnectTimer.current = setTimeout(connect, delay);
       };
