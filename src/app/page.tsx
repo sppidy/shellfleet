@@ -28,6 +28,8 @@ import Backups from '@/components/Backups';
 import AgentLabels from '@/components/AgentLabels';
 import CommandPalette from '@/components/CommandPalette';
 import AiAnalysis from '@/components/AiAnalysis';
+import EeUpsell from '@/components/EeUpsell';
+import { EE_TAB_FEATURE, hasFeature, type LicenseStatus } from '@/lib/eeFeatures';
 import LicenseBanner from '@/components/LicenseBanner';
 import { Loader2Icon, MenuIcon, XIcon } from 'lucide-react';
 
@@ -154,6 +156,9 @@ function HomeBody() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [backupsEnabled, setBackupsEnabled] = useState(false);
   const [eeActive, setEeActive] = useState(false);
+  // Features the EE license advertises (empty when EE is down or unhealthy).
+  // Drives which EE surfaces are enabled vs shown disabled with an upsell.
+  const [eeFeatures, setEeFeatures] = useState<string[]>([]);
 
   useEffect(() => {
     const cancelled = false;
@@ -167,8 +172,14 @@ function HomeBody() {
         /* ignore */
       }
       try {
-        const res = await apiFetch('/api/ee/rbac/roles');
-        if (!cancelled && res.ok) setEeActive(true);
+        // license/status is ungated — it's both the "is EE up?" probe and the
+        // source of the advertised feature set.
+        const res = await apiFetch('/api/ee/license/status');
+        if (!cancelled && res.ok) {
+          const data: LicenseStatus = await res.json();
+          setEeActive(true);
+          setEeFeatures(Array.isArray(data.features) ? data.features : []);
+        }
       } catch {
         /* ignore */
       }
@@ -334,9 +345,14 @@ function HomeBody() {
     // systemd-driven surfaces: apt update window + journalctl
     // streaming. K8s-only Pod agents skip these.
     if ((t.id === 'updates' || t.id === 'journal') && !systemdAvailable) return false;
-    if (t.id === 'ai' && !eeActive) return false;
+    // EE-gated tabs: hidden entirely when EE is down; when EE is up but the
+    // feature isn't licensed they stay visible but locked (disabled + upsell).
+    if (EE_TAB_FEATURE[t.id] && !eeActive) return false;
     return true;
-  });
+  }).map((t) => ({
+    ...t,
+    locked: !!EE_TAB_FEATURE[t.id] && !hasFeature(eeFeatures, EE_TAB_FEATURE[t.id].feature),
+  }));
 
   // Breadcrumb
   let crumbs: string[];
@@ -607,11 +623,12 @@ function HomeBody() {
                   <button
                     key={t.id}
                     type="button"
-                    className={`tab ${activeTab === t.id ? 'active' : ''}`}
+                    className={`tab ${activeTab === t.id ? 'active' : ''} ${t.locked ? 'tab-locked' : ''}`}
                     onClick={() => setActiveTab(t.id)}
+                    title={t.locked ? 'Not included in your EE license' : undefined}
                   >
                     <span className="num">{String(i + 1).padStart(2, '0')}</span>
-                    <span>{t.label}</span>
+                    <span>{t.label}{t.locked ? ' 🔒' : ''}</span>
                   </button>
                 ))}
               </div>
@@ -674,7 +691,11 @@ function HomeBody() {
               ) : activeTab === 'backups' && backupsEnabled ? (
                 <Backups agentId={selectedAgent} />
               ) : activeTab === 'ai' ? (
-                <AiAnalysis agentId={selectedAgent} />
+                hasFeature(eeFeatures, EE_TAB_FEATURE.ai.feature) ? (
+                  <AiAnalysis agentId={selectedAgent} />
+                ) : (
+                  <EeUpsell feature={EE_TAB_FEATURE.ai.feature} label={EE_TAB_FEATURE.ai.label} />
+                )
               ) : (
                 <ConfigEditor agentId={selectedAgent} />
               )}

@@ -445,6 +445,9 @@ body {
 }
 .tab:hover { color: var(--fg); }
 .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+/* EE feature reachable but not licensed: visible but de-emphasised. */
+.tab-locked { opacity: 0.5; }
+.tab-locked.active { border-bottom-color: var(--warn); color: var(--warn); }
 .tab .num { color: var(--fg-3); font-size: 10.5px; }
 .tab.active .num { color: var(--accent-2); }
 .tab .badge {

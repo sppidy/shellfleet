@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { apiFetch } from '@/lib/api';
 import { useSession } from '@/components/providers/SessionProvider';
+import { hasFeature } from '@/lib/eeFeatures';
 import { Loader2Icon } from 'lucide-react';
 
 interface UserRow {
@@ -38,6 +39,7 @@ export default function AdminPage() {
 
   // EE RBAC state
   const [eeAvailable, setEeAvailable] = useState(false);
+  const [eeFeatures, setEeFeatures] = useState<string[]>([]);
 
   // Invite state
   const [invites, setInvites] = useState<{ code: string; role: string; created_by: string; expires_at: number; used_by: string | null }[]>([]);
@@ -79,8 +81,14 @@ export default function AdminPage() {
 
   const checkEe = useCallback(async () => {
     try {
-      const res = await apiFetch('/api/ee/acl/actions');
-      if (res.ok) setEeAvailable(true);
+      // license/status is ungated (unlike acl/actions, which is now
+      // feature-gated) — use it as the EE-up probe AND the feature source.
+      const res = await apiFetch('/api/ee/license/status');
+      if (res.ok) {
+        const data = await res.json();
+        setEeAvailable(true);
+        setEeFeatures(Array.isArray(data.features) ? data.features : []);
+      }
     } catch { /* ignore */ }
   }, []);
 
@@ -403,8 +411,8 @@ export default function AdminPage() {
               </div>
             </div>}
 
-            {/* EE: Orgs */}
-            {eeAvailable && (<>
+            {/* EE: Orgs — gated by the `tenancy` license feature */}
+            {eeAvailable && (hasFeature(eeFeatures, 'tenancy') ? (<>
 
               {/* TENANCY */}
               <div className="panel" style={{ marginTop: 12 }}>
@@ -471,7 +479,22 @@ export default function AdminPage() {
                   </div>
                 </div>
               </div>
-            </>)}
+            </>) : (
+              <div className="panel" style={{ marginTop: 12, borderColor: 'var(--warn-bd)' }}>
+                <div className="panel-head">
+                  <div className="panel-title">
+                    <span className="ico">🔒</span> ORGANIZATIONS
+                    <span className="meta" style={{ color: 'var(--warn)' }}>not in your license</span>
+                  </div>
+                </div>
+                <div className="panel-body" style={{ padding: 12 }}>
+                  <div className="mono muted" style={{ fontSize: 12 }}>
+                    Multi-tenant organizations (<span style={{ color: 'var(--fg-2)' }}>tenancy</span>) aren&apos;t
+                    included in your EE license. Add the feature and re-issue your license key to enable.
+                  </div>
+                </div>
+              </div>
+            ))}
           </div>
         </div>
       </main>
