@@ -131,7 +131,7 @@ jobs:
           ls -la target/debian/
 
       - name: Upload .deb artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: shellfleet-agent-deb-${{ matrix.flavor }}-${{ matrix.arch }}
           path: target/debian/*.deb
