@@ -1,9 +1,10 @@
 version: 2
+# Cargo deps are intentionally NOT managed here. This crate is a member of a
+# cargo workspace whose Cargo.lock and sibling path-dependencies live in the
+# superproject (sppidy/shellfleet). Standalone, dependabot's cargo updater
+# can't resolve the workspace, so it errored on every run ("update_files").
+# Cargo updates are handled at the superproject; only github-actions is kept.
 updates:
-  - package-ecosystem: cargo
-    directory: /
-    schedule:
-      interval: weekly
   - package-ecosystem: github-actions
     directory: /
     schedule:
