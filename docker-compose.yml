@@ -60,10 +60,7 @@ services:
       # Anonymous usage telemetry (default ON): reports only counts,
       # version, CE/EE edition, and enabled-feature names — no PII. Set
       # SHELLFLEET_TELEMETRY=off to disable (or toggle on the admin page).
-      # The collector endpoint is hardcoded (DEFAULT_TELEMETRY_URL); to point
-      # a self-hosted fork at your own collector, set TELEMETRY_URL in the
-      # environment (intentionally NOT passed through here, so the default
-      # isn't shadowed by an empty value).
+      # The collector endpoint is hardcoded in the server; there is no URL knob.
       - SHELLFLEET_TELEMETRY=${SHELLFLEET_TELEMETRY:-on}
     volumes:
       - server_data:/data
