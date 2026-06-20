@@ -203,14 +203,30 @@ async fn main() {
     };
     request.headers_mut().insert(AUTHORIZATION, bearer);
 
-    let (ws_stream, _) = match connect_async(request).await {
-        Ok(res) => res,
-        Err(e) => {
+    // Cap the connect. `connect_async` has no built-in timeout, so a hung
+    // TCP/TLS connect (server mid-restart that accepts TCP but never finishes
+    // the WS handshake, a half-open Cloudflare/Tailscale path, etc.) used to
+    // block here FOREVER: the process stayed `active` but permanently offline,
+    // never retrying, because the only retry path is exit -> systemd restart
+    // and a hung await never reaches the error arm. The idle watchdog can't
+    // help either — it only runs once a connection is established. Time the
+    // connect out so a stuck attempt fails fast and systemd reconnects us.
+    let connect_timeout = Duration::from_secs(30);
+    let (ws_stream, _) = match tokio::time::timeout(connect_timeout, connect_async(request)).await {
+        Ok(Ok(res)) => res,
+        Ok(Err(e)) => {
             eprintln!("Failed to connect to server: {}. Your token might have been revoked.", e);
             std::process::exit(1);
         }
+        Err(_) => {
+            eprintln!(
+                "Connect timed out after {}s; exiting so systemd reconnects.",
+                connect_timeout.as_secs()
+            );
+            std::process::exit(1);
+        }
     };
-    
+
     println!("WebSocket handshake completed.");
 
     let (mut write, mut read) = ws_stream.split();
