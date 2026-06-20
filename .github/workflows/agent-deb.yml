@@ -148,6 +148,12 @@ jobs:
     # Write needed to commit/push the gh-pages apt repo.
     permissions:
       contents: write
+    # GPG secrets exposed at JOB level: `secrets` can't be read from an `if:`
+    # (it invalidates the whole workflow), but a step `if:` CAN read job `env`,
+    # so the optional signing step gates on env.APT_GPG_PRIVATE_KEY below.
+    env:
+      APT_GPG_PRIVATE_KEY: ${{ secrets.APT_GPG_PRIVATE_KEY }}
+      APT_GPG_PASSPHRASE: ${{ secrets.APT_GPG_PASSPHRASE }}
     needs: build
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
@@ -277,13 +283,12 @@ jobs:
           )
 
       - name: Sign Release file (optional)
-        # NOTE: a step-level `if:` cannot read this step's own `env:` block,
-        # so the previous `env.APT_GPG_PRIVATE_KEY != ''` was ALWAYS false and
-        # the repo shipped unsigned. The `secrets` context IS allowed here.
-        if: ${{ secrets.APT_GPG_PRIVATE_KEY != '' }}
-        env:
-          APT_GPG_PRIVATE_KEY: ${{ secrets.APT_GPG_PRIVATE_KEY }}
-          APT_GPG_PASSPHRASE: ${{ secrets.APT_GPG_PASSPHRASE }}
+        # `secrets` is NOT allowed in an `if:` — referencing it there makes the
+        # whole workflow invalid (zero jobs run). The key is mapped to job-level
+        # `env` above, and a step `if:` CAN read job env, so gate on that. The
+        # earlier `env.APT_GPG_PRIVATE_KEY` referencing this step's OWN env was
+        # also wrong (always false → repo shipped unsigned); job env fixes both.
+        if: env.APT_GPG_PRIVATE_KEY != ''
         shell: bash
         run: |
           set -euo pipefail
