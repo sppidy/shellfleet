@@ -741,6 +741,28 @@ pub fn fire_agent_connect(db: SqlitePool, agent_id: String, at: i64) {
     );
 }
 
+/// `agent.still_offline` — a recurring reminder fired while an agent stays
+/// gone past its initial `agent.disconnect`. A one-shot disconnect webhook is
+/// easy to miss, so a stranded agent (e.g. one stuck failing to reconnect)
+/// would otherwise sit silently offline for days. Re-fires on an interval
+/// (`STALE_AGENT_REALERT_SECS`) with how long it's been down. Routes via the
+/// same `DISCONNECT_*` env as the disconnect webhook.
+pub fn fire_agent_still_offline(db: SqlitePool, agent_id: String, down_secs: i64, at: i64) {
+    fire(
+        db,
+        "DISCONNECT_",
+        Event {
+            kind: "agent.still_offline",
+            headline: "shellfleet agent".into(),
+            agent_id,
+            status: format!("still offline for {}m", down_secs / 60),
+            log: String::new(),
+            error: None,
+            at,
+        },
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

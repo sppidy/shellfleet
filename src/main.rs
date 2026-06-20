@@ -110,9 +110,11 @@ pub enum DisconnectState {
     /// Awaiting reconnect. The JoinHandle is the debounce task; abort
     /// it on a fresh register to suppress both webhooks.
     Pending(tokio::task::JoinHandle<()>),
-    /// Disconnect webhook has fired. The next register clears this and
-    /// posts the matching reconnect webhook.
-    Confirmed,
+    /// Disconnect webhook has fired and the agent is still gone. `since` is
+    /// the unix time it was confirmed offline; `last_alert` is the last time a
+    /// recurring `agent.still_offline` reminder fired (initially == `since`).
+    /// The next register clears this and posts the matching reconnect webhook.
+    Confirmed { since: i64, last_alert: i64 },
 }
 
 pub struct AppState {
@@ -165,6 +167,49 @@ pub struct AppState {
 /// inside the grace and stays silent. Not an operator knob — it
 /// tracks those two underlying timeouts.
 const DISCONNECT_GRACE: std::time::Duration = std::time::Duration::from_secs(50);
+
+/// Re-fires an `agent.still_offline` webhook on an interval while an agent
+/// stays confirmed-offline, so a silently-stranded agent (e.g. one stuck
+/// failing to reconnect) is surfaced instead of sitting unnoticed for days —
+/// the one-shot `agent.disconnect` is easy to miss. Interval is
+/// `STALE_AGENT_REALERT_SECS` (default 3600; 0 disables). Routes via the same
+/// `DISCONNECT_*` webhook sinks.
+fn spawn_stale_agent_alerter(state: std::sync::Arc<AppState>) {
+    let realert_secs: i64 = std::env::var("STALE_AGENT_REALERT_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(3600);
+    if realert_secs <= 0 {
+        tracing::info!("stale-agent alerter disabled (STALE_AGENT_REALERT_SECS=0)");
+        return;
+    }
+    tracing::info!(realert_secs, "stale-agent alerter enabled");
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(std::time::Duration::from_secs(60));
+        tick.tick().await; // skip the immediate first tick
+        loop {
+            tick.tick().await;
+            let now = now_unix();
+            // Collect the due agents under the lock; fire the webhooks outside it.
+            let mut due: Vec<(String, i64)> = Vec::new();
+            {
+                let mut states = state.disconnect_states.lock().await;
+                for (id, st) in states.iter_mut() {
+                    if let DisconnectState::Confirmed { since, last_alert } = st {
+                        if now - *last_alert >= realert_secs {
+                            *last_alert = now;
+                            due.push((id.clone(), *since));
+                        }
+                    }
+                }
+            }
+            for (id, since) in due {
+                tracing::warn!(agent_id = %id, down_secs = now - since, "agent still offline — re-alerting");
+                webhook::fire_agent_still_offline(state.db.clone(), id, now - since, now);
+            }
+        }
+    });
+}
 
 async fn broadcast_agent_list(state: &AppState) {
     let (agents, capabilities) = {
@@ -407,6 +452,7 @@ async fn main() {
 
     update_windows::spawn_scheduler(state.clone());
     telemetry::spawn_reporter(state.clone());
+    spawn_stale_agent_alerter(state.clone());
     if backups_enabled() {
         backups::spawn_scheduler(state.clone());
         tracing::info!("backups: enabled (BACKUPS_ENABLED is set)");
@@ -801,7 +847,7 @@ async fn handle_agent_socket(socket: WebSocket, state: Arc<AppState>, token: Str
                                 "agent reconnect within grace window — disconnect webhook suppressed"
                             );
                         }
-                        Some(DisconnectState::Confirmed) => {
+                        Some(DisconnectState::Confirmed { .. }) => {
                             tracing::info!(
                                 agent_id = %id,
                                 "agent connected after confirmed disconnect — firing connect webhook"
@@ -1224,7 +1270,11 @@ async fn handle_agent_socket(socket: WebSocket, state: Arc<AppState>, token: Str
             if !still_pending {
                 return;
             }
-            states.insert(id_for_task.clone(), DisconnectState::Confirmed);
+            let now_ts = now_unix();
+            states.insert(
+                id_for_task.clone(),
+                DisconnectState::Confirmed { since: now_ts, last_alert: now_ts },
+            );
             drop(states);
             tracing::info!(
                 agent_id = %id_for_task,
