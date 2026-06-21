@@ -74,6 +74,7 @@ pub async fn middleware(
     //                               whitelist — that's admin-only.
     if path == "/me"
         || path.starts_with("/auth/mfa/")
+        || path.starts_with("/auth/passkey/")
         || path == "/device/request"
         || path == "/device/token"
     {

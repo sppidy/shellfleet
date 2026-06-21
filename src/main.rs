@@ -30,6 +30,7 @@ mod health;
 mod labels;
 mod metrics;
 mod mfa;
+mod passkey_mfa;
 mod notifications;
 mod probe_library;
 mod rbac;
@@ -478,6 +479,7 @@ async fn main() {
     let mut api_routes = api_routes
         .nest("/probe-library", probe_library::routes())
         .nest("/auth/mfa", mfa::routes())
+        .nest("/auth/passkey", passkey_mfa::routes())
         .nest("/users", users::routes())
         .nest("/invites", invites::routes())
         .nest("/metrics", metrics::routes())
