@@ -1537,6 +1537,43 @@ async fn handle_ui_socket(
                             continue;
                         }
                     }
+                    // EE command-approval gate (dual control). A discrete action
+                    // that matches an approval rule is HELD: we stash the
+                    // serialized message in EE and tell the UI it's pending — a
+                    // second admin approves in the Approvals tab, then EE calls
+                    // back to /internal/execute-approved to run it. Interactive
+                    // streams are never held (see ee_approval_action_for_message).
+                    if ee::ee_active() && !auth::is_dev_mode() {
+                        if let Some(action) = ee_approval_action_for_message(&message) {
+                            let payload = serde_json::to_string(&message).unwrap_or_default();
+                            match ee_check_approval(&login, action, &agent_id, &payload).await {
+                                Ok(None) => { /* no rule matched — run it now */ }
+                                Ok(Some(req_id)) => {
+                                    crate::db::record_audit(
+                                        &state.db, now_unix(), Some(&login), Some(&agent_id),
+                                        "ws.approval.held", true,
+                                        Some(&format!("action={action} request={req_id}")),
+                                    ).await;
+                                    let _ = tx.send(UiMessage::PermissionDenied {
+                                        agent_id: agent_id.clone(),
+                                        variant_type: "approval_pending".to_string(),
+                                        reason: format!(
+                                            "held for approval — request #{req_id}; a second admin must approve it in the Approvals tab"
+                                        ),
+                                    });
+                                    continue;
+                                }
+                                Err(()) => {
+                                    let _ = tx.send(UiMessage::PermissionDenied {
+                                        agent_id: agent_id.clone(),
+                                        variant_type: "approval_unavailable".to_string(),
+                                        reason: "approval system unavailable — action blocked (fail-closed)".to_string(),
+                                    });
+                                    continue;
+                                }
+                            }
+                        }
+                    }
                     // Recording tap: terminal session lifecycle + INPUT (user→agent).
                     match &message {
                         Message::StartTerminalRequest { session_id } => {
@@ -1651,6 +1688,74 @@ fn ee_action_for_message(msg: &Message) -> Option<&'static str> {
         DockerNetworkRemoveRequest { .. } => Some("network:Remove"),
         DockerVolumeRemoveRequest { .. } => Some("volume:Remove"),
         _ => None,
+    }
+}
+
+/// Which messages can be *held for approval*. This is the discrete subset of
+/// `ee_action_for_message`: one-shot mutating actions we can stash and replay
+/// after a second admin signs off. Interactive streams (terminal/exec) and
+/// reads (logs/list/read-config) are excluded — you can't hold a live stream,
+/// and reads aren't worth gating. Returns the action string, or None to skip.
+fn ee_approval_action_for_message(msg: &Message) -> Option<&'static str> {
+    use Message::*;
+    match msg {
+        // Interactive or read-only — never gated.
+        StartTerminalRequest { .. }
+        | TerminalData { .. }
+        | TerminalResize { .. }
+        | StopTerminalRequest { .. }
+        | DockerExecStartRequest { .. }
+        | K8sExecRequest { .. }
+        | DockerLogsRequest { .. }
+        | ListServicesRequest
+        | ReadConfigRequest { .. } => None,
+        // Everything else with a mapped action is a discrete, holdable action.
+        _ => ee_action_for_message(msg),
+    }
+}
+
+/// Ask EE whether this discrete action needs approval, passing the serialized
+/// message as the payload to replay on approval. Returns:
+///   Ok(None)      — no rule matched; proceed and run the command now.
+///   Ok(Some(id))  — a pending approval request was created; HOLD the command.
+///   Err(())       — EE configured but unreachable / errored; caller fails closed.
+async fn ee_check_approval(
+    login: &str,
+    action: &str,
+    agent_id: &str,
+    payload: &str,
+) -> Result<Option<i64>, ()> {
+    // No EE configured = no approval system = proceed.
+    let Some(ee_url) = ee::ee_sidecar_url() else { return Ok(None) };
+    let secret = std::env::var("EE_INTERNAL_SECRET").unwrap_or_default();
+    let url = format!("{}/api/ee/approvals/check", ee_url.trim_end_matches('/'));
+    let body = serde_json::json!({
+        "login": login,
+        "action": action,
+        "resource": agent_id,
+        "agent_id": agent_id,
+        "payload": payload,
+    });
+    match reqwest::Client::new()
+        .post(&url)
+        .bearer_auth(&secret)
+        .json(&body)
+        .timeout(std::time::Duration::from_secs(3))
+        .send()
+        .await
+    {
+        Ok(resp) if resp.status().is_success() => {
+            let data: serde_json::Value = resp.json().await.unwrap_or_default();
+            if data["requires_approval"].as_bool().unwrap_or(false) {
+                Ok(Some(data["request_id"].as_i64().unwrap_or(0)))
+            } else {
+                Ok(None)
+            }
+        }
+        _ => {
+            tracing::warn!(%login, %action, "EE approval check failed; holding (fail closed)");
+            Err(())
+        }
     }
 }
 

@@ -50,6 +50,42 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/seat-limit", post(seat_limit_handler))
         .route("/agents", get(agents_handler))
         .route("/send-to-agent", post(send_to_agent_handler))
+        .route("/execute-approved", post(execute_approved_handler))
+}
+
+#[derive(Deserialize)]
+struct ExecuteApprovedRequest {
+    agent_id: String,
+    /// The original agent Message, serialized to JSON, that EE stashed when the
+    /// command was held for approval. We deserialize and deliver it verbatim.
+    payload: String,
+}
+
+/// Run a command that an EE approval workflow just approved. When CE held a
+/// discrete action for approval it serialized the agent Message into the
+/// approval request's `payload`; on approval EE calls back here to actually
+/// execute it. Internal-secret gated. The original ACL/RBAC checks already
+/// passed at request time — approval is the *additional* dual-control gate.
+async fn execute_approved_handler(
+    headers: HeaderMap,
+    State(state): State<Arc<AppState>>,
+    axum::Json(body): axum::Json<ExecuteApprovedRequest>,
+) -> impl IntoResponse {
+    if !verify_internal_auth(&headers) {
+        return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
+    }
+    let message: shared::Message = match serde_json::from_str(&body.payload) {
+        Ok(m) => m,
+        Err(e) => {
+            return (StatusCode::BAD_REQUEST, format!("bad approved payload: {e}")).into_response()
+        }
+    };
+    let agents = state.agents.lock().await;
+    match agents.get(&body.agent_id) {
+        Some(entry) if entry.tx.send(message).is_ok() => (StatusCode::OK, "executed").into_response(),
+        Some(_) => (StatusCode::BAD_GATEWAY, "agent send channel closed").into_response(),
+        None => (StatusCode::NOT_FOUND, "agent not connected").into_response(),
+    }
 }
 
 #[derive(Deserialize)]
