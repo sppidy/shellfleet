@@ -49,6 +49,35 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/auth/resolve", post(auth_resolve_handler))
         .route("/seat-limit", post(seat_limit_handler))
         .route("/agents", get(agents_handler))
+        .route("/send-to-agent", post(send_to_agent_handler))
+}
+
+#[derive(Deserialize)]
+struct SendToAgentRequest {
+    agent_id: String,
+    message: shared::Message,
+}
+
+/// Forward an EE-originated message (e.g. a DriftSnapshotRequest from the drift
+/// scheduler/trigger) to a connected agent's WebSocket. EE has no direct agent
+/// link, so it round-trips through CE. 404 when the agent isn't connected so the
+/// caller can surface "agent offline".
+async fn send_to_agent_handler(
+    headers: HeaderMap,
+    State(state): State<Arc<AppState>>,
+    axum::Json(body): axum::Json<SendToAgentRequest>,
+) -> impl IntoResponse {
+    if !verify_internal_auth(&headers) {
+        return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
+    }
+    let agents = state.agents.lock().await;
+    match agents.get(&body.agent_id) {
+        Some(entry) if entry.tx.send(body.message).is_ok() => {
+            (StatusCode::OK, "sent").into_response()
+        }
+        Some(_) => (StatusCode::BAD_GATEWAY, "agent send channel closed").into_response(),
+        None => (StatusCode::NOT_FOUND, "agent not connected").into_response(),
+    }
 }
 
 #[derive(Deserialize)]
