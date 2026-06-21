@@ -86,8 +86,8 @@ Top-level files:
 | File                       | Purpose                                                            |
 |----------------------------|--------------------------------------------------------------------|
 | `docker-compose.yml`       | server + web stack; agent stanza is commented for local-only tests |
-| `Dockerfile.server`        | Multi-stage Rust build → distroless runtime                        |
-| `Dockerfile.web`           | Next.js standalone build → node:slim runtime                       |
+| `Dockerfile.server`        | Multi-stage Rust build → `debian:bookworm-slim` runtime            |
+| `Dockerfile.web`           | Next.js standalone build → `node:20-alpine` runtime               |
 | `Dockerfile.agent`         | Local-test agent image (referenced by the commented compose stanza)|
 | `.github/workflows/`       | `agent-deb.yml` — multi-arch (amd64 + arm64) .deb build + apt repo |
 | `metrics.example.yaml`     | Drop-in starter config for the metrics plugin                       |
@@ -382,14 +382,18 @@ CE remains fully functional without EE; EE without CE is meaningless.
 
 ## Idle cost
 
-Continuous loops on the agent — full inventory:
+Background work on the agent — full inventory:
 
-1. WebSocket heartbeat — 25 s ping (well under 1 ms each).
+1. WebSocket keepalive — responds to the server's 25 s ping with a pong
+   (well under 1 ms each). A 15 s idle watchdog and a 30–300 s capability
+   re-probe round it out.
 2. Health probes the operator configured. Zero by default.
-3. Apt-update window scheduler — 60 s tick that does DateTime math; only
-   spawns `apt-get upgrade` when a configured cron expression matches.
-   Defaults to nothing.
-4. Backup scheduler — same shape, gated behind `BACKUPS_ENABLED`.
+
+The apt-update window scheduler (60 s tick that does DateTime math; only
+spawns `apt-get upgrade` when a configured cron expression matches; defaults
+to nothing) and the backup scheduler (same shape, gated behind
+`BACKUPS_ENABLED`) run on the **server**, not the agent — the agent only
+executes an upgrade or backup on demand when the server tells it to.
 
 That's it. No continuous polling for stats, container lists, image lists,
 network/volume/stack lists, or prune previews. **Metrics collection is
