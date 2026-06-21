@@ -339,28 +339,44 @@ rollout.
   top of Cloudflare's edge rate limiter — see
   [Cloudflare](https://shellfleet.sppidy.in/docs.html#cloudflare).
 
-### Roadmap — Enterprise Edition
+### Enterprise Edition
 
 The CE feature set is the **safety floor**: every operator gets 2FA,
 basic RBAC, and a short local audit log. The Enterprise Edition ships
 as a separate sidecar binary that registers with CE over an extension
-API and adds:
+API. CE proxies `/api/ee/*` to the sidecar with a verified
+login/role header; the sidecar is never publicly reachable on its own.
+Every feature is **license-gated per route** (a `402` when the licence
+doesn't include it) and surfaced as its own dashboard page — disabled
+with an upsell, rather than hidden, when not licensed. Shipped today:
 
-- **SSO**: SAML, OIDC, SCIM provisioning.
-- **Custom RBAC** with per-resource permissions and group-based
-  assignment.
-- **Multi-tenant organizations** with isolated agent pools.
-- **Secrets-manager integration** (Vault, SOPS, AWS Secrets Manager).
-- **Long-retention audit log** with SIEM export.
-- **Multi-Prometheus federation** + SaaS observability vendors
-  (Datadog, New Relic, Grafana Cloud) on top of CE's single-Prometheus
-  metrics plugin.
+- **SSO**: OIDC login (Okta, Entra ID, Google Workspace, Auth0,
+  Keycloak, …) and SCIM 2.0 provisioning. WebAuthn / passkeys (FIDO2)
+  for step-up auth.
+- **Access control**: Tailscale-style ACL policies with IP conditions,
+  custom RBAC with per-resource permissions, IP allowlisting,
+  break-glass temporary elevation, and policy version history with
+  rollback.
+- **Multi-tenant organizations** with isolated agent pools and
+  tag-based scoping.
+- **Operations**: runbooks (multi-step ops with approval gates),
+  approval workflows (multi-admin sign-off), and session recording
+  (encrypted at rest, admin-only playback).
+- **Drift detection**: per-node package/service/config drift alerts,
+  **cross-node comparison** matrices, and scheduled snapshot rules.
+- **Audit & observability**: long-retention audit log with SIEM
+  webhook streaming; multi-source metrics across Prometheus, Datadog,
+  New Relic, and Grafana Cloud on top of CE's single-Prometheus plugin.
+- **SLA dashboard** + uptime tracking and **cost attribution** with CSV
+  chargeback export.
+- **Secrets-manager integration** (Vault) and an **API-key REST API**.
 - **AI log analysis.** "Summarize the last hour of journal entries on
   host-a", "what's anomalous in this output?", "explain this error".
   Configurable via OpenAI-compatible env vars (`EE_AI_API_URL`,
   `EE_AI_API_KEY`, `EE_AI_MODEL`) — works with OpenAI, Ollama, vLLM,
   OpenRouter, or any drop-in.
-- **Support SLA** + a managed hosted control plane.
+
+Still roadmap: a managed hosted control plane and a support SLA.
 
 CE remains fully functional without EE; EE without CE is meaningless.
 
