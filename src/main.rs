@@ -17,6 +17,7 @@ mod backup;
 mod config;
 mod deploy;
 mod docker;
+mod exec;
 mod health;
 mod journal;
 mod journal_stream;
@@ -240,7 +241,9 @@ async fn main() {
     // hides tabs that aren't represented here, so a host with no docker
     // never has a Docker tab cluttering its view. K8s detection lands
     // in v1 with the kube-rs feature; for now we never advertise it.
-    let mut capabilities: Vec<String> = Vec::with_capacity(4);
+    let mut capabilities: Vec<String> = Vec::with_capacity(5);
+    // Every agent can run one-shot commands for runbooks (sh -c).
+    capabilities.push("exec".into());
     if systemd::systemd_available().await {
         capabilities.push("systemd".into());
     }
@@ -419,6 +422,21 @@ async fn main() {
                                 let tx_clone = tx.clone();
                                 tokio::spawn(async move {
                                     let _ = tx_clone.send(stats::snapshot().await);
+                                });
+                            }
+                            Message::RunCommandRequest { request_id, command, timeout_secs } => {
+                                // One-shot exec for EE runbooks (gated upstream
+                                // by the runbook allow-list + CE ACL).
+                                let tx_clone = tx.clone();
+                                tokio::spawn(async move {
+                                    let r = exec::run(&command, timeout_secs).await;
+                                    let _ = tx_clone.send(Message::RunCommandResponse {
+                                        request_id,
+                                        exit_code: r.exit_code,
+                                        stdout: r.stdout,
+                                        stderr: r.stderr,
+                                        error: r.error,
+                                    });
                                 });
                             }
                             Message::DockerImageListRequest => {
