@@ -443,6 +443,13 @@ function HomeBody() {
 
         <div className="nav-section">ACCOUNT</div>
         <div className="nav-list">
+          {eeActive && (
+            <button type="button" className={`nav-item ${hasFeature(eeFeatures, 'webauthn') ? '' : 'nav-locked'}`} onClick={() => router.push('/passkeys')} title={hasFeature(eeFeatures, 'webauthn') ? '' : 'Not included in your EE license'}>
+              <span className="ico">⚷</span>
+              <span>Passkeys</span>
+              {!hasFeature(eeFeatures, 'webauthn') && <span className="nav-badge" style={{ background: 'transparent' }}>🔒</span>}
+            </button>
+          )}
           <button type="button" className="nav-item" onClick={() => router.push('/security')}>
             <span className="ico">⌘</span>
             <span>Account &amp; 2FA</span>
@@ -495,6 +502,9 @@ function HomeBody() {
                 { path: '/cost', label: 'Cost', feat: 'cost', icon: '⊞' },
                 { path: '/sla', label: 'SLA & uptime', feat: 'sla', icon: '▲' },
                 { path: '/ip-allowlist', label: 'IP allow-list', feat: 'ip-allowlist', icon: '⊟' },
+                { path: '/audit', label: 'Audit log', feat: 'audit-long', icon: '≣' },
+                { path: '/metrics-ee', label: 'EE metrics', feat: 'metrics-multi', icon: '▤' },
+                { path: '/scim', label: 'SCIM', feat: 'scim', icon: '⇄' },
               ].map((n) => {
                 const locked = !hasFeature(eeFeatures, n.feat);
                 return (
