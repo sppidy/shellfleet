@@ -352,7 +352,7 @@ with an upsell, rather than hidden, when not licensed. Shipped today:
 
 - **SSO**: OIDC login (Okta, Entra ID, Google Workspace, Auth0,
   Keycloak, …) and SCIM 2.0 provisioning. WebAuthn / passkeys (FIDO2)
-  for step-up auth.
+  for **passwordless login** and as a second factor that bypasses TOTP.
 - **Access control**: Tailscale-style ACL policies with IP conditions,
   custom RBAC with per-resource permissions, IP allowlisting,
   break-glass temporary elevation, and policy version history with
