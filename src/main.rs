@@ -290,7 +290,10 @@ async fn main() {
         let mut current = initial_caps;
         loop {
             tokio::time::sleep(delay).await;
-            let mut fresh: Vec<String> = Vec::with_capacity(4);
+            let mut fresh: Vec<String> = Vec::with_capacity(5);
+            // Always present (one-shot exec for runbooks). Must mirror the
+            // initial capability list so the periodic refresh doesn't drop it.
+            fresh.push("exec".into());
             if systemd::systemd_available().await {
                 fresh.push("systemd".into());
             }
