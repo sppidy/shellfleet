@@ -62,6 +62,11 @@ services:
       # SHELLFLEET_TELEMETRY=off to disable (or toggle on the admin page).
       # The collector endpoint is hardcoded in the server; there is no URL knob.
       - SHELLFLEET_TELEMETRY=${SHELLFLEET_TELEMETRY:-on}
+      # EE session recording (off by default): when on AND the EE sidecar is
+      # active AND the license includes "recordings", CE mirrors every terminal
+      # session to EE for playback on the /recordings page. Best-effort — never
+      # blocks or breaks a live terminal.
+      - EE_RECORD_TERMINALS=${EE_RECORD_TERMINALS:-off}
     volumes:
       - server_data:/data
     healthcheck:

@@ -126,6 +126,7 @@ The `.env` on the docker host carries:
 | `COOKIE_SECURE`                                  | optional | `Secure` flag on auth + CSRF cookies. Default on; set `0/false/no/off` for plain-HTTP local dev |
 | `BACKUPS_ENABLED`                                | optional | `true` to mount `/api/backups/*` and run the backup scheduler                |
 | `SHELLFLEET_TELEMETRY`                           | optional | Anonymous usage telemetry (default on). `off` to disable (or use the admin toggle). The collector endpoint is hardcoded — there's no URL knob |
+| `EE_RECORD_TERMINALS`                            | optional | EE only. `on`/`true` mirrors every terminal session to the EE sidecar for playback on `/recordings` (needs EE active + the `recordings` license feature). Default off. Best-effort; never blocks a live terminal |
 | `WS_ALLOWED_ORIGINS`                             | optional | Extra origins allowed on `/ui/ws` (UI_URL is always allowed)                 |
 | `STALE_AGENT_REALERT_SECS`                       | optional | Re-fire an `agent.still_offline` webhook every N s while an agent stays offline (default 3600; `0` disables). Surfaces a silently-stranded agent that the one-shot `agent.disconnect` missed |
 | `UPDATE_WEBHOOK_URL` / `UPDATE_WEBHOOK_FORMAT`   | optional | Outbound webhook on `update_window.result`. Format: `json` (default) or `slack`|
