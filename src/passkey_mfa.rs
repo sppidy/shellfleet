@@ -32,9 +32,13 @@ use crate::{auth, ee, AppState};
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
+        // Second-factor (post-OAuth, pending-MFA) — bypass TOTP with a passkey.
         .route("/available", get(available_handler))
         .route("/begin", post(begin_handler))
         .route("/finish", post(finish_handler))
+        // Passwordless primary login (pre-auth) — discoverable passkey, no OAuth.
+        .route("/login/begin", post(login_begin_handler))
+        .route("/login/finish", post(login_finish_handler))
 }
 
 /// EE base url + internal secret, or None when EE isn't active.
@@ -165,6 +169,84 @@ async fn finish_handler(
     crate::db::record_audit(
         &state.db, crate::now_unix(), Some(&pending.sub), None,
         "auth.passkey.ok", true, None,
+    )
+    .await;
+    let cookie = auth::build_session_cookie(token);
+    (jar.add(cookie), Json(serde_json::json!({ "ok": true }))).into_response()
+}
+
+// --------------------------------------------------------------------------
+// Passwordless primary login (pre-auth). No session yet — the EE discoverable
+// ceremony identifies the user from the passkey and verifies the signature;
+// these routes are whitelisted in rbac::middleware and (being cookie-less) are
+// not CSRF-checked. On success we set the auth_token cookie from the EE-minted,
+// already-mfa-verified CE session JWT.
+// --------------------------------------------------------------------------
+
+/// Start a discoverable assertion (no user known yet). Returns the EE options
+/// for `navigator.credentials.get`.
+async fn login_begin_handler() -> impl IntoResponse {
+    let Some((url, secret)) = ee_ctx() else {
+        return (StatusCode::SERVICE_UNAVAILABLE, "passkeys require EE").into_response();
+    };
+    let endpoint = format!("{}/api/ee/webauthn/login/begin", url.trim_end_matches('/'));
+    match reqwest::Client::new()
+        .post(&endpoint)
+        .bearer_auth(&secret)
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await
+    {
+        Ok(resp) => {
+            let status = StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+            let body = resp.text().await.unwrap_or_default();
+            (status, [(header::CONTENT_TYPE, "application/json")], body).into_response()
+        }
+        Err(_) => (StatusCode::BAD_GATEWAY, "EE unreachable").into_response(),
+    }
+}
+
+/// Verify the discoverable assertion in EE and, on success, set the session
+/// cookie to the EE-minted JWT — but only after re-validating it is a real,
+/// mfa-verified CE token (defence-in-depth on the EE→CE trust boundary).
+async fn login_finish_handler(
+    jar: CookieJar,
+    State(state): State<Arc<AppState>>,
+    body: Bytes,
+) -> impl IntoResponse {
+    let Some((url, secret)) = ee_ctx() else {
+        return (StatusCode::SERVICE_UNAVAILABLE, "passkeys require EE").into_response();
+    };
+    let endpoint = format!("{}/api/ee/webauthn/login/finish", url.trim_end_matches('/'));
+    let resp = match reqwest::Client::new()
+        .post(&endpoint)
+        .bearer_auth(&secret)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(body.to_vec())
+        .timeout(std::time::Duration::from_secs(15))
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(_) => return (StatusCode::BAD_GATEWAY, "EE unreachable").into_response(),
+    };
+    if !resp.status().is_success() {
+        let code = StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::UNAUTHORIZED);
+        let msg = resp.text().await.unwrap_or_else(|_| "passkey login failed".into());
+        return (code, msg).into_response();
+    }
+
+    let data: serde_json::Value = resp.json().await.unwrap_or_default();
+    let token = data["token"].as_str().unwrap_or_default().to_string();
+    // The token was minted by CE's own /internal/auth/resolve; re-decode it and
+    // require mfa:true before trusting it as a session.
+    let claims = match auth::claims_from_token(&token) {
+        Some(c) if c.mfa => c,
+        _ => return (StatusCode::BAD_GATEWAY, "invalid session token from EE").into_response(),
+    };
+    crate::db::record_audit(
+        &state.db, crate::now_unix(), Some(&claims.sub), None,
+        "auth.passkey.login", true, None,
     )
     .await;
     let cookie = auth::build_session_cookie(token);
