@@ -153,7 +153,13 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
             dispatch(msg.payload.agent_id, msg.payload.message);
           } else if (msg.type === 'PermissionDenied') {
             const { variant_type, reason } = msg.payload;
-            toastRef.current('error', `${variant_type} denied: ${reason}`);
+            // approval_pending isn't a denial — the action is held awaiting a
+            // second admin's sign-off. Show it as info, not an error.
+            if (variant_type === 'approval_pending') {
+              toastRef.current('info', reason);
+            } else {
+              toastRef.current('error', `${variant_type} denied: ${reason}`);
+            }
           }
         } catch (e) {
           console.error('failed to parse WS message:', e);
