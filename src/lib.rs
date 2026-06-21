@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// v14: terminal variants gain `session_id` for multi-PTY per host.
 /// Empty string = the singleton container-exec session (DockerExec*).
-pub const PROTOCOL_VERSION: u32 = 16;
+pub const PROTOCOL_VERSION: u32 = 17;
 
 fn default_protocol_version() -> u32 {
     0
@@ -254,6 +254,27 @@ pub enum Message {
     K8sExecResponse {
         session_id: String,
         success: bool,
+        error: Option<String>,
+    },
+
+    /// Run a one-shot shell command on the agent and return its captured
+    /// output + exit code. Used by EE runbooks via CE `/internal/exec-command`.
+    /// The agent runs it under `sh -c`; *which* commands may run is gated by
+    /// the caller (EE's `SHELLFLEET_RUNBOOK_ALLOW` allow-list + the CE ACL),
+    /// not here. Introduced in protocol_version 17.
+    RunCommandRequest {
+        /// Correlates the response back to the waiting CE request.
+        request_id: String,
+        command: String,
+        #[serde(default = "default_exec_timeout")]
+        timeout_secs: u64,
+    },
+    RunCommandResponse {
+        request_id: String,
+        exit_code: i32,
+        stdout: String,
+        stderr: String,
+        /// Set when the command couldn't be run at all (spawn failed / timed out).
         error: Option<String>,
     },
 
@@ -1040,6 +1061,10 @@ pub struct SwarmServiceSpecSummary {
     pub networks: Vec<String>,
     pub constraints: Vec<String>,
     pub published_ports: Vec<String>,
+}
+
+fn default_exec_timeout() -> u64 {
+    60
 }
 
 fn default_tail() -> u32 {
