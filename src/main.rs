@@ -23,6 +23,7 @@ mod csrf;
 mod db;
 mod device_auth;
 mod ee;
+mod ip_allowlist;
 mod ee_recording;
 mod fan_out;
 mod invites;
@@ -160,6 +161,10 @@ pub struct AppState {
     /// `/internal/exec-command` inserts a waiter and awaits it; the agent WS
     /// receive loop resolves it when the matching `RunCommandResponse` lands.
     pub pending_exec: Mutex<HashMap<String, tokio::sync::oneshot::Sender<shared::Message>>>,
+    /// Cached global IP allowlist `(cidr, enabled)`, refreshed from EE every
+    /// 30s. Empty / all-disabled = no restriction. Enforced on dashboard paths
+    /// by `ip_allowlist::middleware`.
+    pub ip_allowlist: Mutex<Vec<(String, bool)>>,
 }
 
 /// Grace window between an agent's WS read-loop exiting and the
@@ -458,6 +463,7 @@ async fn main() {
         pending_backup_restores: Mutex::new(HashMap::new()),
         pending_exec: Mutex::new(HashMap::new()),
         recorder: ee_recording::Recorder::new(),
+        ip_allowlist: Mutex::new(Vec::new()),
     });
 
     update_windows::spawn_scheduler(state.clone());
@@ -548,6 +554,8 @@ async fn main() {
             "EE sidecar detected — mounting /internal routes (the /api/ee proxy is mounted inside the authenticated /api nest)"
         );
         app = app.nest("/internal", ee::routes().with_state(state.clone()));
+        // Keep the global IP allowlist cache warm so the gate can enforce it.
+        ip_allowlist::spawn_refresher(state.clone());
     }
 
     let app = app
@@ -562,6 +570,11 @@ async fn main() {
         ))
         // Security headers: HSTS, frame-options, etc.
         .layer(axum::middleware::from_fn(security_headers::middleware))
+        // Global IP allowlist (EE) — gates dashboard/user paths when populated.
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            ip_allowlist::middleware,
+        ))
         .layer(trace_layer);
 
     let addr = SocketAddr::from(([0, 0, 0, 0], 8080));
@@ -648,6 +661,7 @@ async fn ui_ws_handler(
     jar: CookieJar,
     ws: WebSocketUpgrade,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<SocketAddr>,
     State(state): State<Arc<AppState>>,
 ) -> impl IntoResponse {
     let dev_mode = std::env::var("JWT_SECRET").unwrap_or_default() == "dev";
@@ -699,7 +713,8 @@ async fn ui_ws_handler(
         (claims.sub.clone(), auth::Role::parse(&claims.role))
     };
 
-    ws.on_upgrade(move |socket| handle_ui_socket(socket, state, login, initial_role))
+    let client_ip = throttle::real_client_ip(&headers, Some(peer.ip()));
+    ws.on_upgrade(move |socket| handle_ui_socket(socket, state, login, initial_role, client_ip))
         .into_response()
 }
 
@@ -1391,6 +1406,7 @@ async fn handle_ui_socket(
     state: Arc<AppState>,
     login: String,
     _initial_role: auth::Role,
+    client_ip: String,
 ) {
     tracing::info!(%login, "new ui websocket connection");
     let (mut sender, mut receiver) = socket.split();
@@ -1492,7 +1508,7 @@ async fn handle_ui_socket(
                         );
                         if !is_admin {
                             if let Some(action) = ee_action_for_message(&message) {
-                                if !ee_check_permission(&login, action, &agent_id).await {
+                                if !ee_check_permission(&login, action, &agent_id, Some(client_ip.as_str())).await {
                                     let _ = tx.send(UiMessage::PermissionDenied {
                                         agent_id: agent_id.clone(),
                                         variant_type: action.to_string(),
@@ -1773,14 +1789,22 @@ async fn ee_check_approval(
     }
 }
 
-async fn ee_check_permission(login: &str, action: &str, resource: &str) -> bool {
+async fn ee_check_permission(
+    login: &str,
+    action: &str,
+    resource: &str,
+    client_ip: Option<&str>,
+) -> bool {
     let Some(ee_url) = ee::ee_sidecar_url() else { return true };
     let secret = std::env::var("EE_INTERNAL_SECRET").unwrap_or_default();
     let url = format!("{}/api/ee/acl/evaluate", ee_url.trim_end_matches('/'));
+    // client_ip lets ACL rules with `conditions.ip` actually match (the EE
+    // evaluator ignores the condition when no IP is supplied).
     let body = serde_json::json!({
         "login": login,
         "action": action,
         "resource": resource,
+        "client_ip": client_ip,
     });
     match reqwest::Client::new()
         .post(&url)

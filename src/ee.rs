@@ -52,6 +52,45 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/send-to-agent", post(send_to_agent_handler))
         .route("/execute-approved", post(execute_approved_handler))
         .route("/exec-command", post(exec_command_handler))
+        .route("/audit", post(internal_audit_handler))
+}
+
+fn default_audit_ok() -> bool {
+    true
+}
+
+#[derive(Deserialize)]
+struct InternalAuditRequest {
+    actor: Option<String>,
+    agent_id: Option<String>,
+    kind: String,
+    #[serde(default = "default_audit_ok")]
+    ok: bool,
+    detail: Option<String>,
+}
+
+/// Let the EE sidecar record an entry in the CE audit log (e.g. a break-glass
+/// request/approval), so it surfaces at `/activity` and streams to any SIEM
+/// via the EE audit archiver. Internal-secret gated.
+async fn internal_audit_handler(
+    headers: HeaderMap,
+    State(state): State<Arc<AppState>>,
+    axum::Json(body): axum::Json<InternalAuditRequest>,
+) -> impl IntoResponse {
+    if !verify_internal_auth(&headers) {
+        return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
+    }
+    db::record_audit(
+        &state.db,
+        crate::now_unix(),
+        body.actor.as_deref(),
+        body.agent_id.as_deref(),
+        &body.kind,
+        body.ok,
+        body.detail.as_deref(),
+    )
+    .await;
+    (StatusCode::OK, "ok").into_response()
 }
 
 fn default_exec_timeout() -> u64 {
