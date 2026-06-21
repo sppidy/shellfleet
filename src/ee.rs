@@ -51,6 +51,78 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/agents", get(agents_handler))
         .route("/send-to-agent", post(send_to_agent_handler))
         .route("/execute-approved", post(execute_approved_handler))
+        .route("/exec-command", post(exec_command_handler))
+}
+
+fn default_exec_timeout() -> u64 {
+    60
+}
+
+#[derive(Deserialize)]
+struct ExecCommandRequest {
+    agent_id: String,
+    command: String,
+    #[serde(default = "default_exec_timeout")]
+    timeout_secs: u64,
+}
+
+/// Run a one-shot command on a connected agent and return its captured output.
+/// This is what makes EE runbooks actually execute: EE POSTs the step's command
+/// here, CE dispatches a `RunCommandRequest` to the agent and awaits the
+/// correlated `RunCommandResponse`. Internal-secret gated; *which* commands run
+/// is gated upstream by EE's runbook allow-list + the ACL. A non-zero exit is a
+/// normal 200 (the runbook treats it as a failed step); only infrastructure
+/// failures (agent offline, timeout) are non-2xx.
+async fn exec_command_handler(
+    headers: HeaderMap,
+    State(state): State<Arc<AppState>>,
+    axum::Json(body): axum::Json<ExecCommandRequest>,
+) -> impl IntoResponse {
+    if !verify_internal_auth(&headers) {
+        return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
+    }
+    let timeout_secs = body.timeout_secs.clamp(1, 3600);
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let (tx_os, rx_os) = tokio::sync::oneshot::channel();
+    state.pending_exec.lock().await.insert(request_id.clone(), tx_os);
+
+    let dispatched = {
+        let agents = state.agents.lock().await;
+        match agents.get(&body.agent_id) {
+            Some(entry) => entry
+                .tx
+                .send(shared::Message::RunCommandRequest {
+                    request_id: request_id.clone(),
+                    command: body.command.clone(),
+                    timeout_secs,
+                })
+                .is_ok(),
+            None => false,
+        }
+    };
+    if !dispatched {
+        state.pending_exec.lock().await.remove(&request_id);
+        return (StatusCode::NOT_FOUND, "agent not connected").into_response();
+    }
+
+    // Wait a little past the agent-side timeout for the round-trip.
+    let wait = std::time::Duration::from_secs(timeout_secs + 10);
+    match tokio::time::timeout(wait, rx_os).await {
+        Ok(Ok(shared::Message::RunCommandResponse { exit_code, stdout, stderr, error, .. })) => {
+            axum::Json(serde_json::json!({
+                "exit_code": exit_code,
+                "stdout": stdout,
+                "stderr": stderr,
+                "error": error,
+            }))
+            .into_response()
+        }
+        Ok(_) => (StatusCode::BAD_GATEWAY, "unexpected exec response").into_response(),
+        Err(_) => {
+            state.pending_exec.lock().await.remove(&request_id);
+            (StatusCode::GATEWAY_TIMEOUT, "agent did not respond in time").into_response()
+        }
+    }
 }
 
 #[derive(Deserialize)]

@@ -156,6 +156,10 @@ pub struct AppState {
         Mutex<HashMap<String, std::collections::VecDeque<PendingBackupRestoreTx>>>,
     /// Session-recording tap (EE). No-op unless EE_RECORD_TERMINALS is enabled.
     pub recorder: ee_recording::Recorder,
+    /// In-flight EE runbook command executions: request_id → oneshot waiter.
+    /// `/internal/exec-command` inserts a waiter and awaits it; the agent WS
+    /// receive loop resolves it when the matching `RunCommandResponse` lands.
+    pub pending_exec: Mutex<HashMap<String, tokio::sync::oneshot::Sender<shared::Message>>>,
 }
 
 /// Grace window between an agent's WS read-loop exiting and the
@@ -452,6 +456,7 @@ async fn main() {
         scheduled_apt_runs: Mutex::new(HashSet::new()),
         pending_backup_lists: Mutex::new(HashMap::new()),
         pending_backup_restores: Mutex::new(HashMap::new()),
+        pending_exec: Mutex::new(HashMap::new()),
         recorder: ee_recording::Recorder::new(),
     });
 
@@ -1037,6 +1042,13 @@ async fn handle_agent_socket(socket: WebSocket, state: Arc<AppState>, token: Str
                                 if let Some(tx) = q.pop_front() {
                                     let _ = tx.send(other.clone());
                                 }
+                            }
+                        }
+                        // Runbook one-shot exec: resolve the waiter keyed by
+                        // request_id (set by /internal/exec-command).
+                        if let Message::RunCommandResponse { request_id, .. } = &other {
+                            if let Some(tx) = state.pending_exec.lock().await.remove(request_id) {
+                                let _ = tx.send(other.clone());
                             }
                         }
 
