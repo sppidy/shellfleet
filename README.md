@@ -445,8 +445,8 @@ we'll coordinate a fix and disclosure timeline.
 ## License
 
 [**AGPL-3.0-or-later**](LICENSE) for the Community Edition contained
-in this repository. The planned closed-source Enterprise Edition
-sidecar (SSO, SCIM, custom RBAC, multi-tenant, Vault, long-retention
-audit log) is licensed separately to paying customers; CE remains
-fully functional without it. The CLA grants the maintainer dual-
+in this repository. The closed-source Enterprise Edition sidecar (SSO,
+SCIM, custom RBAC, multi-tenant, Vault, long-retention audit log) is
+licensed separately to paying customers; CE remains fully functional
+without it. The CLA grants the maintainer dual-
 licensing rights so contributor code can flow into both.
