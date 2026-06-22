@@ -92,8 +92,12 @@ services:
     restart: unless-stopped
     networks:
       - shellfleet_net
-    depends_on:
-      - server
+    # NOTE: deliberately NO `depends_on: server`. The web container only talks
+    # to the server over the network at request time (via nginx), so it doesn't
+    # need the server up to start — and a dependency made `docker compose up
+    # --build web` recreate the server container too, bouncing every agent's
+    # WebSocket on what should be a frontend-only deploy. Web and server are now
+    # deployed independently.
 
   # The Agent is usually deployed natively on target machines,
   # but we include it in docker-compose for local end-to-end testing.
