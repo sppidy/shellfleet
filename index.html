@@ -1,15 +1,15 @@
 <!doctype html>
 <meta charset="utf-8">
-<title>sys-manager apt repo</title>
+<title>ShellFleet apt repo</title>
 <style>body{font:14px/1.5 system-ui,sans-serif;max-width:720px;margin:3rem auto;padding:0 1rem;color:#222}code,pre{font:13px/1.5 ui-monospace,monospace;background:#f4f4f5;padding:0.1rem 0.3rem;border-radius:3px}pre{padding:1rem;overflow-x:auto}</style>
-<h1>sys-manager apt repo</h1>
+<h1>ShellFleet apt repo</h1>
 <p>Signed apt repo, multi-arch (amd64 + arm64). Add it to your sources:</p>
 <pre>sudo install -d -m 0755 /etc/apt/keyrings
-curl -fsSL https://sys-mgr-repo.sppidy.in/sys-manager.gpg \
-  | sudo tee /etc/apt/keyrings/sys-manager.asc &gt; /dev/null
-echo "deb [signed-by=/etc/apt/keyrings/sys-manager.asc] https://sys-mgr-repo.sppidy.in stable main" \
-  | sudo tee /etc/apt/sources.list.d/sys-manager.list
+curl -fsSL https://shellfleet-repo.sppidy.in/shellfleet.gpg \
+  | sudo tee /etc/apt/keyrings/shellfleet.asc &gt; /dev/null
+echo "deb [signed-by=/etc/apt/keyrings/shellfleet.asc] https://shellfleet-repo.sppidy.in stable main" \
+  | sudo tee /etc/apt/sources.list.d/shellfleet.list
 sudo apt update
-sudo apt install sys-manager-agent</pre>
+sudo apt install shellfleet-agent</pre>
 <p>Signing key fingerprint: <code>9181 1FCB AB45 B996 B40E AD1E C6E2 9AC2 52C7 4AEE</code>.</p>
-<p>See <a href="https://github.com/sppidy/sys-manager/blob/main/INSTALL.md">INSTALL.md</a> for full setup.</p>
+<p>See <a href="https://github.com/sppidy/shellfleet/blob/main/INSTALL.md">INSTALL.md</a> for full setup.</p>
