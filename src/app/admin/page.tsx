@@ -206,6 +206,18 @@ export default function AdminPage() {
     fetchOrgDetails(selectedOrg.id);
   };
 
+  const removeOrgMember = async (login: string) => {
+    if (!selectedOrg) return;
+    await apiFetch(`/api/ee/tenancy/orgs/${selectedOrg.id}/members/${encodeURIComponent(login)}`, { method: 'DELETE' });
+    fetchOrgDetails(selectedOrg.id);
+  };
+
+  const removeOrgAgent = async (agentId: string) => {
+    if (!selectedOrg) return;
+    await apiFetch(`/api/ee/tenancy/orgs/${selectedOrg.id}/agents/${encodeURIComponent(agentId)}`, { method: 'DELETE' });
+    fetchOrgDetails(selectedOrg.id);
+  };
+
   useEffect(() => {
     if (status === 'authed') { fetchUsers(); checkEe(); fetchInvites(); fetchOrgs(); fetchTelemetry(); }
   }, [status, fetchUsers, checkEe, fetchInvites, fetchOrgs, fetchTelemetry]);
@@ -464,7 +476,10 @@ export default function AdminPage() {
                               <button className="btn btn-accent" onClick={addOrgMember} disabled={!addMemberLogin}>add</button>
                             </div>
                             {orgMembers.map((m) => (
-                              <div key={m.login} className="mono" style={{ fontSize: 12, color: 'var(--fg-1)' }}>{m.login} <span className="muted">({m.role_in_org})</span></div>
+                              <div key={m.login} className="mono" style={{ fontSize: 12, color: 'var(--fg-1)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                                <span style={{ flex: 1 }}>{m.login} <span className="muted">({m.role_in_org})</span></span>
+                                <button className="btn btn-sm" title="Remove member" style={{ color: 'var(--err)', padding: '0 6px', fontSize: 11 }} onClick={() => removeOrgMember(m.login)}>✕</button>
+                              </div>
                             ))}
                           </div>
                           <div>
@@ -480,7 +495,8 @@ export default function AdminPage() {
                             </div>
                             {orgAgents.map((a) => (
                               <div key={a} className="mono" style={{ fontSize: 12, color: 'var(--fg-1)', display: 'flex', alignItems: 'center', gap: 6 }}>
-                                {a.replace(/-id$/, '')}
+                                <span style={{ flex: 1 }}>{a.replace(/-id$/, '')}</span>
+                                <button className="btn btn-sm" title="Remove agent" style={{ color: 'var(--err)', padding: '0 6px', fontSize: 11 }} onClick={() => removeOrgAgent(a)}>✕</button>
                               </div>
                             ))}
                           </div>
