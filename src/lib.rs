@@ -4,6 +4,16 @@ use serde::{Deserialize, Serialize};
 /// the wire format changes in a way the server needs to reject older agents
 /// for. Value `0` means "legacy agent that predates this field" — those
 /// still connect, just without the version-aware fast paths.
+/// v18: application-level heartbeat wired up. The agent sends `Ping` every
+/// ~20s and the server replies `Pong`; the agent's reconnect watchdog resets
+/// only on real server messages (Text), not on WebSocket control frames — so
+/// a proxy (e.g. Cloudflare) keeping the socket warm after the server has
+/// reaped the session can no longer strand an agent half-open. Wire-compatible
+/// with v17 (the `Ping`/`Pong` variants already existed); skew is advisory.
+///
+/// v17: IP allowlist / ACL client_ip propagation (server-side; no agent wire
+/// change).
+///
 /// v16: k8s read API — `K8sListPodsRequest` / `K8sListPodsResponse`
 /// for the slice-1 Pods view. Only k8s-feature agents (advertising
 /// the `"k8s"` capability) handle these; others return an error.
@@ -15,7 +25,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// v14: terminal variants gain `session_id` for multi-PTY per host.
 /// Empty string = the singleton container-exec session (DockerExec*).
-pub const PROTOCOL_VERSION: u32 = 17;
+pub const PROTOCOL_VERSION: u32 = 18;
 
 fn default_protocol_version() -> u32 {
     0
