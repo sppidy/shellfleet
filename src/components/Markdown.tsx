@@ -17,18 +17,18 @@ import React from 'react';
 // renders as inert text.
 const SAFE_URL = /^(https?:|mailto:)/i;
 
-// Inline spans, matched in priority order: code first (so * / _ inside code
-// stay literal), then bold before italic, then links.
-const INLINE_RE =
-  /(`[^`]+`)|(\*\*[\s\S]+?\*\*)|(\*[^*\n]+?\*)|(_[^_\n]+?_)|(\[[^\]]+\]\([^)\s]+\))/g;
-
 function renderInline(text: string, kp: string): React.ReactNode[] {
+  // Inline spans, matched in priority order: code first (so * / _ inside code
+  // stay literal), then bold before italic, then links. The regex MUST be
+  // local — this function recurses for bold/italic contents, and a shared /g
+  // regex's lastIndex would be clobbered by the inner call, causing the outer
+  // loop to re-match the same token forever.
+  const re = /(`[^`]+`)|(\*\*[\s\S]+?\*\*)|(\*[^*\n]+?\*)|(_[^_\n]+?_)|(\[[^\]]+\]\([^)\s]+\))/g;
   const out: React.ReactNode[] = [];
   let last = 0;
   let n = 0;
   let m: RegExpExecArray | null;
-  INLINE_RE.lastIndex = 0;
-  while ((m = INLINE_RE.exec(text)) !== null) {
+  while ((m = re.exec(text)) !== null) {
     if (m.index > last) out.push(text.slice(last, m.index));
     const tok = m[0];
     const k = `${kp}-${n++}`;
