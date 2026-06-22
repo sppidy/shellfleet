@@ -59,9 +59,25 @@ export default function MetricsEePage() {
     }
     return '—';
   };
+  // MUST return a string — Prometheus series carry `metric` as an OBJECT
+  // ({__name__, instance, device, ...}); returning it raw and rendering it as
+  // a React child throws ("Objects are not valid as a React child") and takes
+  // the whole page down. Build a readable label from the distinctive labels.
   const seriesName = (s: unknown): string => {
-    const o = s as { target?: string; name?: string; metric?: string };
-    return o?.target || o?.name || o?.metric || 'series';
+    const o = (s ?? {}) as { target?: unknown; name?: unknown; metric?: unknown };
+    if (typeof o.target === 'string' && o.target) return o.target;
+    if (typeof o.name === 'string' && o.name) return o.name;
+    const m = o.metric;
+    if (m && typeof m === 'object') {
+      const bits = Object.entries(m as Record<string, unknown>)
+        .filter(([k]) => k !== '__name__' && k !== 'instance' && k !== 'job')
+        .map(([k, v]) => `${k}=${typeof v === 'string' ? v : JSON.stringify(v)}`)
+        .sort();
+      if (bits.length) return bits.join(', ');
+      const name = (m as Record<string, unknown>).__name__;
+      if (typeof name === 'string') return name;
+    }
+    return 'series';
   };
 
   if (status !== 'authed') return <div className="center-screen"><Loader2Icon className="w-6 h-6 animate-spin" style={{ color: 'var(--fg-2)' }} /></div>;
