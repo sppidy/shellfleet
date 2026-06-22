@@ -376,6 +376,15 @@ async fn main() {
     watchdog.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     watchdog.tick().await;
 
+    // Application-level heartbeat (protocol v18+). Sending a `Ping` Text message
+    // every 20s draws a `Pong` Text reply from the server; that round-trip is
+    // what `last_read` keys off, so the watchdog can tell a genuinely-alive
+    // server from a proxy that's merely keeping the socket warm. 20s gives ~3
+    // chances inside the 75s window. The first tick is immediate, so liveness is
+    // probed right after connect.
+    let mut heartbeat = tokio::time::interval(Duration::from_secs(20));
+    heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
     'main_loop: loop {
         tokio::select! {
             maybe_msg = read.next() => {
@@ -390,7 +399,6 @@ async fn main() {
                         break 'main_loop;
                     }
                 };
-                last_read = tokio::time::Instant::now();
                 // The server pings every ~25s and drops the connection after
                 // ~50s without a Pong. tokio-tungstenite auto-queues the Pong,
                 // but on a split stream it is only sent when the write half is
@@ -401,6 +409,15 @@ async fn main() {
                     let _ = write.flush().await;
                 }
                 if let WsMessage::Text(text) = msg {
+                    // Liveness is keyed to real server *application* messages
+                    // only — NOT WebSocket control frames. A proxy (Cloudflare)
+                    // can keep this socket warm with its own Ping/Pong long after
+                    // the server has reaped the session; counting those would
+                    // strand us half-open forever. Our app-level Ping draws a
+                    // `Pong` Text reply every ~20s, so a healthy path always
+                    // resets this; a dead server side does not, and the watchdog
+                    // below reconnects us.
+                    last_read = tokio::time::Instant::now();
                     let parsed = serde_json::from_str::<Message>(&text);
                     if let Err(ref e) = parsed {
                         eprintln!("dropped un-parseable protocol message: {e}");
@@ -1586,6 +1603,11 @@ async fn main() {
                         break 'main_loop;
                     }
                 }
+            }
+            _ = heartbeat.tick() => {
+                // Route the Ping through the same outgoing channel as everything
+                // else so it serializes with real responses on the write half.
+                let _ = tx.send(Message::Ping);
             }
             _ = watchdog.tick() => {
                 if last_read.elapsed() > idle_timeout {
