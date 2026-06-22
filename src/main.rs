@@ -957,6 +957,15 @@ async fn handle_agent_socket(socket: WebSocket, state: Arc<AppState>, token: Str
                         }
                     }
                 }
+                // Application-level heartbeat (protocol v18+): a v18 agent sends
+                // `Ping` every ~20s and resets its reconnect watchdog only on real
+                // server messages, so this `Pong` is what proves the end-to-end
+                // path is alive through a proxy that may keep the socket warm with
+                // its own control frames. Receiving the `Ping` here also resets the
+                // server's read timeout, so the symmetric reap can't misfire.
+                Message::Ping => {
+                    let _ = tx.send(Message::Pong);
+                }
                 other => {
                     if let Some(agent_id) = &agent_id_opt {
                         // Health probe reports — persist last_* fields
@@ -1273,7 +1282,27 @@ async fn handle_agent_socket(socket: WebSocket, state: Arc<AppState>, token: Str
     send_task.abort();
 
     if let Some(id) = agent_id_opt {
-        state.agents.lock().await.remove(&id);
+        // Reconnect-overlap guard: a newer connection for the same agent_id may
+        // already have re-registered (k8s pod handover, or a reconnect that beat
+        // this socket's teardown). In that case `state.agents` holds the NEW
+        // socket's channel, not ours — removing it would evict a live agent and
+        // fire a bogus disconnect, leaving it flagged offline forever. Only tear
+        // down if the registered entry is still our own channel.
+        {
+            let mut agents = state.agents.lock().await;
+            let still_ours = agents
+                .get(&id)
+                .map(|e| e.tx.same_channel(&tx))
+                .unwrap_or(false);
+            if !still_ours {
+                tracing::info!(
+                    agent_id = %id,
+                    "stale agent ws closed; a newer connection already owns this id — skipping disconnect"
+                );
+                return;
+            }
+            agents.remove(&id);
+        }
         tracing::info!(agent_id = %id, "agent ws closed; debouncing disconnect webhook");
         broadcast_agent_list(&state).await;
 
