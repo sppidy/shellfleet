@@ -1279,7 +1279,7 @@ async fn handle_agent_socket(socket: WebSocket, state: Arc<AppState>, token: Str
                         };
                         let mut clients = state.ui_clients.lock().await;
                         clients.retain(|_id, ctx| {
-                            if !agent_allowed_by_patterns(&agent_id, &ctx.allowed_agents) {
+                            if !agent_allowed_by_patterns(agent_id, &ctx.allowed_agents) {
                                 return true;
                             }
                             ctx.tx.send(ui_msg.clone()).is_ok()
