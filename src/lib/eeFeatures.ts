@@ -7,6 +7,7 @@
 /** Tab id -> the license feature it requires, plus a display label. */
 export const EE_TAB_FEATURE: Record<string, { feature: string; label: string }> = {
   ai: { feature: 'ai-analysis', label: 'AI Analysis' },
+  'api-keys': { feature: 'api-keys', label: 'API Keys' },
 };
 
 /** True when the license advertises `name`. `features` null = unknown/EE-down. */

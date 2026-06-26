@@ -450,6 +450,13 @@ function HomeBody() {
               {!hasFeature(eeFeatures, 'webauthn') && <span className="nav-badge" style={{ background: 'transparent' }}>⊘</span>}
             </button>
           )}
+          {eeActive && (
+            <button type="button" className={`nav-item ${hasFeature(eeFeatures, 'api-keys') ? '' : 'nav-locked'}`} onClick={() => router.push('/api-keys')} title={hasFeature(eeFeatures, 'api-keys') ? '' : 'Not included in your EE license'}>
+              <span className="ico">⚿</span>
+              <span>API Keys</span>
+              {!hasFeature(eeFeatures, 'api-keys') && <span className="nav-badge" style={{ background: 'transparent' }}>⊘</span>}
+            </button>
+          )}
           <button type="button" className="nav-item" onClick={() => router.push('/security')}>
             <span className="ico">⌘</span>
             <span>Account &amp; 2FA</span>
