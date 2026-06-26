@@ -88,7 +88,9 @@ pub enum Message {
     },
 
     /// Server acknowledging registration
-    RegisterAck { agent_id: String },
+    RegisterAck {
+        agent_id: String,
+    },
 
     /// Agent re-advertising capabilities after a late subsystem start
     /// (e.g. Docker starting after the agent). The server merges these
@@ -108,10 +110,15 @@ pub enum Message {
     ListServicesRequest,
 
     /// Response containing systemd services
-    ListServicesResponse { services: Vec<ServiceInfo> },
+    ListServicesResponse {
+        services: Vec<ServiceInfo>,
+    },
 
     /// Request to control a service (start, stop, restart)
-    ControlServiceRequest { name: String, action: String },
+    ControlServiceRequest {
+        name: String,
+        action: String,
+    },
 
     /// Response to control a service
     ControlServiceResponse {
@@ -125,7 +132,9 @@ pub enum Message {
     /// dashboard generates a UUID per terminal tab). The empty string
     /// is reserved for the container-exec session — host shells must
     /// never use it.
-    StartTerminalRequest { session_id: String },
+    StartTerminalRequest {
+        session_id: String,
+    },
 
     /// Terminal data — bidirectional. From client→agent, `session_id`
     /// selects which PTY the bytes are written into. From agent→client,
@@ -133,14 +142,19 @@ pub enum Message {
     /// instance can render. `session_id == ""` is the container-exec
     /// session (singleton, scoped by container_id on the start
     /// request).
-    TerminalData { session_id: String, data: Vec<u8> },
+    TerminalData {
+        session_id: String,
+        data: Vec<u8>,
+    },
 
     /// Tear down the host PTY identified by `session_id`. Closing one
     /// tab on the dashboard sends this with the tab's id; other tabs
     /// against the same agent keep running. Old agents (pre-v14)
     /// ignored the variant entirely and the PTY died on the next WS
     /// disconnect; new agents reap immediately.
-    StopTerminalRequest { session_id: String },
+    StopTerminalRequest {
+        session_id: String,
+    },
 
     /// Resize the PTY identified by `session_id`. Each xterm instance
     /// resizes independently; sizes do not propagate between tabs.
@@ -232,7 +246,9 @@ pub enum Message {
     },
     /// Operator cancels the stream. Aborts the agent-side task; no
     /// further chunks or End message will arrive for this stream_id.
-    K8sLogsStop { stream_id: String },
+    K8sLogsStop {
+        stream_id: String,
+    },
     /// Pod exited / container EOF / stream error. Terminal for the
     /// stream_id — the agent will not send anything more on it.
     K8sLogsEnd {
@@ -340,7 +356,9 @@ pub enum Message {
     },
 
     /// Request to read a configuration file
-    ReadConfigRequest { path: String },
+    ReadConfigRequest {
+        path: String,
+    },
 
     /// Response containing file content
     ReadConfigResponse {
@@ -350,7 +368,10 @@ pub enum Message {
     },
 
     /// Request to write a configuration file
-    WriteConfigRequest { path: String, content: String },
+    WriteConfigRequest {
+        path: String,
+        content: String,
+    },
 
     /// Response to write config
     WriteConfigResponse {
@@ -412,7 +433,10 @@ pub enum Message {
     /// Run a management action against a swarm service (scale, force
     /// update, remove). Only meaningful on a manager. Introduced in
     /// protocol_version 4.
-    SwarmServiceActionRequest { name: String, action: SwarmAction },
+    SwarmServiceActionRequest {
+        name: String,
+        action: SwarmAction,
+    },
     SwarmServiceActionResponse {
         name: String,
         success: bool,
@@ -442,7 +466,9 @@ pub enum Message {
     /// Apply upgrades. `package == None` upgrades all upgradable packages
     /// (`apt-get -y upgrade`); a specific package runs
     /// `apt-get -y install --only-upgrade <package>`.
-    AptUpgradeRequest { package: Option<String> },
+    AptUpgradeRequest {
+        package: Option<String>,
+    },
     AptUpgradeResponse {
         package: Option<String>,
         success: bool,
@@ -452,7 +478,9 @@ pub enum Message {
 
     /// Create a standalone Docker container on the agent's local engine.
     /// Introduced in protocol_version 5.
-    DockerCreateContainerRequest { spec: ContainerSpec },
+    DockerCreateContainerRequest {
+        spec: ContainerSpec,
+    },
     DockerCreateContainerResponse {
         success: bool,
         container_id: Option<String>,
@@ -462,7 +490,9 @@ pub enum Message {
 
     /// Create a swarm service. Only valid on a manager. Introduced in
     /// protocol_version 5.
-    SwarmCreateServiceRequest { spec: ServiceSpec },
+    SwarmCreateServiceRequest {
+        spec: ServiceSpec,
+    },
     SwarmCreateServiceResponse {
         success: bool,
         service_id: Option<String>,
@@ -1428,8 +1458,14 @@ mod tests {
                 metadata,
             } => {
                 assert_eq!(hostname, "legacy");
-                assert_eq!(protocol_version, 0, "missing protocol_version must default to 0");
-                assert!(capabilities.is_empty(), "missing capabilities must default empty");
+                assert_eq!(
+                    protocol_version, 0,
+                    "missing protocol_version must default to 0"
+                );
+                assert!(
+                    capabilities.is_empty(),
+                    "missing capabilities must default empty"
+                );
                 assert!(metadata.is_empty(), "missing metadata must default empty");
             }
             _ => panic!("expected Register"),
