@@ -204,4 +204,107 @@ mod tests {
         assert!(matches_action("k8s:List", "k8s:List"));
         assert!(!matches_action("k8s:List", "k8s:Describe"));
     }
+
+    async fn setup_iam_db() -> SqlitePool {
+        let pool = SqlitePool::connect(":memory:").await.unwrap();
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS ee_iam_statements (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                policy_id INTEGER NOT NULL,
+                effect TEXT NOT NULL CHECK (effect IN ('Allow', 'Deny')),
+                actions TEXT NOT NULL DEFAULT '[]',
+                resources TEXT NOT NULL DEFAULT '[\"*\"]'
+            )"
+        ).execute(&pool).await.unwrap();
+        pool
+    }
+
+    #[tokio::test]
+    async fn deny_takes_precedence_over_allow() {
+        let pool = setup_iam_db().await;
+        // Policy 1: Allow agent:View, Deny agent:View → deny wins
+        sqlx::query(
+            "INSERT INTO ee_iam_statements (policy_id, effect, actions, resources) VALUES (1, 'Allow', '[\"agent:View\"]', '[\"*\"]')"
+        ).execute(&pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO ee_iam_statements (policy_id, effect, actions, resources) VALUES (1, 'Deny', '[\"agent:View\"]', '[\"*\"]')"
+        ).execute(&pool).await.unwrap();
+
+        let mut headers = HeaderMap::new();
+        headers.insert("x-api-key-policy-id", "1".parse().unwrap());
+        let res = require_key_action(&headers, &pool, "agent:View").await;
+        assert!(res.is_err());
+        assert_eq!(res.unwrap_err().0, StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn default_deny_when_action_not_listed() {
+        let pool = setup_iam_db().await;
+        // Policy 2: Allow agent:View only → agent:Terminal not listed → 403
+        sqlx::query(
+            "INSERT INTO ee_iam_statements (policy_id, effect, actions, resources) VALUES (2, 'Allow', '[\"agent:View\"]', '[\"*\"]')"
+        ).execute(&pool).await.unwrap();
+
+        let mut headers = HeaderMap::new();
+        headers.insert("x-api-key-policy-id", "2".parse().unwrap());
+        let res = require_key_action(&headers, &pool, "agent:Terminal").await;
+        assert!(res.is_err());
+    }
+
+    #[tokio::test]
+    async fn wildcard_prefix_allows_any_action_in_prefix() {
+        let pool = setup_iam_db().await;
+        // Policy 3: Allow agent:* → all agent:* actions pass
+        sqlx::query(
+            "INSERT INTO ee_iam_statements (policy_id, effect, actions, resources) VALUES (3, 'Allow', '[\"agent:*\"]', '[\"*\"]')"
+        ).execute(&pool).await.unwrap();
+
+        let mut headers = HeaderMap::new();
+        headers.insert("x-api-key-policy-id", "3".parse().unwrap());
+        assert!(require_key_action(&headers, &pool, "agent:View").await.is_ok());
+        assert!(require_key_action(&headers, &pool, "agent:Terminal").await.is_ok());
+        assert!(require_key_action(&headers, &pool, "agent:Exec").await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn malformed_actions_fail_closed() {
+        let pool = setup_iam_db().await;
+        sqlx::query(
+            "INSERT INTO ee_iam_statements (policy_id, effect, actions, resources) VALUES (4, 'Allow', 'not-json', '[\"*\"]')"
+        ).execute(&pool).await.unwrap();
+
+        let mut headers = HeaderMap::new();
+        headers.insert("x-api-key-policy-id", "4".parse().unwrap());
+        let res = require_key_action(&headers, &pool, "agent:View").await;
+        assert!(res.is_err());
+        assert_eq!(res.unwrap_err().0, StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[tokio::test]
+    async fn malformed_resources_fail_closed() {
+        let pool = setup_iam_db().await;
+        sqlx::query(
+            "INSERT INTO ee_iam_statements (policy_id, effect, actions, resources) VALUES (5, 'Allow', '[\"agent:View\"]', 'not-json')"
+        ).execute(&pool).await.unwrap();
+
+        let mut headers = HeaderMap::new();
+        headers.insert("x-api-key-policy-id", "5".parse().unwrap());
+        let res = require_key_action(&headers, &pool, "agent:View").await;
+        assert!(res.is_err());
+        assert_eq!(res.unwrap_err().0, StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[tokio::test]
+    async fn mixed_resources_fail_closed() {
+        let pool = setup_iam_db().await;
+        sqlx::query(
+            "INSERT INTO ee_iam_statements (policy_id, effect, actions, resources) VALUES (6, 'Allow', '[\"agent:View\"]', '[\"*\",\"prod-*\"]')"
+        ).execute(&pool).await.unwrap();
+
+        let mut headers = HeaderMap::new();
+        headers.insert("x-api-key-policy-id", "6".parse().unwrap());
+        let res = require_key_action(&headers, &pool, "agent:View").await;
+        assert!(res.is_err());
+        assert_eq!(res.unwrap_err().0, StatusCode::INTERNAL_SERVER_ERROR);
+    }
 }
