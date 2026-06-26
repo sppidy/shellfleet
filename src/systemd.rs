@@ -87,7 +87,9 @@ pub async fn list_services() -> Result<Vec<ServiceInfo>, String> {
             continue;
         }
         // UNIT  LOAD  ACTIVE  SUB  DESCRIPTION
-        let mut it = line.splitn(5, char::is_whitespace).filter(|s| !s.is_empty());
+        let mut it = line
+            .splitn(5, char::is_whitespace)
+            .filter(|s| !s.is_empty());
         let name = match it.next() {
             Some(n) => n.to_string(),
             None => continue,

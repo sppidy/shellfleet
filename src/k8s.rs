@@ -11,12 +11,10 @@
 
 use chrono::Utc;
 use k8s_openapi::api::apps::v1::{Deployment, ReplicaSet, StatefulSet};
-use k8s_openapi::api::core::v1::{
-    Event, PersistentVolumeClaim, Pod, Service,
-};
+use k8s_openapi::api::core::v1::{Event, PersistentVolumeClaim, Pod, Service};
 use k8s_openapi::api::networking::v1::Ingress;
 use kube::api::{DeleteParams, DynamicObject, GroupVersionKind, Patch, PatchParams};
-use kube::{discovery, Api, Client, ResourceExt};
+use kube::{Api, Client, ResourceExt, discovery};
 use shared::{K8sDeployment, K8sEvent, K8sIngress, K8sPod, K8sPvc, K8sService};
 
 /// Cheap availability probe used at agent startup to decide whether
@@ -58,11 +56,7 @@ pub async fn list_pods() -> Result<Vec<K8sPod>, String> {
             let ready_count = container_statuses
                 .map(|cs| cs.iter().filter(|c| c.ready).count())
                 .unwrap_or(0);
-            let total = p
-                .spec
-                .as_ref()
-                .map(|s| s.containers.len())
-                .unwrap_or(0);
+            let total = p.spec.as_ref().map(|s| s.containers.len()).unwrap_or(0);
             let ready = format!("{ready_count}/{total}");
             let restarts: u32 = container_statuses
                 .map(|cs| cs.iter().map(|c| c.restart_count.max(0) as u32).sum())
@@ -219,10 +213,7 @@ pub async fn list_ingresses() -> Result<Vec<K8sIngress>, String> {
         .map(|ing| {
             let namespace = ing.namespace().unwrap_or_default();
             let name = ing.name_any();
-            let class = ing
-                .spec
-                .as_ref()
-                .and_then(|s| s.ingress_class_name.clone());
+            let class = ing.spec.as_ref().and_then(|s| s.ingress_class_name.clone());
             let hosts: Vec<String> = ing
                 .spec
                 .as_ref()
@@ -301,10 +292,7 @@ pub async fn list_pvcs() -> Result<Vec<K8sPvc>, String> {
                         .collect()
                 })
                 .unwrap_or_default();
-            let storage_class = p
-                .spec
-                .as_ref()
-                .and_then(|s| s.storage_class_name.clone());
+            let storage_class = p.spec.as_ref().and_then(|s| s.storage_class_name.clone());
             let age_secs = p
                 .metadata
                 .creation_timestamp
@@ -347,16 +335,8 @@ pub async fn list_events() -> Result<Vec<K8sEvent>, String> {
             let namespace = e.metadata.namespace.clone().unwrap_or_default();
             let kind = e.type_.clone().unwrap_or_else(|| "Normal".into());
             let reason = e.reason.clone().unwrap_or_default();
-            let obj_kind = e
-                .involved_object
-                .kind
-                .clone()
-                .unwrap_or_else(|| "?".into());
-            let obj_name = e
-                .involved_object
-                .name
-                .clone()
-                .unwrap_or_else(|| "?".into());
+            let obj_kind = e.involved_object.kind.clone().unwrap_or_else(|| "?".into());
+            let obj_name = e.involved_object.name.clone().unwrap_or_else(|| "?".into());
             let object = format!("{obj_kind}/{obj_name}");
             let message = e.message.clone().unwrap_or_default();
             let count = e.count.unwrap_or(1);
@@ -394,11 +374,7 @@ pub async fn list_events() -> Result<Vec<K8sEvent>, String> {
 /// it for the six concrete kinds we expose. `managedFields` is
 /// stripped to keep the modal readable — kubectl does the same by
 /// default in its describe output.
-pub async fn describe(
-    kind: &str,
-    namespace: Option<&str>,
-    name: &str,
-) -> Result<String, String> {
+pub async fn describe(kind: &str, namespace: Option<&str>, name: &str) -> Result<String, String> {
     let client = Client::try_default()
         .await
         .map_err(|e| format!("kube client: {e}"))?;
@@ -436,14 +412,13 @@ pub async fn apply(yaml: &str, dry_run: bool, force: bool) -> Result<String, Str
         if raw.is_empty() {
             continue;
         }
-        let obj: DynamicObject = serde_yaml::from_str(raw)
-            .map_err(|e| format!("doc {i}: parse: {e}"))?;
+        let obj: DynamicObject =
+            serde_yaml::from_str(raw).map_err(|e| format!("doc {i}: parse: {e}"))?;
         let types = obj
             .types
             .as_ref()
             .ok_or_else(|| format!("doc {i}: missing apiVersion/kind"))?;
-        let gvk = GroupVersionKind::try_from(types)
-            .map_err(|e| format!("doc {i}: gvk: {e}"))?;
+        let gvk = GroupVersionKind::try_from(types).map_err(|e| format!("doc {i}: gvk: {e}"))?;
 
         let (ar, caps) = discovery::pinned_kind(&client, &gvk)
             .await
@@ -502,12 +477,7 @@ pub async fn apply(yaml: &str, dry_run: bool, force: bool) -> Result<String, Str
 
 /// Scale a Deployment / StatefulSet / ReplicaSet to `replicas` via
 /// the `/scale` subresource. `kind` is matched case-insensitively.
-pub async fn scale(
-    kind: &str,
-    namespace: &str,
-    name: &str,
-    replicas: i32,
-) -> Result<(), String> {
+pub async fn scale(kind: &str, namespace: &str, name: &str, replicas: i32) -> Result<(), String> {
     let client = Client::try_default()
         .await
         .map_err(|e| format!("kube client: {e}"))?;
@@ -582,10 +552,7 @@ where
         // None on a namespaced resource is meaningless; fail loud.
         None => return Err("namespaced kind needs a namespace".into()),
     };
-    let mut obj = api
-        .get(name)
-        .await
-        .map_err(|e| format!("get: {e}"))?;
+    let mut obj = api.get(name).await.map_err(|e| format!("get: {e}"))?;
     // Strip managedFields — verbose, useless in a describe view.
     obj.meta_mut().managed_fields = None;
     serde_yaml::to_string(&obj).map_err(|e| format!("yaml: {e}"))

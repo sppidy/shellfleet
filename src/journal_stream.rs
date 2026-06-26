@@ -37,7 +37,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{Mutex, mpsc};
 use tokio::task::JoinHandle;
 
 const ALLOWED_PRIORITIES: &[&str] = &[
@@ -92,16 +92,12 @@ fn is_safe_since(s: &str) -> bool {
     if s.is_empty() || s.starts_with('-') || s.len() > 64 {
         return false;
     }
-    s.chars().all(|c| {
-        c.is_ascii_alphanumeric() || matches!(c, ' ' | ':' | '+' | ',' | '.' | '-')
-    })
+    s.chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, ' ' | ':' | '+' | ',' | '.' | '-'))
 }
 
 fn build_argv(args: &StreamArgs) -> Result<Vec<String>, String> {
-    let mut argv = vec![
-        "--no-pager".to_string(),
-        "--output=short-iso".to_string(),
-    ];
+    let mut argv = vec!["--no-pager".to_string(), "--output=short-iso".to_string()];
     if args.follow {
         argv.push("--follow".to_string());
     }

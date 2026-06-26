@@ -111,7 +111,7 @@ fn spawn_pty(
         .map_err(|e| e.to_string())?;
 
     let mut child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
-    
+
     drop(pair.slave);
 
     let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
@@ -161,5 +161,8 @@ fn spawn_pty(
         let _ = child.wait();
     });
 
-    Ok(TerminalSession { tx_resize, tx_input })
+    Ok(TerminalSession {
+        tx_resize,
+        tx_input,
+    })
 }

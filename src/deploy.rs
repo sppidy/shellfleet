@@ -52,7 +52,9 @@ fn split_command(cmd: &str) -> Vec<String> {
     out
 }
 
-pub async fn create_container(spec: &ContainerSpec) -> (bool, Option<String>, String, Option<String>) {
+pub async fn create_container(
+    spec: &ContainerSpec,
+) -> (bool, Option<String>, String, Option<String>) {
     if spec.image.trim().is_empty() {
         return (
             false,
@@ -114,7 +116,14 @@ pub async fn create_container(spec: &ContainerSpec) -> (bool, Option<String>, St
 
     let output = match cmd.output().await {
         Ok(o) => o,
-        Err(e) => return (false, None, String::new(), Some(format!("docker spawn: {e}"))),
+        Err(e) => {
+            return (
+                false,
+                None,
+                String::new(),
+                Some(format!("docker spawn: {e}")),
+            );
+        }
     };
 
     let success = output.status.success();
@@ -142,10 +151,20 @@ pub async fn create_container(spec: &ContainerSpec) -> (bool, Option<String>, St
 
 pub async fn create_service(spec: &ServiceSpec) -> (bool, Option<String>, String, Option<String>) {
     if spec.image.trim().is_empty() {
-        return (false, None, String::new(), Some("image is required".to_string()));
+        return (
+            false,
+            None,
+            String::new(),
+            Some("image is required".to_string()),
+        );
     }
     if spec.name.trim().is_empty() {
-        return (false, None, String::new(), Some("name is required".to_string()));
+        return (
+            false,
+            None,
+            String::new(),
+            Some("name is required".to_string()),
+        );
     }
 
     let mut cmd = Command::new("docker");
@@ -209,7 +228,14 @@ pub async fn create_service(spec: &ServiceSpec) -> (bool, Option<String>, String
 
     let output = match cmd.output().await {
         Ok(o) => o,
-        Err(e) => return (false, None, String::new(), Some(format!("docker spawn: {e}"))),
+        Err(e) => {
+            return (
+                false,
+                None,
+                String::new(),
+                Some(format!("docker spawn: {e}")),
+            );
+        }
     };
 
     let success = output.status.success();

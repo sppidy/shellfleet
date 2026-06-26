@@ -68,6 +68,27 @@ fn write_token_secure(primary: &str, token: &str) {
     let _ = write_with_mode("agent-token.txt", token);
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn drift_config_fingerprint_rejects_denied_paths() {
+        assert!(drift_config_fingerprint("/etc/shadow").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn drift_config_fingerprint_hashes_allowed_paths() {
+        let Some(config) = drift_config_fingerprint("/etc/hostname").await else {
+            panic!("expected /etc/hostname to be readable in the test environment");
+        };
+
+        assert_eq!(config.path, "/etc/hostname");
+        assert!(!config.hash.is_empty());
+        assert!(config.size > 0);
+    }
+}
+
 use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
 use shared::Message;
@@ -76,9 +97,7 @@ use tokio::sync::mpsc;
 use tokio_tungstenite::{
     connect_async,
     tungstenite::{
-        client::IntoClientRequest,
-        http::header::AUTHORIZATION,
-        protocol::Message as WsMessage,
+        client::IntoClientRequest, http::header::AUTHORIZATION, protocol::Message as WsMessage,
     },
 };
 
@@ -103,18 +122,43 @@ fn read_token() -> Option<String> {
     for path in [TOKEN_PATH, "agent-token.txt"] {
         if let Ok(t) = std::fs::read_to_string(path) {
             let t = t.trim().to_string();
-            if !t.is_empty() { return Some(t); }
+            if !t.is_empty() {
+                return Some(t);
+            }
         }
     }
     None
+}
+
+async fn drift_config_fingerprint(path: &str) -> Option<shared::DriftConfigFile> {
+    let safe_path = config::check_read(path).ok()?;
+    let meta = tokio::fs::metadata(&safe_path).await.ok()?;
+    let content = tokio::fs::read(&safe_path).await.ok()?;
+    use sha2::Digest;
+    let hash = format!("{:x}", sha2::Sha256::digest(&content));
+    let mtime = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    Some(shared::DriftConfigFile {
+        path: path.to_string(),
+        hash,
+        size: meta.len(),
+        mtime,
+    })
 }
 
 async fn pair(api_url: &str) -> String {
     let client = reqwest::Client::new();
 
     println!("Requesting device authorization...");
-    let auth_res = client.post(format!("{}/api/device/request", api_url))
-        .send().await.expect("Failed to contact server");
+    let auth_res = client
+        .post(format!("{}/api/device/request", api_url))
+        .send()
+        .await
+        .expect("Failed to contact server");
 
     let auth_data: DeviceAuthResponse = auth_res.json().await.expect("Failed to parse response");
 
@@ -128,9 +172,11 @@ async fn pair(api_url: &str) -> String {
         tokio::time::sleep(Duration::from_secs(auth_data.interval)).await;
 
         let req_body = serde_json::json!({ "device_code": auth_data.device_code });
-        let token_res = client.post(format!("{}/api/device/token", api_url))
+        let token_res = client
+            .post(format!("{}/api/device/token", api_url))
             .json(&req_body)
-            .send().await;
+            .send()
+            .await;
 
         if let Ok(res) = token_res {
             if let Ok(data) = res.json::<DeviceTokenResponse>().await {
@@ -166,7 +212,8 @@ async fn main() {
     let args: Vec<String> = std::env::args().collect();
     let is_pair = args.iter().any(|a| a == "--pair" || a == "pair");
 
-    let api_url = std::env::var("SERVER_API_URL").unwrap_or_else(|_| "https://dashboard.example.com".to_string());
+    let api_url = std::env::var("SERVER_API_URL")
+        .unwrap_or_else(|_| "https://dashboard.example.com".to_string());
 
     let token = if let Some(t) = read_token() {
         t
@@ -177,7 +224,8 @@ async fn main() {
         std::process::exit(1);
     };
 
-    let wss_url_str = std::env::var("SERVER_WS_URL").unwrap_or_else(|_| "wss://dashboard.example.com/agent/ws".to_string());
+    let wss_url_str = std::env::var("SERVER_WS_URL")
+        .unwrap_or_else(|_| "wss://dashboard.example.com/agent/ws".to_string());
 
     println!("Connecting to server WebSocket...");
 
@@ -216,7 +264,10 @@ async fn main() {
     let (ws_stream, _) = match tokio::time::timeout(connect_timeout, connect_async(request)).await {
         Ok(Ok(res)) => res,
         Ok(Err(e)) => {
-            eprintln!("Failed to connect to server: {}. Your token might have been revoked.", e);
+            eprintln!(
+                "Failed to connect to server: {}. Your token might have been revoked.",
+                e
+            );
             std::process::exit(1);
         }
         Err(_) => {
@@ -235,7 +286,10 @@ async fn main() {
     let (tx, mut rx) = mpsc::unbounded_channel::<Message>();
 
     // Send a register message
-    let hostname = hostname::get().unwrap_or_else(|_| "unknown-agent".into()).to_string_lossy().to_string();
+    let hostname = hostname::get()
+        .unwrap_or_else(|_| "unknown-agent".into())
+        .to_string_lossy()
+        .to_string();
 
     // Probe each subsystem and advertise what we find. The dashboard
     // hides tabs that aren't represented here, so a host with no docker
@@ -1561,22 +1615,8 @@ async fn main() {
 
                                     if cats.contains("configs") {
                                         for path in &config_paths {
-                                            if let Ok(meta) = tokio::fs::metadata(path).await {
-                                                if let Ok(content) = tokio::fs::read(path).await {
-                                                    use sha2::Digest;
-                                                    let hash = format!("{:x}", sha2::Sha256::digest(&content));
-                                                    let mtime = meta.modified()
-                                                        .ok()
-                                                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                                                        .map(|d| d.as_secs() as i64)
-                                                        .unwrap_or(0);
-                                                    configs.push(shared::DriftConfigFile {
-                                                        path: path.clone(),
-                                                        hash,
-                                                        size: meta.len(),
-                                                        mtime,
-                                                    });
-                                                }
+                                            if let Some(config) = drift_config_fingerprint(path).await {
+                                                configs.push(config);
                                             }
                                         }
                                     }

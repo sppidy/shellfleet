@@ -161,8 +161,8 @@ pub fn check(path: &str) -> Result<PathBuf, PathError> {
 /// allow-list) is rejected here.
 pub fn check_read(path: &str) -> Result<PathBuf, PathError> {
     let lex = check(path)?;
-    let canonical = std::fs::canonicalize(&lex)
-        .map_err(|e| PathError::ResolveFailed(e.to_string()))?;
+    let canonical =
+        std::fs::canonicalize(&lex).map_err(|e| PathError::ResolveFailed(e.to_string()))?;
     let canonical_str = canonical
         .to_str()
         .ok_or(PathError::InvalidUtf8)?
@@ -193,8 +193,8 @@ pub fn check_write(path: &str) -> Result<(PathBuf, std::ffi::OsString), PathErro
         .file_name()
         .ok_or(PathError::OutsideAllowList)?
         .to_os_string();
-    let canonical_parent = std::fs::canonicalize(parent)
-        .map_err(|e| PathError::ResolveFailed(e.to_string()))?;
+    let canonical_parent =
+        std::fs::canonicalize(parent).map_err(|e| PathError::ResolveFailed(e.to_string()))?;
     let mut canonical_str = canonical_parent
         .to_str()
         .ok_or(PathError::InvalidUtf8)?
@@ -222,7 +222,11 @@ pub fn check_write(path: &str) -> Result<(PathBuf, std::ffi::OsString), PathErro
 /// itself is replaced (which requires write access to the parent
 /// of the parent — typically root-only on a sane host).
 #[cfg(unix)]
-pub fn write_no_follow(parent: &std::path::Path, file_name: &std::ffi::OsStr, content: &[u8]) -> std::io::Result<()> {
+pub fn write_no_follow(
+    parent: &std::path::Path,
+    file_name: &std::ffi::OsStr,
+    content: &[u8],
+) -> std::io::Result<()> {
     use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;
     let target = parent.join(file_name);
@@ -241,7 +245,11 @@ pub fn write_no_follow(parent: &std::path::Path, file_name: &std::ffi::OsStr, co
 /// compile, so this stub lets the code build there. No
 /// `O_NOFOLLOW` semantics are claimed.
 #[cfg(not(unix))]
-pub fn write_no_follow(parent: &std::path::Path, file_name: &std::ffi::OsStr, content: &[u8]) -> std::io::Result<()> {
+pub fn write_no_follow(
+    parent: &std::path::Path,
+    file_name: &std::ffi::OsStr,
+    content: &[u8],
+) -> std::io::Result<()> {
     let target = parent.join(file_name);
     std::fs::write(target, content)
 }
@@ -276,10 +284,10 @@ mod tests {
             "/etc/sudoers",
             "/etc/sudoers.d/x",
         ] {
-            assert!(matches!(
-                check(p),
-                Err(PathError::BlockedByDenyList(_))
-            ), "should block {p}");
+            assert!(
+                matches!(check(p), Err(PathError::BlockedByDenyList(_))),
+                "should block {p}"
+            );
         }
     }
 
@@ -305,11 +313,12 @@ mod tests {
 
     #[test]
     fn blocks_proc_sys_dev() {
-        for p in ["/proc/self/environ", "/sys/class/net/eth0/address", "/dev/sda"] {
-            assert!(matches!(
-                check(p),
-                Err(PathError::BlockedByDenyList(_))
-            ));
+        for p in [
+            "/proc/self/environ",
+            "/sys/class/net/eth0/address",
+            "/dev/sda",
+        ] {
+            assert!(matches!(check(p), Err(PathError::BlockedByDenyList(_))));
         }
     }
 

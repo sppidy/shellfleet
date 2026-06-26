@@ -10,12 +10,12 @@
 
 use futures_util::{AsyncBufReadExt, StreamExt};
 use k8s_openapi::api::core::v1::Pod;
-use kube::{api::LogParams, Api, Client};
+use kube::{Api, Client, api::LogParams};
 use shared::Message;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{Mutex, mpsc};
 use tokio::task::JoinHandle;
 
 const MAX_LINES_PER_CHUNK: usize = 100;

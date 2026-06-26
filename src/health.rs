@@ -34,7 +34,11 @@ struct Inner {
 impl HealthProbes {
     /// Apply a new probe set. Spawns/aborts tasks so the running set
     /// matches `probes`.
-    pub async fn sync(&self, probes: Vec<HealthProbeSpec>, tx: tokio::sync::mpsc::UnboundedSender<Message>) {
+    pub async fn sync(
+        &self,
+        probes: Vec<HealthProbeSpec>,
+        tx: tokio::sync::mpsc::UnboundedSender<Message>,
+    ) {
         let mut inner = self.inner.lock().await;
         let mut keep: HashMap<String, ()> = HashMap::with_capacity(probes.len());
         for p in probes {
@@ -91,7 +95,9 @@ async fn run_probe(spec: HealthProbeSpec, tx: tokio::sync::mpsc::UnboundedSender
     let mut last_state: Option<HealthProbeState> = None;
     // A short initial delay so a brand-new probe doesn't fire all at once
     // alongside every other probe on the host.
-    let jitter = Duration::from_millis((spec.id.bytes().fold(0u64, |a, b| a.wrapping_add(b as u64)) % 5_000) as u64);
+    let jitter = Duration::from_millis(
+        (spec.id.bytes().fold(0u64, |a, b| a.wrapping_add(b as u64)) % 5_000) as u64,
+    );
     tokio::time::sleep(jitter).await;
     loop {
         let started = Instant::now();
@@ -118,10 +124,7 @@ async fn run_probe(spec: HealthProbeSpec, tx: tokio::sync::mpsc::UnboundedSender
     }
 }
 
-async fn probe_http(
-    spec: &HealthProbeSpec,
-    timeout: Duration,
-) -> (HealthProbeState, String) {
+async fn probe_http(spec: &HealthProbeSpec, timeout: Duration) -> (HealthProbeState, String) {
     let client = match reqwest::Client::builder().timeout(timeout).build() {
         Ok(c) => c,
         Err(e) => return (HealthProbeState::Red, format!("client build: {e}")),
@@ -136,10 +139,7 @@ async fn probe_http(
         None => resp.status().is_success(),
     };
     if !status_ok {
-        return (
-            HealthProbeState::Red,
-            format!("unexpected status {status}"),
-        );
+        return (HealthProbeState::Red, format!("unexpected status {status}"));
     }
     if let Some(want_body) = &spec.expect_body {
         let body = match resp.text().await {
@@ -156,10 +156,7 @@ async fn probe_http(
     (HealthProbeState::Green, format!("ok ({status})"))
 }
 
-async fn probe_tcp(
-    spec: &HealthProbeSpec,
-    timeout: Duration,
-) -> (HealthProbeState, String) {
+async fn probe_tcp(spec: &HealthProbeSpec, timeout: Duration) -> (HealthProbeState, String) {
     let target = spec.target.clone();
     let connect = tokio::net::TcpStream::connect(target);
     match tokio::time::timeout(timeout, connect).await {
@@ -172,21 +169,16 @@ async fn probe_tcp(
     }
 }
 
-async fn probe_exec(
-    spec: &HealthProbeSpec,
-    timeout: Duration,
-) -> (HealthProbeState, String) {
+async fn probe_exec(spec: &HealthProbeSpec, timeout: Duration) -> (HealthProbeState, String) {
     // Reject anything that looks like a path. Operator scripts must
     // live in /etc/shellfleet/probes.d/<filename>.
     let target = spec.target.trim();
-    if target.is_empty()
-        || target.contains('/')
-        || target.contains('\\')
-        || target.contains("..")
-    {
+    if target.is_empty() || target.contains('/') || target.contains('\\') || target.contains("..") {
         return (
             HealthProbeState::Red,
-            format!("invalid exec target {target:?} (must be a filename in /etc/shellfleet/probes.d/)"),
+            format!(
+                "invalid exec target {target:?} (must be a filename in /etc/shellfleet/probes.d/)"
+            ),
         );
     }
     let path = probes_dir().join(target);
@@ -243,7 +235,13 @@ async fn probe_exec(
             if !first_line.is_empty() {
                 first_line
             } else {
-                stderr.lines().next().unwrap_or("").chars().take(200).collect::<String>()
+                stderr
+                    .lines()
+                    .next()
+                    .unwrap_or("")
+                    .chars()
+                    .take(200)
+                    .collect::<String>()
             }
         );
         (HealthProbeState::Red, detail)

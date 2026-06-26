@@ -270,7 +270,14 @@ struct ServicePsRow {
 
 pub async fn service_ps(name: &str) -> Result<Vec<SwarmTask>, String> {
     let output = Command::new("docker")
-        .args(["service", "ps", name, "--format", "{{json .}}", "--no-trunc"])
+        .args([
+            "service",
+            "ps",
+            name,
+            "--format",
+            "{{json .}}",
+            "--no-trunc",
+        ])
         .output()
         .await
         .map_err(|e| format!("docker spawn: {e}"))?;
@@ -311,8 +318,8 @@ pub async fn service_inspect(name: &str) -> Result<SwarmServiceSpecSummary, Stri
         return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let value: serde_json::Value = serde_json::from_str(&stdout)
-        .map_err(|e| format!("parse inspect json: {e}"))?;
+    let value: serde_json::Value =
+        serde_json::from_str(&stdout).map_err(|e| format!("parse inspect json: {e}"))?;
     let inspect = value
         .as_array()
         .and_then(|a| a.first())
@@ -344,7 +351,11 @@ pub async fn service_inspect(name: &str) -> Result<SwarmServiceSpecSummary, Stri
 
     let env: Vec<String> = container_spec["Env"]
         .as_array()
-        .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
         .unwrap_or_default();
     let mounts: Vec<String> = container_spec["Mounts"]
         .as_array()
@@ -369,7 +380,11 @@ pub async fn service_inspect(name: &str) -> Result<SwarmServiceSpecSummary, Stri
         .unwrap_or_default();
     let constraints: Vec<String> = task_template["Placement"]["Constraints"]
         .as_array()
-        .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
         .unwrap_or_default();
     let published_ports: Vec<String> = spec["EndpointSpec"]["Ports"]
         .as_array()
@@ -423,7 +438,9 @@ pub async fn stack_deploy(
         cmd.arg("--prune");
     }
     cmd.arg(stack_name);
-    cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    cmd.stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
 
     let mut child = match cmd.spawn() {
         Ok(c) => c,
@@ -492,7 +509,6 @@ pub async fn list_swarm_nodes() -> Result<Vec<SwarmNode>, String> {
     Ok(out)
 }
 
-
 // ---------- images (v11) ----------
 
 pub async fn list_images() -> Result<Vec<shared::DockerImage>, String> {
@@ -500,12 +516,7 @@ pub async fn list_images() -> Result<Vec<shared::DockerImage>, String> {
     // image, ndjson-style. We parse defensively and skip rows that
     // don't deserialise.
     let output = match Command::new("docker")
-        .args([
-            "images",
-            "--no-trunc",
-            "--format",
-            "{{json .}}",
-        ])
+        .args(["images", "--no-trunc", "--format", "{{json .}}"])
         .output()
         .await
     {
@@ -691,7 +702,9 @@ pub async fn list_networks() -> Result<Vec<shared::DockerNetwork>, String> {
         if line.trim().is_empty() {
             continue;
         }
-        let Ok(row) = serde_json::from_str::<Row>(line) else { continue };
+        let Ok(row) = serde_json::from_str::<Row>(line) else {
+            continue;
+        };
         out.push(shared::DockerNetwork {
             id: row.id,
             name: row.name,
@@ -755,7 +768,15 @@ pub async fn create_network(
         let id = String::from_utf8_lossy(&output.stdout).trim().to_string();
         (true, Some(id), log, None)
     } else {
-        (false, None, log, Some(format!("docker network create exit {:?}", output.status.code())))
+        (
+            false,
+            None,
+            log,
+            Some(format!(
+                "docker network create exit {:?}",
+                output.status.code()
+            )),
+        )
     }
 }
 
@@ -811,7 +832,9 @@ pub async fn list_volumes() -> Result<Vec<shared::DockerVolume>, String> {
         if line.trim().is_empty() {
             continue;
         }
-        let Ok(row) = serde_json::from_str::<Row>(line) else { continue };
+        let Ok(row) = serde_json::from_str::<Row>(line) else {
+            continue;
+        };
         out.push(shared::DockerVolume {
             name: row.name,
             driver: row.driver,
@@ -871,7 +894,15 @@ pub async fn prune_volumes() -> (bool, Vec<String>, u64, String, Option<String>)
         .await
     {
         Ok(o) => o,
-        Err(e) => return (false, Vec::new(), 0, String::new(), Some(format!("spawn: {e}"))),
+        Err(e) => {
+            return (
+                false,
+                Vec::new(),
+                0,
+                String::new(),
+                Some(format!("spawn: {e}")),
+            );
+        }
     };
     let log = combine_stdout_stderr(&output);
     if !output.status.success() {
@@ -880,7 +911,10 @@ pub async fn prune_volumes() -> (bool, Vec<String>, u64, String, Option<String>)
             Vec::new(),
             0,
             log,
-            Some(format!("docker volume prune exit {:?}", output.status.code())),
+            Some(format!(
+                "docker volume prune exit {:?}",
+                output.status.code()
+            )),
         );
     }
     let mut removed = Vec::new();
@@ -934,7 +968,9 @@ pub async fn list_stacks() -> Result<Vec<shared::SwarmStack>, String> {
         if line.trim().is_empty() {
             continue;
         }
-        let Ok(row) = serde_json::from_str::<Row>(line) else { continue };
+        let Ok(row) = serde_json::from_str::<Row>(line) else {
+            continue;
+        };
         out.push(shared::SwarmStack {
             name: row.name,
             services: row.services.parse().unwrap_or(0),
@@ -977,7 +1013,9 @@ pub async fn stack_services(name: &str) -> Result<Vec<shared::SwarmService>, Str
         if line.trim().is_empty() {
             continue;
         }
-        let Ok(row) = serde_json::from_str::<Row>(line) else { continue };
+        let Ok(row) = serde_json::from_str::<Row>(line) else {
+            continue;
+        };
         out.push(shared::SwarmService {
             id: row.id,
             name: row.name,
@@ -1025,7 +1063,9 @@ pub async fn stack_tasks(name: &str) -> Result<Vec<shared::SwarmTask>, String> {
         if line.trim().is_empty() {
             continue;
         }
-        let Ok(row) = serde_json::from_str::<Row>(line) else { continue };
+        let Ok(row) = serde_json::from_str::<Row>(line) else {
+            continue;
+        };
         out.push(shared::SwarmTask {
             id: row.id,
             name: row.name,
@@ -1177,7 +1217,10 @@ pub async fn system_prune_apply(prune_volumes: bool) -> PruneOutcome {
         error: if success {
             None
         } else {
-            Some(format!("docker system prune exit {:?}", output.status.code()))
+            Some(format!(
+                "docker system prune exit {:?}",
+                output.status.code()
+            ))
         },
         ..Default::default()
     };
@@ -1262,7 +1305,9 @@ pub async fn container_stats() -> Result<Vec<shared::DockerContainerStats>, Stri
         if line.trim().is_empty() {
             continue;
         }
-        let Ok(row) = serde_json::from_str::<Row>(line) else { continue };
+        let Ok(row) = serde_json::from_str::<Row>(line) else {
+            continue;
+        };
         // CPU % comes as "12.34%". Mem usage as "123.4MiB / 1.234GiB".
         let cpu_percent = row
             .cpu_perc

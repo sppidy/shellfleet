@@ -3,9 +3,9 @@
 //! listing existing archives at a destination and restoring a named
 //! archive to an operator-chosen root path.
 
+use aws_sdk_s3::Client as S3Client;
 use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::types::{CompletedMultipartUpload, CompletedPart};
-use aws_sdk_s3::Client as S3Client;
 use shared::{BackupArchive, BackupMode};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -50,7 +50,10 @@ pub fn parse_dest(dest: &str) -> Result<Dest, String> {
         if bucket.is_empty() {
             return Err("s3 dest must include a bucket".into());
         }
-        return Ok(Dest::S3 { bucket, prefix: prefix.trim_end_matches('/').to_string() });
+        return Ok(Dest::S3 {
+            bucket,
+            prefix: prefix.trim_end_matches('/').to_string(),
+        });
     }
     if let Some(rest) = trimmed.strip_prefix("file://") {
         return Ok(Dest::Local(PathBuf::from(rest)));
@@ -78,11 +81,7 @@ fn backup_roots() -> Option<Vec<PathBuf>> {
         .filter(|s| !s.is_empty())
         .map(PathBuf::from)
         .collect();
-    if roots.is_empty() {
-        None
-    } else {
-        Some(roots)
-    }
+    if roots.is_empty() { None } else { Some(roots) }
 }
 
 /// Lexically resolve `.`/`..` without touching the filesystem so a
@@ -310,7 +309,13 @@ pub async fn run_backup(
         Err(e) => return (false, String::new(), 0, String::new(), Some(e)),
     };
     if paths.is_empty() {
-        return (false, String::new(), 0, String::new(), Some("paths is empty".into()));
+        return (
+            false,
+            String::new(),
+            0,
+            String::new(),
+            Some("paths is empty".into()),
+        );
     }
     let mut log = String::new();
     let mut existing: Vec<String> = Vec::new();
@@ -320,7 +325,13 @@ pub async fn run_backup(
         }
     }
     if existing.is_empty() {
-        return (false, String::new(), 0, log, Some("no requested paths exist on this host".into()));
+        return (
+            false,
+            String::new(),
+            0,
+            log,
+            Some("no requested paths exist on this host".into()),
+        );
     }
     // Confine sources to the allow-list when one is configured.
     if let Some(roots) = backup_roots() {
@@ -376,7 +387,13 @@ pub async fn run_backup(
             let output = match cmd.output().await {
                 Ok(o) => o,
                 Err(e) => {
-                    return (false, String::new(), 0, log, Some(format!("spawn tar: {e}")));
+                    return (
+                        false,
+                        String::new(),
+                        0,
+                        log,
+                        Some(format!("spawn tar: {e}")),
+                    );
                 }
             };
             if !output.stdout.is_empty() {
@@ -396,8 +413,14 @@ pub async fn run_backup(
                     Some(format!("tar exit {:?}", output.status.code())),
                 );
             }
-            let bytes = std::fs::metadata(&archive_path).map(|m| m.len()).unwrap_or(0);
-            log.push_str(&format!("wrote {} ({} bytes)\n", archive_path.display(), bytes));
+            let bytes = std::fs::metadata(&archive_path)
+                .map(|m| m.len())
+                .unwrap_or(0);
+            log.push_str(&format!(
+                "wrote {} ({} bytes)\n",
+                archive_path.display(),
+                bytes
+            ));
             truncate(&mut log, LOG_CAP);
             (true, archive_path.display().to_string(), bytes, log, None)
         }
@@ -438,7 +461,13 @@ pub async fn run_backup(
             let tar_out = match tar_cmd.output().await {
                 Ok(o) => o,
                 Err(e) => {
-                    return (false, String::new(), 0, log, Some(format!("spawn tar: {e}")));
+                    return (
+                        false,
+                        String::new(),
+                        0,
+                        log,
+                        Some(format!("spawn tar: {e}")),
+                    );
                 }
             };
             if !tar_out.stderr.is_empty() {
@@ -488,9 +517,7 @@ pub async fn run_backup(
 
 /// Enumerate `*.tar.gz` archives at the destination. Returns
 /// (success, archives, error).
-pub async fn list_archives(
-    dest: &str,
-) -> (bool, Vec<BackupArchive>, Option<String>) {
+pub async fn list_archives(dest: &str) -> (bool, Vec<BackupArchive>, Option<String>) {
     let parsed = match parse_dest(dest) {
         Ok(p) => p,
         Err(e) => return (false, Vec::new(), Some(e)),
@@ -592,10 +619,7 @@ pub async fn list_archives(
 
 /// Restore a single archive (tar.gz) into `dest_root` on the agent.
 /// Returns (success, log, error).
-pub async fn restore(
-    archive_uri: &str,
-    dest_root: &str,
-) -> (bool, String, Option<String>) {
+pub async fn restore(archive_uri: &str, dest_root: &str) -> (bool, String, Option<String>) {
     let dest_root_trim = dest_root.trim();
     if dest_root_trim.is_empty() {
         return (false, String::new(), Some("dest_root is empty".into()));
@@ -638,13 +662,7 @@ pub async fn restore(
         }
 
         let client = s3_client().await;
-        let get = match client
-            .get_object()
-            .bucket(&bucket)
-            .key(&key)
-            .send()
-            .await
-        {
+        let get = match client.get_object().bucket(&bucket).key(&key).send().await {
             Ok(o) => o,
             Err(e) => return (false, log, Some(format!("GetObject: {}", aws_sdk_err(&e)))),
         };
@@ -767,7 +785,11 @@ pub async fn restore(
         }
         truncate(&mut log, LOG_CAP);
         if !output.status.success() {
-            return (false, log, Some(format!("tar exit {:?}", output.status.code())));
+            return (
+                false,
+                log,
+                Some(format!("tar exit {:?}", output.status.code())),
+            );
         }
         log.push_str(&format!("restored {local} into {dest_root_trim}\n"));
         truncate(&mut log, LOG_CAP);
@@ -781,8 +803,14 @@ mod tests {
 
     #[test]
     fn normalize_resolves_dotdot() {
-        assert_eq!(normalize_lexical(Path::new("/srv/data/../etc")), PathBuf::from("/srv/etc"));
-        assert_eq!(normalize_lexical(Path::new("/a/./b")), PathBuf::from("/a/b"));
+        assert_eq!(
+            normalize_lexical(Path::new("/srv/data/../etc")),
+            PathBuf::from("/srv/etc")
+        );
+        assert_eq!(
+            normalize_lexical(Path::new("/a/./b")),
+            PathBuf::from("/a/b")
+        );
     }
 
     #[test]
@@ -804,7 +832,10 @@ mod tests {
     fn parse_dest_round_trips() {
         assert!(matches!(parse_dest("/var/x"), Ok(Dest::Local(_))));
         assert!(matches!(parse_dest("file:///var/x"), Ok(Dest::Local(_))));
-        assert!(matches!(parse_dest("s3://bucket/prefix"), Ok(Dest::S3 { .. })));
+        assert!(matches!(
+            parse_dest("s3://bucket/prefix"),
+            Ok(Dest::S3 { .. })
+        ));
         assert!(parse_dest("s3://").is_err());
         assert!(parse_dest("ftp://x").is_err());
     }
