@@ -1,6 +1,6 @@
 use axum::{
     extract::{Request, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     middleware::Next,
     response::{IntoResponse, Response},
 };
@@ -8,12 +8,43 @@ use sha2::{Digest, Sha256};
 use std::sync::Arc;
 
 use crate::AppState;
+use sqlx::SqlitePool;
+
+/// Same semantics as ee/src/acl.rs:matches_action:
+/// - `*` matches any action
+/// - `prefix:*` matches any action starting with `prefix:`
+/// - Everything else requires an exact match.
+fn matches_action(pattern: &str, action: &str) -> bool {
+    if pattern == "*" {
+        return true;
+    }
+    if pattern.ends_with(":*") {
+        let prefix = &pattern[..pattern.len() - 1];
+        return action.starts_with(prefix);
+    }
+    pattern == action
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct IamStatement {
+    effect: String,
+    actions: String,  // JSON array string
+    resources: String, // JSON array string
+}
 
 pub async fn middleware(
     State(state): State<Arc<AppState>>,
     mut req: Request,
     next: Next,
 ) -> Response {
+    // Strip any client-supplied x-api-key-* headers so they can only be
+    // injected below by a valid sf_live_ key lookup. Non-API-key requests
+    // reach handlers with no x-api-key-* headers present.
+    let strip_headers = req.headers_mut();
+    strip_headers.remove("x-api-key-login");
+    strip_headers.remove("x-api-key-role");
+    strip_headers.remove("x-api-key-policy-id");
+
     let auth_header = req
         .headers()
         .get(axum::http::header::AUTHORIZATION)
@@ -97,4 +128,80 @@ pub async fn middleware(
     }
 
     next.run(req).await
+}
+
+/// Check that the API key's bound IAM policy allows `required_action`.
+/// Null policy_id → skip (role-based fallback, unchanged).
+pub async fn require_key_action(
+    headers: &HeaderMap,
+    pool: &SqlitePool,
+    required_action: &str,
+) -> Result<(), (StatusCode, String)> {
+    let policy_id = headers
+        .get("x-api-key-policy-id")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<i64>().ok());
+    let Some(pid) = policy_id else { return Ok(()); };
+
+    let rows = sqlx::query_as::<_, IamStatement>(
+        "SELECT effect, actions, resources FROM ee_iam_statements WHERE policy_id = ?1"
+    ).bind(pid).fetch_all(pool).await.map_err(|_|
+        (StatusCode::INTERNAL_SERVER_ERROR, "failed to load policy statements".into())
+    )?;
+
+    // Fail closed: exactly `["*"]` resources accepted. Malformed, empty,
+    // or mixed resources → 500.
+    for row in &rows {
+        let resources: Vec<String> = match serde_json::from_str(&row.resources) {
+            Ok(r) => r,
+            Err(_) => return Err((StatusCode::INTERNAL_SERVER_ERROR, "malformed policy resources".into())),
+        };
+        if resources.len() != 1 || resources[0] != "*" {
+            return Err((StatusCode::INTERNAL_SERVER_ERROR, "resource-constrained policies cannot bind to API keys".into()));
+        }
+    }
+
+    // Deny takes precedence, then allow. Default-deny. Malformed actions
+    // fail closed so a broken Deny row is never silently ignored.
+    let mut allowed = false;
+    for row in &rows {
+        let actions: Vec<String> = match serde_json::from_str(&row.actions) {
+            Ok(a) => a,
+            Err(_) => return Err((StatusCode::INTERNAL_SERVER_ERROR, "malformed policy actions".into())),
+        };
+        let matches = actions.iter().any(|a| matches_action(a, required_action));
+        if matches {
+            match row.effect.as_str() {
+                "Deny" => return Err((StatusCode::FORBIDDEN, format!("API key scope '{required_action}' is denied by its bound policy"))),
+                "Allow" => allowed = true,
+                _ => {}
+            }
+        }
+    }
+    if allowed { Ok(()) } else { Err((StatusCode::FORBIDDEN, format!("API key scope '{required_action}' is not permitted by its bound policy"))) }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn matches_action_wildcard_any() {
+        assert!(matches_action("*", "agent:View"));
+        assert!(matches_action("*", "k8s:Delete"));
+    }
+
+    #[test]
+    fn matches_action_prefix_star() {
+        assert!(matches_action("agent:*", "agent:View"));
+        assert!(matches_action("agent:*", "agent:Terminal"));
+        assert!(matches_action("backup:*", "backup:Run"));
+        assert!(!matches_action("agent:*", "k8s:List"));
+    }
+
+    #[test]
+    fn matches_action_exact() {
+        assert!(matches_action("k8s:List", "k8s:List"));
+        assert!(!matches_action("k8s:List", "k8s:Describe"));
+    }
 }
