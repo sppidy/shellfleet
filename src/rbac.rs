@@ -20,6 +20,12 @@ use std::sync::Arc;
 
 use crate::{auth, AppState};
 
+/// Exact-or-`/`-bounded match for the api-keys route, post-`/api`-strip form.
+/// Never a bare `starts_with("/ee/keys")` (would swallow `/ee/keys-extra`).
+fn is_api_keys_path(path: &str) -> bool {
+    path == "/ee/keys" || path.starts_with("/ee/keys/")
+}
+
 fn is_mutating(method: &Method) -> bool {
     matches!(
         *method,
@@ -103,7 +109,11 @@ pub async fn middleware(
         }
     }
 
-    if is_mutating(&method) {
+    // Per-user API key self-service: viewers may create/revoke/update their OWN
+    // keys. EE scopes every mutation by the CE-injected login, so this only
+    // lets a viewer manage their own keys — never escalation. All other guards
+    // (auth, session-epoch, MFA above) still applied.
+    if is_mutating(&method) && !is_api_keys_path(&path) {
         let role_str = user_row
             .as_ref()
             .map(|r| r.role.clone())
@@ -114,4 +124,18 @@ pub async fn middleware(
     }
 
     next.run(req).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_api_keys_path;
+
+    #[test]
+    fn matches_keys_routes_segment_bounded() {
+        assert!(is_api_keys_path("/ee/keys"));
+        assert!(is_api_keys_path("/ee/keys/1"));
+        assert!(!is_api_keys_path("/ee/keys-extra"));
+        assert!(!is_api_keys_path("/ee/keysX"));
+        assert!(!is_api_keys_path("/ee/metrics/panels"));
+    }
 }
