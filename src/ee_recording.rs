@@ -7,13 +7,17 @@
 
 use std::collections::HashMap;
 use std::time::Duration;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{Mutex, mpsc};
 
 /// Recording is opt-in (default off) and only when the EE sidecar is active.
 pub fn enabled() -> bool {
     crate::ee::ee_active()
         && matches!(
-            std::env::var("EE_RECORD_TERMINALS").unwrap_or_default().trim().to_ascii_lowercase().as_str(),
+            std::env::var("EE_RECORD_TERMINALS")
+                .unwrap_or_default()
+                .trim()
+                .to_ascii_lowercase()
+                .as_str(),
             "1" | "true" | "yes" | "on"
         )
 }
@@ -28,12 +32,24 @@ fn b64(data: &[u8]) -> String {
     const A: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
     for chunk in data.chunks(3) {
-        let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
+        let b = [
+            chunk[0],
+            *chunk.get(1).unwrap_or(&0),
+            *chunk.get(2).unwrap_or(&0),
+        ];
         let n = ((b[0] as u32) << 16) | ((b[1] as u32) << 8) | b[2] as u32;
         out.push(A[((n >> 18) & 63) as usize] as char);
         out.push(A[((n >> 12) & 63) as usize] as char);
-        out.push(if chunk.len() > 1 { A[((n >> 6) & 63) as usize] as char } else { '=' });
-        out.push(if chunk.len() > 2 { A[(n & 63) as usize] as char } else { '=' });
+        out.push(if chunk.len() > 1 {
+            A[((n >> 6) & 63) as usize] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            A[(n & 63) as usize] as char
+        } else {
+            '='
+        });
     }
     out
 }
@@ -57,7 +73,9 @@ impl Recorder {
         if !enabled() || session_id.is_empty() {
             return;
         }
-        let Some(url) = crate::ee::ee_sidecar_url() else { return };
+        let Some(url) = crate::ee::ee_sidecar_url() else {
+            return;
+        };
         let mut map = self.sessions.lock().await;
         if map.contains_key(session_id) {
             return;
@@ -108,7 +126,13 @@ async fn drain(
         let c = client.clone();
         let s = secret.clone();
         async move {
-            let _ = c.post(path).bearer_auth(&s).json(&body).timeout(Duration::from_secs(5)).send().await;
+            let _ = c
+                .post(path)
+                .bearer_auth(&s)
+                .json(&body)
+                .timeout(Duration::from_secs(5))
+                .send()
+                .await;
         }
     };
 

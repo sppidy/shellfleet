@@ -4,7 +4,7 @@
 //! does and what env vars it understands, so the operator can pick
 //! one from a dropdown instead of remembering script names.
 
-use axum::{response::IntoResponse, routing::get, Json, Router};
+use axum::{Json, Router, response::IntoResponse, routing::get};
 use serde::Serialize;
 use std::sync::Arc;
 

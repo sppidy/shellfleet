@@ -1,15 +1,15 @@
 use axum::{
+    Router,
     extract::{Path, State},
     http::StatusCode,
     response::{IntoResponse, Redirect},
     routing::{delete, get},
-    Router,
 };
 use axum_extra::extract::cookie::CookieJar;
 use serde::Deserialize;
 use std::sync::Arc;
 
-use crate::{auth, db, AppState};
+use crate::{AppState, auth, db};
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
@@ -36,8 +36,12 @@ struct CreateRequest {
     ttl_hours: i64,
 }
 
-fn default_role() -> String { "viewer".into() }
-fn default_ttl() -> i64 { 24 }
+fn default_role() -> String {
+    "viewer".into()
+}
+fn default_ttl() -> i64 {
+    24
+}
 
 async fn create_invite(
     jar: CookieJar,
@@ -64,15 +68,25 @@ async fn create_invite(
     match db::create_invite(&state.db, &code, role, &claims.sub, expires_at).await {
         Ok(_) => {
             db::record_audit(
-                &state.db, now, Some(&claims.sub), None,
-                "invite.created", true, Some(&format!("code={code} role={role}")),
-            ).await;
-            (StatusCode::CREATED, axum::Json(serde_json::json!({
-                "code": code,
-                "role": role,
-                "expires_at": expires_at,
-                "url": format!("/invite/{code}"),
-            }))).into_response()
+                &state.db,
+                now,
+                Some(&claims.sub),
+                None,
+                "invite.created",
+                true,
+                Some(&format!("code={code} role={role}")),
+            )
+            .await;
+            (
+                StatusCode::CREATED,
+                axum::Json(serde_json::json!({
+                    "code": code,
+                    "role": role,
+                    "expires_at": expires_at,
+                    "url": format!("/invite/{code}"),
+                })),
+            )
+                .into_response()
         }
         Err(e) => {
             tracing::error!(error = %e, "create invite failed");
@@ -81,10 +95,7 @@ async fn create_invite(
     }
 }
 
-async fn list_invites(
-    jar: CookieJar,
-    State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
+async fn list_invites(jar: CookieJar, State(state): State<Arc<AppState>>) -> impl IntoResponse {
     if !crate::ee::ee_active() {
         return (StatusCode::NOT_FOUND, "requires Enterprise Edition").into_response();
     }
@@ -143,11 +154,16 @@ async fn accept_invite(
                 // Redeem the invite for this user
                 let _ = db::redeem_invite(&state.db, &code, &claims.sub).await;
                 db::record_audit(
-                    &state.db, now, Some(&claims.sub), None,
-                    "invite.redeemed", true, Some(&format!("code={code}")),
-                ).await;
-                let ui_url = std::env::var("UI_URL")
-                    .unwrap_or_else(|_| "/".into());
+                    &state.db,
+                    now,
+                    Some(&claims.sub),
+                    None,
+                    "invite.redeemed",
+                    true,
+                    Some(&format!("code={code}")),
+                )
+                .await;
+                let ui_url = std::env::var("UI_URL").unwrap_or_else(|_| "/".into());
                 return Redirect::temporary(&ui_url).into_response();
             }
         }

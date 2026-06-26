@@ -50,12 +50,15 @@ fn is_mutating(method: &Method) -> bool {
 fn set_csrf_cookie(resp: &mut Response<Body>, token: &str) {
     // Strict, Path=/, NOT HttpOnly so the SPA can read it. Reuse the same
     // COOKIE_SECURE logic as the session cookies so they never disagree.
-    let secure_attr = if crate::auth::cookie_secure() { "; Secure" } else { "" };
-    let value = format!(
-        "{CSRF_COOKIE}={token}; Path=/; SameSite=Strict{secure_attr}"
-    );
+    let secure_attr = if crate::auth::cookie_secure() {
+        "; Secure"
+    } else {
+        ""
+    };
+    let value = format!("{CSRF_COOKIE}={token}; Path=/; SameSite=Strict{secure_attr}");
     if let Ok(hv) = HeaderValue::from_str(&value) {
-        resp.headers_mut().append(axum::http::header::SET_COOKIE, hv);
+        resp.headers_mut()
+            .append(axum::http::header::SET_COOKIE, hv);
     }
 }
 

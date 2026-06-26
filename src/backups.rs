@@ -4,11 +4,11 @@
 //! so the UI can show last_status/last_archive_path/last_bytes/last_log.
 
 use axum::{
+    Json, Router,
     extract::{Path, State},
     http::StatusCode,
     response::IntoResponse,
     routing::{delete, get, post},
-    Json, Router,
 };
 use axum_extra::extract::cookie::CookieJar;
 use serde::{Deserialize, Serialize};
@@ -16,7 +16,7 @@ use shared::{BackupMode, Message};
 use std::str::FromStr;
 use std::sync::Arc;
 
-use crate::{auth::verify_token, db, AppState};
+use crate::{AppState, auth::verify_token, db};
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
@@ -128,10 +128,7 @@ fn require_auth(jar: &CookieJar) -> Option<String> {
     }
 }
 
-async fn list_handler(
-    jar: CookieJar,
-    State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
+async fn list_handler(jar: CookieJar, State(state): State<Arc<AppState>>) -> impl IntoResponse {
     if require_auth(&jar).is_none() {
         return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
     }
@@ -172,7 +169,10 @@ async fn upsert_handler(
     let paths_json = match serde_json::to_string(&body.paths) {
         Ok(s) => s,
         Err(e) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, format!("encode paths: {e}"))
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("encode paths: {e}"),
+            )
                 .into_response();
         }
     };
@@ -186,7 +186,11 @@ async fn upsert_handler(
         &body.dest,
         cron_for_db,
         body.enabled,
-        if body.mode == "restic" { "restic" } else { "tar" },
+        if body.mode == "restic" {
+            "restic"
+        } else {
+            "tar"
+        },
         now,
     )
     .await
@@ -355,7 +359,13 @@ async fn list_archives_handler(
             return (StatusCode::REQUEST_TIMEOUT, "timeout waiting for agent").into_response();
         }
     };
-    if let Message::BackupListArchivesResponse { success, archives, error, .. } = resp {
+    if let Message::BackupListArchivesResponse {
+        success,
+        archives,
+        error,
+        ..
+    } = resp
+    {
         if !success {
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -392,7 +402,11 @@ async fn restore_handler(
         return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
     };
     if body.archive_uri.is_empty() || body.dest_root.is_empty() {
-        return (StatusCode::BAD_REQUEST, "archive_uri and dest_root required").into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            "archive_uri and dest_root required",
+        )
+            .into_response();
     }
     let row = match db::get_backup_job(&state.db, id).await {
         Ok(Some(r)) => r,
@@ -439,7 +453,13 @@ async fn restore_handler(
             return (StatusCode::REQUEST_TIMEOUT, "timeout waiting for agent").into_response();
         }
     };
-    if let Message::BackupRestoreResponse { success, log, error, .. } = resp {
+    if let Message::BackupRestoreResponse {
+        success,
+        log,
+        error,
+        ..
+    } = resp
+    {
         db::record_audit(
             &state.db,
             crate::now_unix(),
@@ -453,7 +473,12 @@ async fn restore_handler(
             )),
         )
         .await;
-        Json(RestoreOut { success, log, error }).into_response()
+        Json(RestoreOut {
+            success,
+            log,
+            error,
+        })
+        .into_response()
     } else {
         (StatusCode::INTERNAL_SERVER_ERROR, "unexpected message").into_response()
     }
@@ -493,7 +518,11 @@ async fn scheduler_tick(state: &AppState) -> Result<(), sqlx::Error> {
         } else {
             chrono::DateTime::<chrono::Utc>::from_timestamp(row.updated_at, 0).unwrap_or(now)
         };
-        let due = schedule.after(&last).next().map(|t| t <= now).unwrap_or(false);
+        let due = schedule
+            .after(&last)
+            .next()
+            .map(|t| t <= now)
+            .unwrap_or(false);
         if !due {
             continue;
         }
@@ -504,7 +533,8 @@ async fn scheduler_tick(state: &AppState) -> Result<(), sqlx::Error> {
         };
         drop(agents);
         let now_unix = crate::now_unix();
-        let _ = db::record_backup_job_result(&state.db, row.id, now_unix, "running", "", 0, "").await;
+        let _ =
+            db::record_backup_job_result(&state.db, row.id, now_unix, "running", "", 0, "").await;
         let paths: Vec<String> = serde_json::from_str(&row.paths_json).unwrap_or_default();
         let req = Message::BackupRunRequest {
             id: row.id.to_string(),

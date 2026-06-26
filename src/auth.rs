@@ -21,14 +21,14 @@
 //! and `mfa = true`. CSRF is similarly disabled in main.
 
 use axum::{
+    Router,
     extract::{Query, State},
     http::StatusCode,
     response::{IntoResponse, Redirect, Response},
     routing::get,
-    Router,
 };
 use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
-use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
+use jsonwebtoken::{DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use std::env;
@@ -217,7 +217,11 @@ pub fn assert_jwt_secret_present() {
 
 fn dev_flag_set() -> bool {
     matches!(
-        env::var("SHELLFLEET_DEV").unwrap_or_default().trim().to_ascii_lowercase().as_str(),
+        env::var("SHELLFLEET_DEV")
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase()
+            .as_str(),
         "1" | "true" | "yes" | "on"
     )
 }
@@ -256,12 +260,17 @@ async fn login_handler(jar: CookieJar, Query(q): Query<LoginQuery>) -> impl Into
         jar = jar.add(cookie);
     }
 
-    if crate::ee::ee_active() && env::var("EE_OIDC_ISSUER").ok().filter(|s| !s.is_empty()).is_some() {
+    if crate::ee::ee_active()
+        && env::var("EE_OIDC_ISSUER")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .is_some()
+    {
         let ee_public = env::var("EE_PUBLIC_URL")
             .or_else(|_| env::var("UI_URL"))
             .unwrap_or_else(|_| "https://dashboard.example.com".to_string());
-        let ui_url = env::var("UI_URL")
-            .unwrap_or_else(|_| "https://dashboard.example.com/".to_string());
+        let ui_url =
+            env::var("UI_URL").unwrap_or_else(|_| "https://dashboard.example.com/".to_string());
         let sso_url = format!(
             "{}/auth/sso/login?redirect_uri={}",
             ee_public.trim_end_matches('/'),
@@ -299,10 +308,7 @@ async fn login_handler(jar: CookieJar, Query(q): Query<LoginQuery>) -> impl Into
     (jar.add(cookie), Redirect::temporary(&redirect_url)).into_response()
 }
 
-async fn logout_handler(
-    jar: CookieJar,
-    State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
+async fn logout_handler(jar: CookieJar, State(state): State<Arc<AppState>>) -> impl IntoResponse {
     // Best-effort: bump the session epoch so the JWT we just dropped
     // can't be replayed. Reads the cookie before clearing it.
     if let Some(cookie) = jar.get("auth_token") {
@@ -318,7 +324,8 @@ async fn logout_handler(
         .build();
     cookie.make_removal();
 
-    let ui_url = env::var("UI_URL").unwrap_or_else(|_| "https://dashboard.example.com/".to_string());
+    let ui_url =
+        env::var("UI_URL").unwrap_or_else(|_| "https://dashboard.example.com/".to_string());
     let login_url = format!("{}login", ui_url);
     (jar.add(cookie), Redirect::temporary(&login_url)).into_response()
 }
@@ -414,7 +421,10 @@ async fn callback_handler(
         Ok(res) => res,
         Err(e) => {
             tracing::error!(error = %e, "failed to exchange oauth code");
-            return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to get access token")
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to get access token",
+            )
                 .into_response();
         }
     };
@@ -452,7 +462,10 @@ async fn callback_handler(
         Ok(res) => res,
         Err(e) => {
             tracing::error!(error = %e, "failed to fetch github user");
-            return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to get user profile")
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to get user profile",
+            )
                 .into_response();
         }
     };
@@ -467,7 +480,10 @@ async fn callback_handler(
         Ok(data) => data,
         Err(e) => {
             tracing::error!(error = %e, "failed to parse github user");
-            return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to parse user profile")
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to parse user profile",
+            )
                 .into_response();
         }
     };
@@ -507,13 +523,14 @@ async fn callback_handler(
         None
     };
 
-    let default_role = if user_count == 0 || bootstrap_admin.as_deref() == Some(user_data.login.as_str()) {
-        "admin"
-    } else if let Some(ref r) = invite_role {
-        r.as_str()
-    } else {
-        "viewer"
-    };
+    let default_role =
+        if user_count == 0 || bootstrap_admin.as_deref() == Some(user_data.login.as_str()) {
+            "admin"
+        } else if let Some(ref r) = invite_role {
+            r.as_str()
+        } else {
+            "viewer"
+        };
 
     let seat_cap = crate::db::seat_limit(&state.db).await;
     let upsert = match crate::db::upsert_login_with_seat_check(
@@ -576,13 +593,17 @@ async fn callback_handler(
         Ok(t) => t,
         Err(e) => {
             tracing::error!(error = %e, "failed to encode jwt");
-            return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to issue session token")
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to issue session token",
+            )
                 .into_response();
         }
     };
 
     let cookie = build_session_cookie(token);
-    let ui_url = env::var("UI_URL").unwrap_or_else(|_| "https://dashboard.example.com/".to_string());
+    let ui_url =
+        env::var("UI_URL").unwrap_or_else(|_| "https://dashboard.example.com/".to_string());
     let dest = format!("{ui_url}{redirect_path}");
 
     // Burn the OAuth state cookie now that we've consumed it.
@@ -597,12 +618,21 @@ async fn callback_handler(
     // Redeem invite if present
     let mut clear_invite = None;
     if let Some(ref code) = invite_code {
-        if crate::db::redeem_invite(&state.db, code, &user_data.login).await.unwrap_or(false) {
+        if crate::db::redeem_invite(&state.db, code, &user_data.login)
+            .await
+            .unwrap_or(false)
+        {
             tracing::info!(login = %user_data.login, %code, "invite redeemed");
             crate::db::record_audit(
-                &state.db, now, Some(&user_data.login), None,
-                "invite.redeemed", true, Some(&format!("code={code}")),
-            ).await;
+                &state.db,
+                now,
+                Some(&user_data.login),
+                None,
+                "invite.redeemed",
+                true,
+                Some(&format!("code={code}")),
+            )
+            .await;
         }
         let mut c = Cookie::build((INVITE_COOKIE, ""))
             .path("/")
@@ -619,7 +649,11 @@ async fn callback_handler(
         now,
         Some(&user_data.login),
         None,
-        if mfa_required { "auth.login.pending_mfa" } else { "auth.login" },
+        if mfa_required {
+            "auth.login.pending_mfa"
+        } else {
+            "auth.login"
+        },
         true,
         Some(&format!("role={}", role.as_str())),
     )
@@ -727,14 +761,17 @@ pub async fn current_user(
     let cookie = jar
         .get("auth_token")
         .ok_or((StatusCode::UNAUTHORIZED, "Unauthorized"))?;
-    let mut claims = claims_from_token(cookie.value())
-        .ok_or((StatusCode::UNAUTHORIZED, "Unauthorized"))?;
+    let mut claims =
+        claims_from_token(cookie.value()).ok_or((StatusCode::UNAUTHORIZED, "Unauthorized"))?;
     if !claims.mfa {
         return Err((StatusCode::FORBIDDEN, "MFA required"));
     }
     if let Ok(Some(row)) = crate::db::get_user(db, &claims.sub).await {
         if claims.iat < row.session_epoch {
-            return Err((StatusCode::UNAUTHORIZED, "session revoked — please sign in again"));
+            return Err((
+                StatusCode::UNAUTHORIZED,
+                "session revoked — please sign in again",
+            ));
         }
         claims.role = row.role;
     }
@@ -762,11 +799,7 @@ pub async fn require_admin(
 pub fn pending_mfa_claims(jar: &CookieJar) -> Option<Claims> {
     let cookie = jar.get("auth_token")?;
     let claims = claims_from_token(cookie.value())?;
-    if claims.mfa {
-        None
-    } else {
-        Some(claims)
-    }
+    if claims.mfa { None } else { Some(claims) }
 }
 
 pub fn is_dev_mode() -> bool {

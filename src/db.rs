@@ -6,8 +6,8 @@
 //! `approved_tokens.json` file into the `tokens` table and rename the
 //! file to `.migrated` so it isn't re-imported on subsequent boots.
 
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::SqlitePool;
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use std::collections::HashMap;
 use std::str::FromStr;
 
@@ -133,11 +133,9 @@ pub async fn init() -> Result<SqlitePool, sqlx::Error> {
     // Idempotent column add for installs created before session_epoch
     // landed. `ALTER TABLE ADD COLUMN` errors if the column already
     // exists; ignore that case.
-    let _ = sqlx::query(
-        "ALTER TABLE users ADD COLUMN session_epoch INTEGER NOT NULL DEFAULT 0",
-    )
-    .execute(&pool)
-    .await;
+    let _ = sqlx::query("ALTER TABLE users ADD COLUMN session_epoch INTEGER NOT NULL DEFAULT 0")
+        .execute(&pool)
+        .await;
 
     sqlx::query(
         r#"
@@ -215,9 +213,11 @@ pub async fn init() -> Result<SqlitePool, sqlx::Error> {
     )
     .execute(&pool)
     .await?;
-    sqlx::query("CREATE INDEX IF NOT EXISTS fan_out_runs_started ON fan_out_runs(started_at DESC);")
-        .execute(&pool)
-        .await?;
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS fan_out_runs_started ON fan_out_runs(started_at DESC);",
+    )
+    .execute(&pool)
+    .await?;
 
     sqlx::query(
         r#"
@@ -235,9 +235,11 @@ pub async fn init() -> Result<SqlitePool, sqlx::Error> {
     )
     .execute(&pool)
     .await?;
-    sqlx::query("CREATE INDEX IF NOT EXISTS notifications_created ON notifications(created_at DESC);")
-        .execute(&pool)
-        .await?;
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS notifications_created ON notifications(created_at DESC);",
+    )
+    .execute(&pool)
+    .await?;
     sqlx::query("CREATE INDEX IF NOT EXISTS notifications_unread ON notifications(read_at, created_at DESC);")
         .execute(&pool)
         .await?;
@@ -406,10 +408,11 @@ pub async fn token_exists(pool: &SqlitePool, token: &str) -> bool {
 /// The hostname a token is bound to (the host it first registered as), if
 /// any. Used to reject a token reused under a different hostname.
 pub async fn token_hostname(pool: &SqlitePool, token: &str) -> Result<Option<String>, sqlx::Error> {
-    let row = sqlx::query_scalar::<_, Option<String>>("SELECT hostname FROM tokens WHERE token = ?")
-        .bind(token)
-        .fetch_optional(pool)
-        .await?;
+    let row =
+        sqlx::query_scalar::<_, Option<String>>("SELECT hostname FROM tokens WHERE token = ?")
+            .bind(token)
+            .fetch_optional(pool)
+            .await?;
     Ok(row.flatten())
 }
 
@@ -440,11 +443,7 @@ pub async fn upsert_token_seen(
     Ok(())
 }
 
-pub async fn insert_token(
-    pool: &SqlitePool,
-    token: &str,
-    now: i64,
-) -> Result<(), sqlx::Error> {
+pub async fn insert_token(pool: &SqlitePool, token: &str, now: i64) -> Result<(), sqlx::Error> {
     sqlx::query(
         r#"
         INSERT OR IGNORE INTO tokens (token, hostname, created_at, last_seen)
@@ -595,9 +594,7 @@ pub struct UpdateWindowRow {
     pub updated_at: i64,
 }
 
-pub async fn list_update_windows(
-    pool: &SqlitePool,
-) -> Result<Vec<UpdateWindowRow>, sqlx::Error> {
+pub async fn list_update_windows(pool: &SqlitePool) -> Result<Vec<UpdateWindowRow>, sqlx::Error> {
     sqlx::query_as::<_, UpdateWindowRow>(
         "SELECT agent_id, cron_expr, enabled, last_run_at, last_status, last_log, updated_at \
          FROM update_windows ORDER BY agent_id ASC",
@@ -645,10 +642,7 @@ pub async fn upsert_update_window(
     Ok(())
 }
 
-pub async fn delete_update_window(
-    pool: &SqlitePool,
-    agent_id: &str,
-) -> Result<bool, sqlx::Error> {
+pub async fn delete_update_window(pool: &SqlitePool, agent_id: &str) -> Result<bool, sqlx::Error> {
     let res = sqlx::query("DELETE FROM update_windows WHERE agent_id = ?")
         .bind(agent_id)
         .execute(pool)
@@ -701,9 +695,7 @@ pub struct HealthProbeRow {
     pub env_json: String,
 }
 
-pub async fn list_health_probes(
-    pool: &SqlitePool,
-) -> Result<Vec<HealthProbeRow>, sqlx::Error> {
+pub async fn list_health_probes(pool: &SqlitePool) -> Result<Vec<HealthProbeRow>, sqlx::Error> {
     sqlx::query_as::<_, HealthProbeRow>(
         "SELECT id, agent_id, name, kind, target, interval_secs, timeout_secs, \
          expect_status, expect_body, enabled, last_run_at, last_state, \
@@ -775,13 +767,12 @@ pub async fn upsert_health_probe(
     .bind(now)
     .execute(pool)
     .await?;
-    let id: i64 = sqlx::query_scalar(
-        "SELECT id FROM health_probes WHERE agent_id = ?1 AND name = ?2",
-    )
-    .bind(agent_id)
-    .bind(name)
-    .fetch_one(pool)
-    .await?;
+    let id: i64 =
+        sqlx::query_scalar("SELECT id FROM health_probes WHERE agent_id = ?1 AND name = ?2")
+            .bind(agent_id)
+            .bind(name)
+            .fetch_one(pool)
+            .await?;
     Ok(id)
 }
 
@@ -1020,18 +1011,16 @@ pub async fn mark_notification_read(
     id: i64,
     now: i64,
 ) -> Result<bool, sqlx::Error> {
-    let res = sqlx::query("UPDATE notifications SET read_at = ?2 WHERE id = ?1 AND read_at IS NULL")
-        .bind(id)
-        .bind(now)
-        .execute(pool)
-        .await?;
+    let res =
+        sqlx::query("UPDATE notifications SET read_at = ?2 WHERE id = ?1 AND read_at IS NULL")
+            .bind(id)
+            .bind(now)
+            .execute(pool)
+            .await?;
     Ok(res.rows_affected() > 0)
 }
 
-pub async fn mark_all_notifications_read(
-    pool: &SqlitePool,
-    now: i64,
-) -> Result<u64, sqlx::Error> {
+pub async fn mark_all_notifications_read(pool: &SqlitePool, now: i64) -> Result<u64, sqlx::Error> {
     let res = sqlx::query("UPDATE notifications SET read_at = ? WHERE read_at IS NULL")
         .bind(now)
         .execute(pool)
@@ -1118,7 +1107,10 @@ pub async fn list_backup_jobs(pool: &SqlitePool) -> Result<Vec<BackupJobRow>, sq
     .await
 }
 
-pub async fn get_backup_job(pool: &SqlitePool, id: i64) -> Result<Option<BackupJobRow>, sqlx::Error> {
+pub async fn get_backup_job(
+    pool: &SqlitePool,
+    id: i64,
+) -> Result<Option<BackupJobRow>, sqlx::Error> {
     sqlx::query_as::<_, BackupJobRow>(
         "SELECT id, agent_id, name, paths_json, dest, cron_expr, enabled, \
          last_run_at, last_status, last_archive_path, last_bytes, last_log, updated_at, mode \
@@ -1163,13 +1155,12 @@ pub async fn upsert_backup_job(
     .bind(now)
     .execute(pool)
     .await?;
-    let id: i64 = sqlx::query_scalar(
-        "SELECT id FROM backup_jobs WHERE agent_id = ?1 AND name = ?2",
-    )
-    .bind(agent_id)
-    .bind(name)
-    .fetch_one(pool)
-    .await?;
+    let id: i64 =
+        sqlx::query_scalar("SELECT id FROM backup_jobs WHERE agent_id = ?1 AND name = ?2")
+            .bind(agent_id)
+            .bind(name)
+            .fetch_one(pool)
+            .await?;
     Ok(id)
 }
 
@@ -1537,7 +1528,11 @@ pub async fn get_invite(pool: &SqlitePool, code: &str) -> Result<Option<InviteRo
     .await
 }
 
-pub async fn redeem_invite(pool: &SqlitePool, code: &str, login: &str) -> Result<bool, sqlx::Error> {
+pub async fn redeem_invite(
+    pool: &SqlitePool,
+    code: &str,
+    login: &str,
+) -> Result<bool, sqlx::Error> {
     let now = crate::now_unix();
     let result = sqlx::query(
         "UPDATE invites SET used_by = ?2, used_at = ?3 WHERE code = ?1 AND used_by IS NULL",
@@ -1565,4 +1560,3 @@ pub async fn delete_invite(pool: &SqlitePool, code: &str) -> Result<bool, sqlx::
         .await?;
     Ok(r.rows_affected() > 0)
 }
-

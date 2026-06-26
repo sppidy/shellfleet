@@ -1,15 +1,15 @@
 use axum::{
+    Router,
     extract::{OriginalUri, Request, State},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
     routing::{get, post},
-    Router,
 };
 use axum_extra::extract::cookie::CookieJar;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-use crate::{auth, db, AppState};
+use crate::{AppState, auth, db};
 
 pub fn ee_sidecar_url() -> Option<String> {
     std::env::var("EE_SIDECAR_URL")
@@ -123,7 +123,11 @@ async fn exec_command_handler(
     let timeout_secs = body.timeout_secs.clamp(1, 3600);
     let request_id = uuid::Uuid::new_v4().to_string();
     let (tx_os, rx_os) = tokio::sync::oneshot::channel();
-    state.pending_exec.lock().await.insert(request_id.clone(), tx_os);
+    state
+        .pending_exec
+        .lock()
+        .await
+        .insert(request_id.clone(), tx_os);
 
     let dispatched = {
         let agents = state.agents.lock().await;
@@ -147,15 +151,19 @@ async fn exec_command_handler(
     // Wait a little past the agent-side timeout for the round-trip.
     let wait = std::time::Duration::from_secs(timeout_secs + 10);
     match tokio::time::timeout(wait, rx_os).await {
-        Ok(Ok(shared::Message::RunCommandResponse { exit_code, stdout, stderr, error, .. })) => {
-            axum::Json(serde_json::json!({
-                "exit_code": exit_code,
-                "stdout": stdout,
-                "stderr": stderr,
-                "error": error,
-            }))
-            .into_response()
-        }
+        Ok(Ok(shared::Message::RunCommandResponse {
+            exit_code,
+            stdout,
+            stderr,
+            error,
+            ..
+        })) => axum::Json(serde_json::json!({
+            "exit_code": exit_code,
+            "stdout": stdout,
+            "stderr": stderr,
+            "error": error,
+        }))
+        .into_response(),
         Ok(_) => (StatusCode::BAD_GATEWAY, "unexpected exec response").into_response(),
         Err(_) => {
             state.pending_exec.lock().await.remove(&request_id);
@@ -188,12 +196,18 @@ async fn execute_approved_handler(
     let message: shared::Message = match serde_json::from_str(&body.payload) {
         Ok(m) => m,
         Err(e) => {
-            return (StatusCode::BAD_REQUEST, format!("bad approved payload: {e}")).into_response()
+            return (
+                StatusCode::BAD_REQUEST,
+                format!("bad approved payload: {e}"),
+            )
+                .into_response();
         }
     };
     let agents = state.agents.lock().await;
     match agents.get(&body.agent_id) {
-        Some(entry) if entry.tx.send(message).is_ok() => (StatusCode::OK, "executed").into_response(),
+        Some(entry) if entry.tx.send(message).is_ok() => {
+            (StatusCode::OK, "executed").into_response()
+        }
         Some(_) => (StatusCode::BAD_GATEWAY, "agent send channel closed").into_response(),
         None => (StatusCode::NOT_FOUND, "agent not connected").into_response(),
     }
@@ -339,10 +353,7 @@ pub async fn forward_drift_snapshot(
         return;
     };
     let secret = internal_secret().unwrap_or_default();
-    let url = format!(
-        "{}/internal/drift-snapshot",
-        ee_url.trim_end_matches('/')
-    );
+    let url = format!("{}/internal/drift-snapshot", ee_url.trim_end_matches('/'));
     let body = serde_json::json!({
         "agent_id": agent_id,
         "snapshot_id": snapshot_id,
@@ -404,14 +415,15 @@ pub async fn ee_proxy_handler(
     // Build a FRESH upstream request: client-supplied headers (including
     // any spoofed x-shellfleet-* / Authorization) are deliberately NOT
     // copied. We attach the internal bearer plus the CE-verified identity.
-    let mut builder = client.request(
-        reqwest::Method::from_bytes(method.as_str().as_bytes()).unwrap_or(reqwest::Method::GET),
-        &url,
-    )
-    .bearer_auth(&secret)
-    .header("x-shellfleet-login", claims.sub.as_str())
-    .header("x-shellfleet-role", claims.role.as_str())
-    .timeout(std::time::Duration::from_secs(30));
+    let mut builder = client
+        .request(
+            reqwest::Method::from_bytes(method.as_str().as_bytes()).unwrap_or(reqwest::Method::GET),
+            &url,
+        )
+        .bearer_auth(&secret)
+        .header("x-shellfleet-login", claims.sub.as_str())
+        .header("x-shellfleet-role", claims.role.as_str())
+        .timeout(std::time::Duration::from_secs(30));
 
     if !body_bytes.is_empty() {
         builder = builder
@@ -421,10 +433,15 @@ pub async fn ee_proxy_handler(
 
     match builder.send().await {
         Ok(resp) => {
-            let status = StatusCode::from_u16(resp.status().as_u16())
-                .unwrap_or(StatusCode::BAD_GATEWAY);
+            let status =
+                StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
             let body = resp.text().await.unwrap_or_default();
-            (status, [(axum::http::header::CONTENT_TYPE, "application/json")], body).into_response()
+            (
+                status,
+                [(axum::http::header::CONTENT_TYPE, "application/json")],
+                body,
+            )
+                .into_response()
         }
         Err(e) => {
             tracing::warn!(error = %e, "EE proxy failed");

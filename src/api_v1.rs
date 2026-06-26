@@ -1,21 +1,24 @@
 use axum::{
+    Router,
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
     routing::{get, post},
-    Router,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-use crate::{db, ee, AppState};
+use crate::{AppState, db, ee};
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/agents", get(list_agents))
         .route("/agents/{name}", get(get_agent))
         .route("/agents/{name}/exec", post(exec_command))
-        .route("/agents/{name}/service/{svc}/{action}", post(control_service))
+        .route(
+            "/agents/{name}/service/{svc}/{action}",
+            post(control_service),
+        )
         .route("/users", get(list_users))
         .route("/policies/acl", get(get_acl).put(put_acl))
         .route("/audit", get(export_audit))
@@ -49,14 +52,13 @@ struct AgentSummary {
     capabilities: Vec<String>,
 }
 
-async fn list_agents(
-    headers: HeaderMap,
-    State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
+async fn list_agents(headers: HeaderMap, State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let Ok((_login, _role)) = require_api_key(&headers) else {
         return (StatusCode::UNAUTHORIZED, "API key required").into_response();
     };
-    if let Err((code, msg)) = crate::api_auth::require_key_action(&headers, &state.db, "agent:View").await {
+    if let Err((code, msg)) =
+        crate::api_auth::require_key_action(&headers, &state.db, "agent:View").await
+    {
         return (code, msg).into_response();
     }
     let map = state.agents.lock().await;
@@ -78,7 +80,9 @@ async fn get_agent(
     let Ok((_login, _role)) = require_api_key(&headers) else {
         return (StatusCode::UNAUTHORIZED, "API key required").into_response();
     };
-    if let Err((code, msg)) = crate::api_auth::require_key_action(&headers, &state.db, "agent:View").await {
+    if let Err((code, msg)) =
+        crate::api_auth::require_key_action(&headers, &state.db, "agent:View").await
+    {
         return (code, msg).into_response();
     }
     let agent_id = format!("{name}-id");
@@ -122,7 +126,9 @@ async fn exec_command(
     if role != "admin" {
         return (StatusCode::FORBIDDEN, "admin only").into_response();
     }
-    if let Err((code, msg)) = crate::api_auth::require_key_action(&headers, &state.db, "agent:Exec").await {
+    if let Err((code, msg)) =
+        crate::api_auth::require_key_action(&headers, &state.db, "agent:Exec").await
+    {
         return (code, msg).into_response();
     }
 
@@ -152,9 +158,9 @@ async fn exec_command(
 
     let start = std::time::Instant::now();
     tokio::time::sleep(std::time::Duration::from_secs(timeout)).await;
-    let _ = entry.tx.send(shared::Message::StopTerminalRequest {
-        session_id,
-    });
+    let _ = entry
+        .tx
+        .send(shared::Message::StopTerminalRequest { session_id });
 
     let duration_ms = start.elapsed().as_millis() as u64;
 
@@ -191,7 +197,11 @@ async fn control_service(
 
     let valid_actions = ["start", "stop", "restart"];
     if !valid_actions.contains(&action.as_str()) {
-        return (StatusCode::BAD_REQUEST, "action must be start, stop, or restart").into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            "action must be start, stop, or restart",
+        )
+            .into_response();
     }
 
     let service_action = match action.as_str() {
@@ -200,7 +210,9 @@ async fn control_service(
         "restart" => "service:Restart",
         _ => unreachable!(),
     };
-    if let Err((code, msg)) = crate::api_auth::require_key_action(&headers, &state.db, service_action).await {
+    if let Err((code, msg)) =
+        crate::api_auth::require_key_action(&headers, &state.db, service_action).await
+    {
         return (code, msg).into_response();
     }
 
@@ -232,17 +244,16 @@ async fn control_service(
     (StatusCode::ACCEPTED, format!("service {action} sent")).into_response()
 }
 
-async fn list_users(
-    headers: HeaderMap,
-    State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
+async fn list_users(headers: HeaderMap, State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let Ok((_login, role)) = require_api_key(&headers) else {
         return (StatusCode::UNAUTHORIZED, "API key required").into_response();
     };
     if role != "admin" {
         return (StatusCode::FORBIDDEN, "admin only").into_response();
     }
-    if let Err((code, msg)) = crate::api_auth::require_key_action(&headers, &state.db, "user:List").await {
+    if let Err((code, msg)) =
+        crate::api_auth::require_key_action(&headers, &state.db, "user:List").await
+    {
         return (code, msg).into_response();
     }
     match db::list_users(&state.db).await {
@@ -251,23 +262,19 @@ async fn list_users(
     }
 }
 
-async fn get_acl(
-    headers: HeaderMap,
-    State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
+async fn get_acl(headers: HeaderMap, State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let Ok((_login, _role)) = require_api_key(&headers) else {
         return (StatusCode::UNAUTHORIZED, "API key required").into_response();
     };
-    if let Err((code, msg)) = crate::api_auth::require_key_action(&headers, &state.db, "acl:View").await {
+    if let Err((code, msg)) =
+        crate::api_auth::require_key_action(&headers, &state.db, "acl:View").await
+    {
         return (code, msg).into_response();
     }
     if !ee::ee_active() {
         return (StatusCode::SERVICE_UNAVAILABLE, "EE not active").into_response();
     }
-    let url = format!(
-        "{}/api/ee/acl/document",
-        ee::ee_sidecar_url().unwrap()
-    );
+    let url = format!("{}/api/ee/acl/document", ee::ee_sidecar_url().unwrap());
     let secret = std::env::var("EE_INTERNAL_SECRET").unwrap_or_default();
     match reqwest::Client::new()
         .get(&url)
@@ -296,16 +303,15 @@ async fn put_acl(
     if role != "admin" {
         return (StatusCode::FORBIDDEN, "admin only").into_response();
     }
-    if let Err((code, msg)) = crate::api_auth::require_key_action(&headers, &state.db, "acl:Write").await {
+    if let Err((code, msg)) =
+        crate::api_auth::require_key_action(&headers, &state.db, "acl:Write").await
+    {
         return (code, msg).into_response();
     }
     if !ee::ee_active() {
         return (StatusCode::SERVICE_UNAVAILABLE, "EE not active").into_response();
     }
-    let url = format!(
-        "{}/api/ee/acl/document",
-        ee::ee_sidecar_url().unwrap()
-    );
+    let url = format!("{}/api/ee/acl/document", ee::ee_sidecar_url().unwrap());
     let secret = std::env::var("EE_INTERNAL_SECRET").unwrap_or_default();
     match reqwest::Client::new()
         .put(&url)
@@ -339,7 +345,9 @@ async fn export_audit(
     let Ok((_login, _role)) = require_api_key(&headers) else {
         return (StatusCode::UNAUTHORIZED, "API key required").into_response();
     };
-    if let Err((code, msg)) = crate::api_auth::require_key_action(&headers, &state.db, "audit:Read").await {
+    if let Err((code, msg)) =
+        crate::api_auth::require_key_action(&headers, &state.db, "audit:Read").await
+    {
         return (code, msg).into_response();
     }
     let limit = q.limit.unwrap_or(200).clamp(1, 10000);
@@ -357,16 +365,15 @@ async fn query_metrics(
     let Ok((_login, _role)) = require_api_key(&headers) else {
         return (StatusCode::UNAUTHORIZED, "API key required").into_response();
     };
-    if let Err((code, msg)) = crate::api_auth::require_key_action(&headers, &state.db, "metric:Query").await {
+    if let Err((code, msg)) =
+        crate::api_auth::require_key_action(&headers, &state.db, "metric:Query").await
+    {
         return (code, msg).into_response();
     }
     if !ee::ee_active() {
         return (StatusCode::SERVICE_UNAVAILABLE, "EE not active").into_response();
     }
-    let url = format!(
-        "{}/api/ee/metrics/query",
-        ee::ee_sidecar_url().unwrap()
-    );
+    let url = format!("{}/api/ee/metrics/query", ee::ee_sidecar_url().unwrap());
     let secret = std::env::var("EE_INTERNAL_SECRET").unwrap_or_default();
     match reqwest::Client::new()
         .post(&url)

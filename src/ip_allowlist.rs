@@ -18,7 +18,7 @@ use axum::{
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 
-use crate::{ee, throttle, AppState};
+use crate::{AppState, ee, throttle};
 
 /// Pull the allowlist from EE into the CE cache every 30s. Treats any
 /// failure / unlicensed (402) response as "no allowlist" (clears the cache).
@@ -65,7 +65,9 @@ fn cidr_contains(cidr: &str, ip: &IpAddr) -> bool {
     if let Ok(net) = cidr.parse::<ipnet::IpNet>() {
         return net.contains(ip);
     }
-    cidr.parse::<IpAddr>().map(|single| &single == ip).unwrap_or(false)
+    cidr.parse::<IpAddr>()
+        .map(|single| &single == ip)
+        .unwrap_or(false)
 }
 
 fn ip_allowed(entries: &[(String, bool)], ip_str: &str) -> bool {

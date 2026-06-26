@@ -28,7 +28,7 @@ fn matches_action(pattern: &str, action: &str) -> bool {
 #[derive(Debug, sqlx::FromRow)]
 struct IamStatement {
     effect: String,
-    actions: String,  // JSON array string
+    actions: String,   // JSON array string
     resources: String, // JSON array string
 }
 
@@ -107,16 +107,10 @@ pub async fn middleware(
 
     let headers = req.headers_mut();
     if let Ok(v) = axum::http::HeaderValue::from_str(&row.login) {
-        headers.insert(
-            axum::http::HeaderName::from_static("x-api-key-login"),
-            v,
-        );
+        headers.insert(axum::http::HeaderName::from_static("x-api-key-login"), v);
     }
     if let Ok(v) = axum::http::HeaderValue::from_str(&role) {
-        headers.insert(
-            axum::http::HeaderName::from_static("x-api-key-role"),
-            v,
-        );
+        headers.insert(axum::http::HeaderName::from_static("x-api-key-role"), v);
     }
     if let Some(pid) = row.policy_id {
         if let Ok(v) = axum::http::HeaderValue::from_str(&pid.to_string()) {
@@ -141,23 +135,40 @@ pub async fn require_key_action(
         .get("x-api-key-policy-id")
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.parse::<i64>().ok());
-    let Some(pid) = policy_id else { return Ok(()); };
+    let Some(pid) = policy_id else {
+        return Ok(());
+    };
 
     let rows = sqlx::query_as::<_, IamStatement>(
-        "SELECT effect, actions, resources FROM ee_iam_statements WHERE policy_id = ?1"
-    ).bind(pid).fetch_all(pool).await.map_err(|_|
-        (StatusCode::INTERNAL_SERVER_ERROR, "failed to load policy statements".into())
-    )?;
+        "SELECT effect, actions, resources FROM ee_iam_statements WHERE policy_id = ?1",
+    )
+    .bind(pid)
+    .fetch_all(pool)
+    .await
+    .map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to load policy statements".into(),
+        )
+    })?;
 
     // Fail closed: exactly `["*"]` resources accepted. Malformed, empty,
     // or mixed resources → 500.
     for row in &rows {
         let resources: Vec<String> = match serde_json::from_str(&row.resources) {
             Ok(r) => r,
-            Err(_) => return Err((StatusCode::INTERNAL_SERVER_ERROR, "malformed policy resources".into())),
+            Err(_) => {
+                return Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "malformed policy resources".into(),
+                ));
+            }
         };
         if resources.len() != 1 || resources[0] != "*" {
-            return Err((StatusCode::INTERNAL_SERVER_ERROR, "resource-constrained policies cannot bind to API keys".into()));
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "resource-constrained policies cannot bind to API keys".into(),
+            ));
         }
     }
 
@@ -167,18 +178,35 @@ pub async fn require_key_action(
     for row in &rows {
         let actions: Vec<String> = match serde_json::from_str(&row.actions) {
             Ok(a) => a,
-            Err(_) => return Err((StatusCode::INTERNAL_SERVER_ERROR, "malformed policy actions".into())),
+            Err(_) => {
+                return Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "malformed policy actions".into(),
+                ));
+            }
         };
         let matches = actions.iter().any(|a| matches_action(a, required_action));
         if matches {
             match row.effect.as_str() {
-                "Deny" => return Err((StatusCode::FORBIDDEN, format!("API key scope '{required_action}' is denied by its bound policy"))),
+                "Deny" => {
+                    return Err((
+                        StatusCode::FORBIDDEN,
+                        format!("API key scope '{required_action}' is denied by its bound policy"),
+                    ));
+                }
                 "Allow" => allowed = true,
                 _ => {}
             }
         }
     }
-    if allowed { Ok(()) } else { Err((StatusCode::FORBIDDEN, format!("API key scope '{required_action}' is not permitted by its bound policy"))) }
+    if allowed {
+        Ok(())
+    } else {
+        Err((
+            StatusCode::FORBIDDEN,
+            format!("API key scope '{required_action}' is not permitted by its bound policy"),
+        ))
+    }
 }
 
 #[cfg(test)]
@@ -214,8 +242,11 @@ mod tests {
                 effect TEXT NOT NULL CHECK (effect IN ('Allow', 'Deny')),
                 actions TEXT NOT NULL DEFAULT '[]',
                 resources TEXT NOT NULL DEFAULT '[\"*\"]'
-            )"
-        ).execute(&pool).await.unwrap();
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         pool
     }
 
@@ -261,9 +292,21 @@ mod tests {
 
         let mut headers = HeaderMap::new();
         headers.insert("x-api-key-policy-id", "3".parse().unwrap());
-        assert!(require_key_action(&headers, &pool, "agent:View").await.is_ok());
-        assert!(require_key_action(&headers, &pool, "agent:Terminal").await.is_ok());
-        assert!(require_key_action(&headers, &pool, "agent:Exec").await.is_ok());
+        assert!(
+            require_key_action(&headers, &pool, "agent:View")
+                .await
+                .is_ok()
+        );
+        assert!(
+            require_key_action(&headers, &pool, "agent:Terminal")
+                .await
+                .is_ok()
+        );
+        assert!(
+            require_key_action(&headers, &pool, "agent:Exec")
+                .await
+                .is_ok()
+        );
     }
 
     #[tokio::test]

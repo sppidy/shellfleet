@@ -3,18 +3,18 @@
 //! attributes responses back to the run.
 
 use axum::{
+    Json, Router,
     extract::{Path, State},
     http::StatusCode,
     response::IntoResponse,
     routing::get,
-    Json, Router,
 };
 use axum_extra::extract::cookie::CookieJar;
 use serde::{Deserialize, Serialize};
 use shared::Message;
 use std::sync::Arc;
 
-use crate::{auth::verify_token, db, AppState};
+use crate::{AppState, auth::verify_token, db};
 
 /// Fan-out kinds supported in v1.
 pub const KIND_APT_STATUS: &str = "apt-status";
@@ -73,10 +73,7 @@ fn message_for(kind: &str, package: Option<String>) -> Option<Message> {
     }
 }
 
-async fn list_handler(
-    jar: CookieJar,
-    State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
+async fn list_handler(jar: CookieJar, State(state): State<Arc<AppState>>) -> impl IntoResponse {
     if require_auth(&jar).is_none() {
         return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
     }
@@ -105,7 +102,9 @@ async fn get_handler(
             return (StatusCode::INTERNAL_SERVER_ERROR, "db error").into_response();
         }
     };
-    let results = db::get_fan_out_results(&state.db, id).await.unwrap_or_default();
+    let results = db::get_fan_out_results(&state.db, id)
+        .await
+        .unwrap_or_default();
     Json(RunOut { run, results }).into_response()
 }
 
@@ -140,7 +139,10 @@ async fn create_handler(
             .into_response();
     }
     let now = crate::now_unix();
-    let payload_json = body.package.as_ref().map(|p| format!("{{\"package\":\"{p}\"}}"));
+    let payload_json = body
+        .package
+        .as_ref()
+        .map(|p| format!("{{\"package\":\"{p}\"}}"));
     let run_id = match db::create_fan_out_run(
         &state.db,
         &body.kind,
@@ -177,15 +179,8 @@ async fn create_handler(
     for agent_id in &agent_ids {
         if let Some(entry) = agents.get(agent_id) {
             // Mark pending up-front so response routing can find it.
-            let _ = db::upsert_fan_out_result(
-                &state.db,
-                run_id,
-                agent_id,
-                "pending",
-                None,
-                None,
-            )
-            .await;
+            let _ =
+                db::upsert_fan_out_result(&state.db, run_id, agent_id, "pending", None, None).await;
             if entry.tx.send(message_template.clone()).is_err() {
                 let _ = db::upsert_fan_out_result(
                     &state.db,
@@ -211,7 +206,9 @@ async fn create_handler(
     }
     drop(agents);
 
-    let results = db::get_fan_out_results(&state.db, run_id).await.unwrap_or_default();
+    let results = db::get_fan_out_results(&state.db, run_id)
+        .await
+        .unwrap_or_default();
     let run = db::get_fan_out_run(&state.db, run_id).await.ok().flatten();
     match run {
         Some(r) => Json(RunOut { run: r, results }).into_response(),
@@ -222,13 +219,14 @@ async fn create_handler(
 /// Called from `handle_agent_socket` whenever a fan-out-eligible
 /// response message arrives. Looks for the oldest pending row for
 /// (agent_id, kind) and stamps it with the result.
-pub async fn maybe_attribute_response(
-    state: &AppState,
-    agent_id: &str,
-    msg: &Message,
-) {
+pub async fn maybe_attribute_response(state: &AppState, agent_id: &str, msg: &Message) {
     let (kind, status, detail) = match msg {
-        Message::AptStatusResponse { available, upgradable, error, .. } => {
+        Message::AptStatusResponse {
+            available,
+            upgradable,
+            error,
+            ..
+        } => {
             let det = if let Some(e) = error {
                 format!("error: {e}")
             } else if *available {
@@ -236,20 +234,39 @@ pub async fn maybe_attribute_response(
             } else {
                 "apt unavailable".to_string()
             };
-            let s = if error.is_some() || !*available { "failed" } else { "success" };
+            let s = if error.is_some() || !*available {
+                "failed"
+            } else {
+                "success"
+            };
             (KIND_APT_STATUS, s, det)
         }
-        Message::AptUpgradeResponse { success, log, error, .. } => {
+        Message::AptUpgradeResponse {
+            success,
+            log,
+            error,
+            ..
+        } => {
             let det = if *success {
                 let snippet: String = log.lines().rev().take(3).collect::<Vec<_>>().join(" | ");
-                if snippet.is_empty() { "ok".to_string() } else { snippet }
+                if snippet.is_empty() {
+                    "ok".to_string()
+                } else {
+                    snippet
+                }
             } else {
                 error.clone().unwrap_or_else(|| "failed".to_string())
             };
             let s = if *success { "success" } else { "failed" };
             (KIND_APT_UPGRADE, s, det)
         }
-        Message::DockerListResponse { available, swarm_role, containers, error, .. } => {
+        Message::DockerListResponse {
+            available,
+            swarm_role,
+            containers,
+            error,
+            ..
+        } => {
             let det = if let Some(e) = error {
                 format!("error: {e}")
             } else if *available {
@@ -258,7 +275,11 @@ pub async fn maybe_attribute_response(
             } else {
                 "docker unavailable".to_string()
             };
-            let s = if error.is_some() || !*available { "failed" } else { "success" };
+            let s = if error.is_some() || !*available {
+                "failed"
+            } else {
+                "success"
+            };
             (KIND_DOCKER_LIST, s, det)
         }
         _ => return,

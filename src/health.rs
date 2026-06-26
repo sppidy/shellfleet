@@ -3,18 +3,18 @@
 //! reports state changes back.
 
 use axum::{
+    Json, Router,
     extract::{Path, State},
     http::StatusCode,
     response::IntoResponse,
     routing::{delete, get},
-    Json, Router,
 };
 use axum_extra::extract::cookie::CookieJar;
 use serde::{Deserialize, Serialize};
 use shared::{HealthProbeKind, HealthProbeSpec, Message};
 use std::sync::Arc;
 
-use crate::{auth::verify_token, db, AppState};
+use crate::{AppState, auth::verify_token, db};
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
@@ -154,10 +154,7 @@ pub async fn push_to_agent(state: &AppState, agent_id: &str) {
     }
 }
 
-async fn list_handler(
-    jar: CookieJar,
-    State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
+async fn list_handler(jar: CookieJar, State(state): State<Arc<AppState>>) -> impl IntoResponse {
     if require_auth(&jar).is_none() {
         return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
     }
@@ -221,7 +218,10 @@ async fn upsert_handler(
         Some(&body.agent_id),
         "health_probe.upsert",
         true,
-        Some(&format!("name={} kind={} target={}", body.name, body.kind, body.target)),
+        Some(&format!(
+            "name={} kind={} target={}",
+            body.name, body.kind, body.target
+        )),
     )
     .await;
     push_to_agent(&state, &body.agent_id).await;
@@ -276,10 +276,7 @@ struct HostSnapshot {
     unknown: u32,
 }
 
-async fn snapshot_handler(
-    jar: CookieJar,
-    State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
+async fn snapshot_handler(jar: CookieJar, State(state): State<Arc<AppState>>) -> impl IntoResponse {
     if require_auth(&jar).is_none() {
         return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
     }
@@ -296,15 +293,13 @@ async fn snapshot_handler(
         if r.enabled == 0 {
             continue;
         }
-        let s = by_agent
-            .entry(r.agent_id.clone())
-            .or_insert(HostSnapshot {
-                agent_id: r.agent_id.clone(),
-                total: 0,
-                green: 0,
-                red: 0,
-                unknown: 0,
-            });
+        let s = by_agent.entry(r.agent_id.clone()).or_insert(HostSnapshot {
+            agent_id: r.agent_id.clone(),
+            total: 0,
+            green: 0,
+            red: 0,
+            unknown: 0,
+        });
         s.total += 1;
         match r.last_state.as_deref() {
             Some("green") => s.green += 1,

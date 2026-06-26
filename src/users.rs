@@ -15,22 +15,23 @@
 //! still a free seat).
 
 use axum::{
+    Json, Router,
     extract::{Path, State},
     http::StatusCode,
     response::IntoResponse,
     routing::get,
-    Json, Router,
 };
 use axum_extra::extract::cookie::CookieJar;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-use crate::{auth, AppState};
+use crate::{AppState, auth};
 
 pub fn routes() -> Router<Arc<AppState>> {
-    Router::new()
-        .route("/", get(list_handler))
-        .route("/{login}", axum::routing::put(set_role_handler).delete(delete_handler))
+    Router::new().route("/", get(list_handler)).route(
+        "/{login}",
+        axum::routing::put(set_role_handler).delete(delete_handler),
+    )
 }
 
 #[derive(Serialize)]

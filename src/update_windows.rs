@@ -3,18 +3,18 @@
 //! plus `audit`.
 
 use axum::{
+    Json, Router,
     extract::{Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
     routing::{delete, get, post},
-    Json, Router,
 };
 use axum_extra::extract::cookie::CookieJar;
 use serde::{Deserialize, Serialize};
 use shared::Message;
 use std::{str::FromStr, sync::Arc};
 
-use crate::{auth::verify_token, db, AppState};
+use crate::{AppState, auth::verify_token, db};
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
@@ -62,11 +62,17 @@ fn require_auth(jar: &CookieJar) -> Option<String> {
 fn next_run(cron_expr: &str) -> Option<i64> {
     let schedule = cron::Schedule::from_str(cron_expr).ok()?;
     let now = chrono::Utc::now();
-    schedule.upcoming(chrono::Utc).next().map(|t| t.timestamp()).or(Some(now.timestamp()))
+    schedule
+        .upcoming(chrono::Utc)
+        .next()
+        .map(|t| t.timestamp())
+        .or(Some(now.timestamp()))
 }
 
 fn validate_cron(expr: &str) -> Result<(), String> {
-    cron::Schedule::from_str(expr).map(|_| ()).map_err(|e| format!("invalid cron: {e}"))
+    cron::Schedule::from_str(expr)
+        .map(|_| ())
+        .map_err(|e| format!("invalid cron: {e}"))
 }
 
 fn to_out(row: db::UpdateWindowRow) -> WindowOut {
@@ -83,10 +89,7 @@ fn to_out(row: db::UpdateWindowRow) -> WindowOut {
     }
 }
 
-async fn list_handler(
-    jar: CookieJar,
-    State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
+async fn list_handler(jar: CookieJar, State(state): State<Arc<AppState>>) -> impl IntoResponse {
     if require_auth(&jar).is_none() {
         return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
     }
@@ -194,10 +197,16 @@ async fn run_now_handler(
         return (StatusCode::NOT_FOUND, "Agent offline").into_response();
     };
     drop(agents);
-    state.scheduled_apt_runs.lock().await.insert(agent_id.clone());
+    state
+        .scheduled_apt_runs
+        .lock()
+        .await
+        .insert(agent_id.clone());
     let pkg = q.package.clone();
     if tx
-        .send(Message::AptUpgradeRequest { package: pkg.clone() })
+        .send(Message::AptUpgradeRequest {
+            package: pkg.clone(),
+        })
         .is_err()
     {
         state.scheduled_apt_runs.lock().await.remove(&agent_id);
@@ -250,11 +259,14 @@ async fn scheduler_tick(state: &AppState) -> Result<(), sqlx::Error> {
         } else {
             // First-ever schedule: only fire on the next strictly-future tick,
             // not retroactively. Use updated_at as the floor.
-            chrono::DateTime::<chrono::Utc>::from_timestamp(row.updated_at, 0)
-                .unwrap_or(now)
+            chrono::DateTime::<chrono::Utc>::from_timestamp(row.updated_at, 0).unwrap_or(now)
         };
         // Has any cron tick occurred between `last` and `now`?
-        let due = schedule.after(&last).next().map(|t| t <= now).unwrap_or(false);
+        let due = schedule
+            .after(&last)
+            .next()
+            .map(|t| t <= now)
+            .unwrap_or(false);
         if !due {
             continue;
         }
@@ -268,20 +280,17 @@ async fn scheduler_tick(state: &AppState) -> Result<(), sqlx::Error> {
         // Bookkeep before sending — guarantees we record `last_run_at`
         // even if the agent never replies.
         let now_unix = crate::now_unix();
-        let _ = db::record_update_window_result(
-            &state.db,
-            &agent_id,
-            now_unix,
-            "running",
-            "",
-        )
-        .await;
+        let _ =
+            db::record_update_window_result(&state.db, &agent_id, now_unix, "running", "").await;
         state
             .scheduled_apt_runs
             .lock()
             .await
             .insert(agent_id.clone());
-        if tx.send(Message::AptUpgradeRequest { package: None }).is_err() {
+        if tx
+            .send(Message::AptUpgradeRequest { package: None })
+            .is_err()
+        {
             state.scheduled_apt_runs.lock().await.remove(&agent_id);
             tracing::warn!(agent_id = %agent_id, "failed to send scheduled AptUpgradeRequest");
             continue;

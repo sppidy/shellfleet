@@ -2,18 +2,18 @@
 //! ("everything tagged `worker`") without listing each id.
 
 use axum::{
+    Json, Router,
     extract::{Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
     routing::{delete, get},
-    Json, Router,
 };
 use axum_extra::extract::cookie::CookieJar;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use crate::{auth::verify_token, db, AppState};
+use crate::{AppState, auth::verify_token, db};
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
@@ -67,10 +67,16 @@ async fn list_handler(
     let mut by_agent: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut by_label: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for (agent_id, label) in rows {
-        if q.agent_id.as_deref().is_some_and(|filter| filter != agent_id) {
+        if q.agent_id
+            .as_deref()
+            .is_some_and(|filter| filter != agent_id)
+        {
             continue;
         }
-        by_agent.entry(agent_id.clone()).or_default().push(label.clone());
+        by_agent
+            .entry(agent_id.clone())
+            .or_default()
+            .push(label.clone());
         by_label.entry(label).or_default().push(agent_id);
     }
     Json(ListOut { by_agent, by_label }).into_response()

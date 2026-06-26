@@ -32,11 +32,11 @@
 //! - `users.totp_enabled`           1 once `confirm` succeeds.
 
 use axum::{
+    Json, Router,
     extract::State,
     http::StatusCode,
     response::IntoResponse,
     routing::{get, post},
-    Json, Router,
 };
 use axum_extra::extract::cookie::CookieJar;
 use data_encoding::BASE32_NOPAD;
@@ -48,7 +48,7 @@ use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use subtle::ConstantTimeEq;
 
-use crate::{auth, AppState};
+use crate::{AppState, auth};
 
 const TOTP_PERIOD: u64 = 30;
 const TOTP_DIGITS: u32 = 6;
@@ -186,10 +186,7 @@ struct StatusResponse {
     enabled: bool,
 }
 
-async fn status_handler(
-    jar: CookieJar,
-    State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
+async fn status_handler(jar: CookieJar, State(state): State<Arc<AppState>>) -> impl IntoResponse {
     if auth::is_dev_mode() {
         return Json(StatusResponse { enabled: false }).into_response();
     }
@@ -217,10 +214,7 @@ struct StartResponse {
     recovery_codes: Vec<String>,
 }
 
-async fn start_handler(
-    jar: CookieJar,
-    State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
+async fn start_handler(jar: CookieJar, State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let claims = match auth::current_user(&jar, &state.db).await {
         Ok(c) => c,
         Err(err) => return err.into_response(),
@@ -265,8 +259,7 @@ async fn confirm_handler(
     let hashes_json = serde_json::to_string(&hashes).unwrap_or_else(|_| "[]".into());
     let encrypted_hashes = crate::crypto::encrypt(&hashes_json);
     if let Err(e) =
-        crate::db::set_user_totp(&state.db, &claims.sub, &encrypted_secret, &encrypted_hashes)
-            .await
+        crate::db::set_user_totp(&state.db, &claims.sub, &encrypted_secret, &encrypted_hashes).await
     {
         tracing::error!(error = %e, "failed to enable totp");
         return (StatusCode::INTERNAL_SERVER_ERROR, "db error").into_response();
@@ -349,10 +342,7 @@ async fn verify_handler(
     // is corrupt or was encrypted with a different key (e.g. JWT_SECRET
     // rotated without a TOTP re-enroll). Treat that like a missing
     // secret — the user has to re-enroll out-of-band.
-    let secret_plain = row
-        .totp_secret
-        .as_deref()
-        .and_then(crate::crypto::decrypt);
+    let secret_plain = row.totp_secret.as_deref().and_then(crate::crypto::decrypt);
     let secret = match secret_plain.as_deref() {
         Some(s) => s,
         None => return (StatusCode::BAD_REQUEST, "totp not enabled").into_response(),
@@ -364,8 +354,7 @@ async fn verify_handler(
         // Decrypt the recovery-codes ciphertext, then JSON-parse the
         // inner array of hashes.
         let hashes_plain = crate::crypto::decrypt(&row.totp_recovery_hashes).unwrap_or_default();
-        let mut hashes: Vec<String> =
-            serde_json::from_str(&hashes_plain).unwrap_or_default();
+        let mut hashes: Vec<String> = serde_json::from_str(&hashes_plain).unwrap_or_default();
         let target = hash_recovery(&body.code);
         // Constant-time compare against EVERY stored hash so the loop
         // takes the same time regardless of which (if any) matches.
@@ -427,14 +416,25 @@ async fn verify_handler(
         crate::now_unix(),
         Some(&pending.sub),
         None,
-        if used_recovery { "auth.mfa.recovery" } else { "auth.mfa.ok" },
+        if used_recovery {
+            "auth.mfa.recovery"
+        } else {
+            "auth.mfa.ok"
+        },
         true,
         None,
     )
     .await;
 
     let cookie = auth::build_session_cookie(token);
-    (jar.add(cookie), Json(VerifyResponse { ok: true, used_recovery })).into_response()
+    (
+        jar.add(cookie),
+        Json(VerifyResponse {
+            ok: true,
+            used_recovery,
+        }),
+    )
+        .into_response()
 }
 
 #[derive(Deserialize)]
@@ -463,10 +463,7 @@ async fn disable_handler(
     // `verify_totp`, which expects a base32 string. Without this the
     // call would silently fail every code and lock legitimate users
     // out of disabling 2FA.
-    let secret_plain = row
-        .totp_secret
-        .as_deref()
-        .and_then(crate::crypto::decrypt);
+    let secret_plain = row.totp_secret.as_deref().and_then(crate::crypto::decrypt);
     let secret = match secret_plain.as_deref() {
         Some(s) => s,
         None => return (StatusCode::BAD_REQUEST, "totp not enabled").into_response(),
@@ -510,7 +507,11 @@ mod tests {
             .unwrap()
             .as_secs();
         let step = current_step(now);
-        let code = format!("{:0width$}", hotp(&secret_bytes, step), width = TOTP_DIGITS as usize);
+        let code = format!(
+            "{:0width$}",
+            hotp(&secret_bytes, step),
+            width = TOTP_DIGITS as usize
+        );
         assert!(verify_totp(secret, &code), "the current TOTP must verify");
         // A code many steps away is outside the ±1 acceptance window.
         let far = format!(
@@ -518,7 +519,10 @@ mod tests {
             hotp(&secret_bytes, step + 100),
             width = TOTP_DIGITS as usize
         );
-        assert!(!verify_totp(secret, &far), "out-of-window code must be rejected");
+        assert!(
+            !verify_totp(secret, &far),
+            "out-of-window code must be rejected"
+        );
     }
 
     #[test]
@@ -538,8 +542,16 @@ mod tests {
             .as_secs();
         let step = current_step(now);
         // Previous and next step codes must both be accepted (±1 skew).
-        let prev = format!("{:0width$}", hotp(&secret_bytes, step - 1), width = TOTP_DIGITS as usize);
-        let next = format!("{:0width$}", hotp(&secret_bytes, step + 1), width = TOTP_DIGITS as usize);
+        let prev = format!(
+            "{:0width$}",
+            hotp(&secret_bytes, step - 1),
+            width = TOTP_DIGITS as usize
+        );
+        let next = format!(
+            "{:0width$}",
+            hotp(&secret_bytes, step + 1),
+            width = TOTP_DIGITS as usize
+        );
         assert!(verify_totp(secret, &prev), "previous step within skew");
         assert!(verify_totp(secret, &next), "next step within skew");
     }

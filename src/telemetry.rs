@@ -6,13 +6,13 @@
 //! random instance id, version, CE/EE edition, integer counts, and a fixed
 //! set of feature names. No PII (no logins, hostnames, IPs, or agent ids).
 
-use axum::{extract::State, response::IntoResponse, routing::get, Json, Router};
+use axum::{Json, Router, extract::State, response::IntoResponse, routing::get};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::{db, ee, AppState};
+use crate::{AppState, db, ee};
 
 /// The telemetry collector endpoint. Hardcoded (not configurable) — the only
 /// telemetry knob is the on/off switch (SHELLFLEET_TELEMETRY / admin toggle).
@@ -35,7 +35,10 @@ struct Report {
 /// otherwise the toggle decides (defaults on).
 pub fn telemetry_enabled(env_value: Option<&str>, toggle_enabled: bool) -> bool {
     if let Some(v) = env_value {
-        if matches!(v.trim().to_ascii_lowercase().as_str(), "off" | "false" | "0" | "no") {
+        if matches!(
+            v.trim().to_ascii_lowercase().as_str(),
+            "off" | "false" | "0" | "no"
+        ) {
             return false;
         }
     }
@@ -45,7 +48,12 @@ pub fn telemetry_enabled(env_value: Option<&str>, toggle_enabled: bool) -> bool 
 fn env_forced_off() -> bool {
     std::env::var("SHELLFLEET_TELEMETRY")
         .ok()
-        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "off" | "false" | "0" | "no"))
+        .map(|v| {
+            matches!(
+                v.trim().to_ascii_lowercase().as_str(),
+                "off" | "false" | "0" | "no"
+            )
+        })
         .unwrap_or(false)
 }
 
@@ -79,10 +87,16 @@ async fn gather(state: &AppState) -> Report {
     if ee::ee_active() {
         features.insert("ee".into());
     }
-    if std::env::var("BACKUPS_ENABLED").map(|v| v == "true" || v == "1").unwrap_or(false) {
+    if std::env::var("BACKUPS_ENABLED")
+        .map(|v| v == "true" || v == "1")
+        .unwrap_or(false)
+    {
         features.insert("backups".into());
     }
-    if std::env::var("METRICS_CONFIG_PATH").map(|v| !v.is_empty()).unwrap_or(false) {
+    if std::env::var("METRICS_CONFIG_PATH")
+        .map(|v| !v.is_empty())
+        .unwrap_or(false)
+    {
         features.insert("metrics".into());
     }
 
@@ -154,7 +168,12 @@ async fn toggle_handler(
     State(state): State<Arc<AppState>>,
     Json(body): Json<ToggleBody>,
 ) -> impl IntoResponse {
-    let _ = db::set_meta(&state.db, "telemetry_enabled", if body.enabled { "1" } else { "0" }).await;
+    let _ = db::set_meta(
+        &state.db,
+        "telemetry_enabled",
+        if body.enabled { "1" } else { "0" },
+    )
+    .await;
     Json(json!({ "ok": true, "toggle": body.enabled }))
 }
 
@@ -165,7 +184,10 @@ mod tests {
     #[test]
     fn env_off_is_a_hard_switch_overriding_the_toggle() {
         for off in ["off", "false", "0", "no", "OFF", " Off "] {
-            assert!(!telemetry_enabled(Some(off), true), "env '{off}' must disable");
+            assert!(
+                !telemetry_enabled(Some(off), true),
+                "env '{off}' must disable"
+            );
         }
         // Anything else leaves the toggle in charge.
         assert!(telemetry_enabled(Some("on"), true));
@@ -175,7 +197,6 @@ mod tests {
         assert!(!telemetry_enabled(None, false));
         assert!(!telemetry_enabled(Some("on"), false));
     }
-
 
     #[test]
     fn report_serializes_only_allowlisted_non_pii_fields() {
@@ -190,10 +211,19 @@ mod tests {
         let v: serde_json::Value = serde_json::to_value(&r).unwrap();
         let keys: std::collections::BTreeSet<&str> =
             v.as_object().unwrap().keys().map(|s| s.as_str()).collect();
-        let expected: std::collections::BTreeSet<&str> =
-            ["instance_id", "version", "edition", "users", "agents", "features"]
-                .into_iter()
-                .collect();
-        assert_eq!(keys, expected, "telemetry report must not carry any other (PII) fields");
+        let expected: std::collections::BTreeSet<&str> = [
+            "instance_id",
+            "version",
+            "edition",
+            "users",
+            "agents",
+            "features",
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(
+            keys, expected,
+            "telemetry report must not carry any other (PII) fields"
+        );
     }
 }

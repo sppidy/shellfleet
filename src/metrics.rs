@@ -40,18 +40,18 @@
 //! upstream timeout and a 1000-row response cap on data points.
 
 use axum::{
+    Json, Router,
     extract::State,
     http::StatusCode,
     response::IntoResponse,
     routing::{get, post},
-    Json, Router,
 };
 use axum_extra::extract::cookie::CookieJar;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 
-use crate::{auth, AppState};
+use crate::{AppState, auth};
 
 async fn proxy_get_to_ee(ee_url: &str, path: &str) -> axum::response::Response {
     let url = format!("{}{}", ee_url.trim_end_matches('/'), path);
@@ -64,10 +64,15 @@ async fn proxy_get_to_ee(ee_url: &str, path: &str) -> axum::response::Response {
         .await
     {
         Ok(resp) => {
-            let status = StatusCode::from_u16(resp.status().as_u16())
-                .unwrap_or(StatusCode::BAD_GATEWAY);
+            let status =
+                StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
             let body = resp.text().await.unwrap_or_default();
-            (status, [(axum::http::header::CONTENT_TYPE, "application/json")], body).into_response()
+            (
+                status,
+                [(axum::http::header::CONTENT_TYPE, "application/json")],
+                body,
+            )
+                .into_response()
         }
         Err(e) => {
             tracing::warn!(error = %e, "EE metrics proxy failed");
@@ -92,10 +97,15 @@ async fn proxy_post_json_to_ee(
         .await
     {
         Ok(resp) => {
-            let status = StatusCode::from_u16(resp.status().as_u16())
-                .unwrap_or(StatusCode::BAD_GATEWAY);
+            let status =
+                StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
             let body = resp.text().await.unwrap_or_default();
-            (status, [(axum::http::header::CONTENT_TYPE, "application/json")], body).into_response()
+            (
+                status,
+                [(axum::http::header::CONTENT_TYPE, "application/json")],
+                body,
+            )
+                .into_response()
         }
         Err(e) => {
             tracing::warn!(error = %e, "EE metrics proxy failed");
@@ -301,8 +311,8 @@ fn load_config_from_path(path: &str) -> Option<Config> {
 fn config() -> Option<&'static Config> {
     static CFG: OnceLock<Option<Config>> = OnceLock::new();
     CFG.get_or_init(|| {
-        let path =
-            std::env::var("METRICS_CONFIG_PATH").unwrap_or_else(|_| DEFAULT_CONFIG_PATH.to_string());
+        let path = std::env::var("METRICS_CONFIG_PATH")
+            .unwrap_or_else(|_| DEFAULT_CONFIG_PATH.to_string());
         load_config_from_path(&path)
     })
     .as_ref()
@@ -313,8 +323,8 @@ fn config() -> Option<&'static Config> {
 // ---------------------------------------------------------------------
 
 fn build_client(prom: &PrometheusConfig) -> Result<reqwest::Client, reqwest::Error> {
-    let mut b = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(prom.timeout_secs));
+    let mut b =
+        reqwest::Client::builder().timeout(std::time::Duration::from_secs(prom.timeout_secs));
     if prom.insecure_skip_verify {
         b = b.danger_accept_invalid_certs(true);
     }
@@ -345,10 +355,7 @@ struct PanelsResponse<'a> {
     panels: Vec<PanelInfo<'a>>,
 }
 
-async fn panels_handler(
-    jar: CookieJar,
-    State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
+async fn panels_handler(jar: CookieJar, State(state): State<Arc<AppState>>) -> impl IntoResponse {
     if let Err(err) = auth::current_user(&jar, &state.db).await {
         return err.into_response();
     }
@@ -356,7 +363,11 @@ async fn panels_handler(
         return proxy_get_to_ee(&ee_url, "/api/ee/metrics/panels").await;
     }
     let Some(cfg) = config() else {
-        return Json(PanelsResponse { enabled: false, panels: Vec::new() }).into_response();
+        return Json(PanelsResponse {
+            enabled: false,
+            panels: Vec::new(),
+        })
+        .into_response();
     };
     let mut panels: Vec<PanelInfo> = cfg
         .panels
@@ -369,7 +380,11 @@ async fn panels_handler(
         })
         .collect();
     panels.sort_by(|a, b| a.title.cmp(b.title));
-    Json(PanelsResponse { enabled: true, panels }).into_response()
+    Json(PanelsResponse {
+        enabled: true,
+        panels,
+    })
+    .into_response()
 }
 
 #[derive(Deserialize, Serialize)]
@@ -434,9 +449,7 @@ fn build_label(metric: &serde_json::Map<String, serde_json::Value>) -> String {
     // Exclude noisy boilerplate labels; show what's distinctive.
     let mut bits: Vec<String> = metric
         .iter()
-        .filter(|(k, _)| {
-            !matches!(k.as_str(), "__name__" | "instance" | "job")
-        })
+        .filter(|(k, _)| !matches!(k.as_str(), "__name__" | "instance" | "job"))
         .map(|(k, v)| format!("{k}={}", v.as_str().unwrap_or("")))
         .collect();
     bits.sort();
@@ -465,7 +478,11 @@ async fn query_handler(
     }
 
     let Some(cfg) = config() else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "metrics plugin not configured").into_response();
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "metrics plugin not configured",
+        )
+            .into_response();
     };
     let Some(panel) = cfg.panels.get(&body.panel) else {
         return (StatusCode::NOT_FOUND, "no such panel").into_response();
@@ -474,8 +491,9 @@ async fn query_handler(
     // Per-actor throttle. Reuses the existing MFA-class throttle so
     // a misbehaving dashboard doesn't hammer Prometheus.
     let now = crate::now_unix();
-    if let crate::throttle::CheckResult::Locked { retry_after_secs } =
-        state.mfa_throttle.check(&format!("metrics:{}", claims.sub), now)
+    if let crate::throttle::CheckResult::Locked { retry_after_secs } = state
+        .mfa_throttle
+        .check(&format!("metrics:{}", claims.sub), now)
     {
         return (
             StatusCode::TOO_MANY_REQUESTS,
@@ -508,14 +526,12 @@ async fn query_handler(
         }
     };
 
-    let mut req = client
-        .post(&url)
-        .form(&[
-            ("query", expanded.as_str()),
-            ("start", &start.to_string()),
-            ("end", &end.to_string()),
-            ("step", step),
-        ]);
+    let mut req = client.post(&url).form(&[
+        ("query", expanded.as_str()),
+        ("start", &start.to_string()),
+        ("end", &end.to_string()),
+        ("step", step),
+    ]);
     if let Some(ref tok) = cfg.prometheus.bearer_token {
         req = req.bearer_auth(tok);
     }
@@ -537,7 +553,7 @@ async fn query_handler(
     let raw = match resp.text().await {
         Ok(t) => t,
         Err(e) => {
-            return (StatusCode::BAD_GATEWAY, format!("prometheus body: {e}")).into_response()
+            return (StatusCode::BAD_GATEWAY, format!("prometheus body: {e}")).into_response();
         }
     };
     if !code.is_success() {
@@ -552,11 +568,7 @@ async fn query_handler(
     let parsed: serde_json::Value = match serde_json::from_str(&raw) {
         Ok(v) => v,
         Err(e) => {
-            return (
-                StatusCode::BAD_GATEWAY,
-                format!("prometheus json: {e}"),
-            )
-                .into_response()
+            return (StatusCode::BAD_GATEWAY, format!("prometheus json: {e}")).into_response();
         }
     };
 

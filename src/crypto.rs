@@ -18,8 +18,8 @@
 //! fallback to plaintext.
 
 use aes_gcm::{
-    aead::{Aead, KeyInit},
     Aes256Gcm, Key, Nonce,
+    aead::{Aead, KeyInit},
 };
 use data_encoding::BASE64URL_NOPAD;
 use rand::RngCore;
@@ -106,7 +106,10 @@ mod tests {
         ensure_secret();
         let pt = "hunter2 · the TOTP secret";
         let ct = encrypt(pt);
-        assert!(ct.starts_with(PREFIX), "ciphertext must carry the v1 prefix");
+        assert!(
+            ct.starts_with(PREFIX),
+            "ciphertext must carry the v1 prefix"
+        );
         assert_ne!(ct, pt);
         assert_eq!(decrypt(&ct).as_deref(), Some(pt));
     }
@@ -122,6 +125,10 @@ mod tests {
         let last = chars.len() - 1;
         chars[last] = if chars[last] == 'A' { 'B' } else { 'A' };
         let tampered: String = chars.into_iter().collect();
-        assert_eq!(decrypt(&tampered), None, "tampered ciphertext must not decrypt");
+        assert_eq!(
+            decrypt(&tampered),
+            None,
+            "tampered ciphertext must not decrypt"
+        );
     }
 }

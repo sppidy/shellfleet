@@ -18,17 +18,17 @@
 //! passed OAuth. Whitelisted in `rbac::middleware` like `/auth/mfa/`.
 
 use axum::{
+    Json, Router,
     body::Bytes,
     extract::State,
-    http::{header, StatusCode},
+    http::{StatusCode, header},
     response::IntoResponse,
     routing::{get, post},
-    Json, Router,
 };
 use axum_extra::extract::cookie::CookieJar;
 use std::sync::Arc;
 
-use crate::{auth, ee, AppState};
+use crate::{AppState, auth, ee};
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
@@ -99,7 +99,8 @@ async fn begin_handler(jar: CookieJar) -> impl IntoResponse {
         .await
     {
         Ok(resp) => {
-            let status = StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+            let status =
+                StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
             let body = resp.text().await.unwrap_or_default();
             (status, [(header::CONTENT_TYPE, "application/json")], body).into_response()
         }
@@ -144,10 +145,18 @@ async fn finish_handler(
 
     if !resp.status().is_success() {
         let code = StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::UNAUTHORIZED);
-        let msg = resp.text().await.unwrap_or_else(|_| "passkey verification failed".into());
+        let msg = resp
+            .text()
+            .await
+            .unwrap_or_else(|_| "passkey verification failed".into());
         crate::db::record_audit(
-            &state.db, crate::now_unix(), Some(&pending.sub), None,
-            "auth.passkey.fail", false, None,
+            &state.db,
+            crate::now_unix(),
+            Some(&pending.sub),
+            None,
+            "auth.passkey.fail",
+            false,
+            None,
         )
         .await;
         return (code, msg).into_response();
@@ -167,8 +176,13 @@ async fn finish_handler(
         }
     };
     crate::db::record_audit(
-        &state.db, crate::now_unix(), Some(&pending.sub), None,
-        "auth.passkey.ok", true, None,
+        &state.db,
+        crate::now_unix(),
+        Some(&pending.sub),
+        None,
+        "auth.passkey.ok",
+        true,
+        None,
     )
     .await;
     let cookie = auth::build_session_cookie(token);
@@ -198,7 +212,8 @@ async fn login_begin_handler() -> impl IntoResponse {
         .await
     {
         Ok(resp) => {
-            let status = StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+            let status =
+                StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
             let body = resp.text().await.unwrap_or_default();
             (status, [(header::CONTENT_TYPE, "application/json")], body).into_response()
         }
@@ -232,7 +247,10 @@ async fn login_finish_handler(
     };
     if !resp.status().is_success() {
         let code = StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::UNAUTHORIZED);
-        let msg = resp.text().await.unwrap_or_else(|_| "passkey login failed".into());
+        let msg = resp
+            .text()
+            .await
+            .unwrap_or_else(|_| "passkey login failed".into());
         return (code, msg).into_response();
     }
 
@@ -245,8 +263,13 @@ async fn login_finish_handler(
         _ => return (StatusCode::BAD_GATEWAY, "invalid session token from EE").into_response(),
     };
     crate::db::record_audit(
-        &state.db, crate::now_unix(), Some(&claims.sub), None,
-        "auth.passkey.login", true, None,
+        &state.db,
+        crate::now_unix(),
+        Some(&claims.sub),
+        None,
+        "auth.passkey.login",
+        true,
+        None,
     )
     .await;
     let cookie = auth::build_session_cookie(token);

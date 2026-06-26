@@ -23,21 +23,21 @@ mod csrf;
 mod db;
 mod device_auth;
 mod ee;
-mod ip_allowlist;
 mod ee_recording;
 mod fan_out;
-mod invites;
 mod health;
+mod invites;
+mod ip_allowlist;
 mod labels;
 mod metrics;
 mod mfa;
-mod passkey_mfa;
 mod notifications;
+mod passkey_mfa;
 mod probe_library;
 mod rbac;
 mod security_headers;
-mod throttle;
 mod telemetry;
+mod throttle;
 mod tokens;
 mod update_windows;
 mod users;
@@ -50,11 +50,14 @@ mod webhook;
 pub const CE_USER_LIMIT: usize = 3;
 
 use axum::{
-    extract::{DefaultBodyLimit, Query, State, ws::{Message as WsMessage, WebSocket, WebSocketUpgrade}},
+    Router,
+    extract::{
+        DefaultBodyLimit, Query, State,
+        ws::{Message as WsMessage, WebSocket, WebSocketUpgrade},
+    },
     http::StatusCode,
     response::IntoResponse,
     routing::get,
-    Router,
 };
 use axum_extra::extract::cookie::CookieJar;
 use futures_util::{SinkExt, StreamExt};
@@ -65,17 +68,22 @@ use std::{
     collections::{HashMap, HashSet},
     net::SocketAddr,
     sync::{
-        atomic::{AtomicU64, Ordering},
         Arc,
+        atomic::{AtomicU64, Ordering},
     },
 };
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{Mutex, mpsc};
 use tower_http::trace::{DefaultOnFailure, DefaultOnResponse, TraceLayer};
 use tracing::Level;
-use tracing_subscriber::{fmt, prelude::*, EnvFilter};
+use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
 type AgentTx = mpsc::UnboundedSender<Message>;
 type UiTx = mpsc::UnboundedSender<UiMessage>;
+
+pub struct UiClient {
+    tx: UiTx,
+    allowed_agents: Option<Vec<String>>,
+}
 
 /// One row in the live-agents map. Combining the WS sender with the
 /// reported capabilities under a single Mutex closes the race that
@@ -95,10 +103,8 @@ pub fn now_unix() -> i64 {
         .unwrap_or(0)
 }
 
-pub type PendingBackupListTx =
-    tokio::sync::oneshot::Sender<shared::Message>;
-pub type PendingBackupRestoreTx =
-    tokio::sync::oneshot::Sender<shared::Message>;
+pub type PendingBackupListTx = tokio::sync::oneshot::Sender<shared::Message>;
+pub type PendingBackupRestoreTx = tokio::sync::oneshot::Sender<shared::Message>;
 
 /// Disconnect debounce state. The agent webhook fan-out distinguishes
 /// "transient WS blip" from "agent is actually offline" by gating the
@@ -128,7 +134,7 @@ pub struct AppState {
     /// Per-agent debounce state for the disconnect/reconnect webhook
     /// pair. See `DisconnectState`.
     pub disconnect_states: Mutex<HashMap<String, DisconnectState>>,
-    pub ui_clients: Mutex<HashMap<u64, UiTx>>,
+    pub ui_clients: Mutex<HashMap<u64, UiClient>>,
     pub ui_id_counter: AtomicU64,
     pub db: SqlitePool,
     /// Per-login throttle for /api/auth/mfa/verify failures. Defends
@@ -152,7 +158,8 @@ pub struct AppState {
     /// HTTP handler pushes a sender here and awaits the channel; the
     /// WS receive loop pops the most recent waiter for that agent and
     /// forwards the response.
-    pub pending_backup_lists: Mutex<HashMap<String, std::collections::VecDeque<PendingBackupListTx>>>,
+    pub pending_backup_lists:
+        Mutex<HashMap<String, std::collections::VecDeque<PendingBackupListTx>>>,
     pub pending_backup_restores:
         Mutex<HashMap<String, std::collections::VecDeque<PendingBackupRestoreTx>>>,
     /// Session-recording tap (EE). No-op unless EE_RECORD_TERMINALS is enabled.
@@ -234,9 +241,16 @@ async fn broadcast_agent_list(state: &AppState) {
             .collect();
         (agents, capabilities)
     };
-    let msg = UiMessage::ListAgentsResponse { agents, capabilities };
     let mut clients = state.ui_clients.lock().await;
-    clients.retain(|_id, tx| tx.send(msg.clone()).is_ok());
+    clients.retain(|_id, client| {
+        let (agents, capabilities) =
+            ee_filter_agent_list(agents.clone(), capabilities.clone(), &client.allowed_agents);
+        let msg = UiMessage::ListAgentsResponse {
+            agents,
+            capabilities,
+        };
+        client.tx.send(msg).is_ok()
+    });
 }
 
 async fn healthz() -> impl IntoResponse {
@@ -304,8 +318,8 @@ async fn audit_handler(
             .await
         {
             Ok(resp) => {
-                let status = StatusCode::from_u16(resp.status().as_u16())
-                    .unwrap_or(StatusCode::BAD_GATEWAY);
+                let status =
+                    StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
                 let body = resp.text().await.unwrap_or_default();
                 return (
                     status,
@@ -330,10 +344,7 @@ async fn audit_handler(
     }
 }
 
-async fn me_handler(
-    jar: CookieJar,
-    State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
+async fn me_handler(jar: CookieJar, State(state): State<Arc<AppState>>) -> impl IntoResponse {
     if auth::is_dev_mode() {
         return (
             StatusCode::OK,
@@ -788,7 +799,12 @@ async fn handle_agent_socket(socket: WebSocket, state: Arc<AppState>, token: Str
         }
         if let Ok(parsed_msg) = parsed {
             match parsed_msg {
-                Message::Register { hostname, protocol_version, capabilities, metadata } => {
+                Message::Register {
+                    hostname,
+                    protocol_version,
+                    capabilities,
+                    metadata,
+                } => {
                     // Identity-binding guard: a per-agent token is bound to the
                     // first hostname it registers with. Reject a token reused
                     // under a DIFFERENT hostname — prevents one valid token from
@@ -860,11 +876,7 @@ async fn handle_agent_socket(socket: WebSocket, state: Arc<AppState>, token: Str
                     //      already (the agent was offline past the
                     //      grace window). Post an `agent.reconnect`
                     //      webhook so the operator knows it's back.
-                    let prior = state
-                        .disconnect_states
-                        .lock()
-                        .await
-                        .remove(&id);
+                    let prior = state.disconnect_states.lock().await.remove(&id);
                     match prior {
                         Some(DisconnectState::Pending(handle)) => {
                             handle.abort();
@@ -878,24 +890,15 @@ async fn handle_agent_socket(socket: WebSocket, state: Arc<AppState>, token: Str
                                 agent_id = %id,
                                 "agent connected after confirmed disconnect — firing connect webhook"
                             );
-                            webhook::fire_agent_connect(
-                                state.db.clone(),
-                                id.clone(),
-                                now_unix(),
-                            );
+                            webhook::fire_agent_connect(state.db.clone(), id.clone(), now_unix());
                         }
                         None => {}
                     }
 
                     // Stamp the token's hostname + last_seen (and seed
                     // created_at on first contact) for the operator UI.
-                    if let Err(e) = db::upsert_token_seen(
-                        &state.db,
-                        &token,
-                        &hostname,
-                        now_unix(),
-                    )
-                    .await
+                    if let Err(e) =
+                        db::upsert_token_seen(&state.db, &token, &hostname, now_unix()).await
                     {
                         tracing::warn!(error = %e, "failed to persist token metadata");
                     }
@@ -911,7 +914,9 @@ async fn handle_agent_socket(socket: WebSocket, state: Arc<AppState>, token: Str
                     )
                     .await;
 
-                    let _ = tx.send(Message::RegisterAck { agent_id: id.clone() });
+                    let _ = tx.send(Message::RegisterAck {
+                        agent_id: id.clone(),
+                    });
 
                     broadcast_agent_list(&state).await;
 
@@ -1019,7 +1024,8 @@ async fn handle_agent_socket(socket: WebSocket, state: Arc<AppState>, token: Str
                                     let real_transition = prev_str.is_some();
                                     let going_red = state_str == "red";
                                     if real_transition || going_red {
-                                        let level = if state_str == "red" { "error" } else { "info" };
+                                        let level =
+                                            if state_str == "red" { "error" } else { "info" };
                                         let title = format!(
                                             "health probe #{probe_id} on {} → {state_str}",
                                             agent_id.trim_end_matches("-id"),
@@ -1272,7 +1278,12 @@ async fn handle_agent_socket(socket: WebSocket, state: Arc<AppState>, token: Str
                             message: other,
                         };
                         let mut clients = state.ui_clients.lock().await;
-                        clients.retain(|_id, ctx| ctx.send(ui_msg.clone()).is_ok());
+                        clients.retain(|_id, ctx| {
+                            if !agent_allowed_by_patterns(&agent_id, &ctx.allowed_agents) {
+                                return true;
+                            }
+                            ctx.tx.send(ui_msg.clone()).is_ok()
+                        });
                     }
                 }
             }
@@ -1329,17 +1340,18 @@ async fn handle_agent_socket(socket: WebSocket, state: Arc<AppState>, token: Str
             // register beat us to it, the entry will have been
             // removed and we stay silent.
             let mut states = state_for_task.disconnect_states.lock().await;
-            let still_pending = matches!(
-                states.get(&id_for_task),
-                Some(DisconnectState::Pending(_)),
-            );
+            let still_pending =
+                matches!(states.get(&id_for_task), Some(DisconnectState::Pending(_)),);
             if !still_pending {
                 return;
             }
             let now_ts = now_unix();
             states.insert(
                 id_for_task.clone(),
-                DisconnectState::Confirmed { since: now_ts, last_alert: now_ts },
+                DisconnectState::Confirmed {
+                    since: now_ts,
+                    last_alert: now_ts,
+                },
             );
             drop(states);
             tracing::info!(
@@ -1347,11 +1359,7 @@ async fn handle_agent_socket(socket: WebSocket, state: Arc<AppState>, token: Str
                 grace_secs = DISCONNECT_GRACE.as_secs(),
                 "agent disconnect grace elapsed — firing webhook"
             );
-            webhook::fire_agent_disconnect(
-                state_for_task.db.clone(),
-                id_for_task,
-                now_unix(),
-            );
+            webhook::fire_agent_disconnect(state_for_task.db.clone(), id_for_task, now_unix());
         });
         state
             .disconnect_states
@@ -1417,11 +1425,13 @@ fn is_mutating_agent_message(msg: &Message) -> bool {
         | K8sListIngressesRequest
         | K8sListPvcsRequest
         | K8sListEventsRequest
-        | K8sDescribeRequest { .. }
-        | DriftSnapshotRequest { .. } => false,
+        | K8sDescribeRequest { .. } => false,
         // K8sLogsRequest / K8sLogsStop are deliberately NOT in this
         // list. Pod logs can leak Secrets, JWTs, and other sensitive
         // material; streaming them is admin-only via the default arm.
+        // DriftSnapshotRequest is also admin-only: the configs category can
+        // make agents inspect host files, and package/service inventories are
+        // operationally sensitive enough to keep behind the same boundary.
         // Everything else is treated as mutating. AptRefreshRequest
         // counts as mutating because it triggers `apt-get update`,
         // which writes to /var/lib/apt/lists and can interact with
@@ -1440,11 +1450,16 @@ async fn handle_ui_socket(
     tracing::info!(%login, "new ui websocket connection");
     let (mut sender, mut receiver) = socket.split();
 
+    let allowed_agents = ee_fetch_allowed_agents(&login).await;
     let (tx, mut rx) = mpsc::unbounded_channel::<UiMessage>();
     let client_id = state.ui_id_counter.fetch_add(1, Ordering::Relaxed);
-    state.ui_clients.lock().await.insert(client_id, tx.clone());
-
-    let allowed_agents = ee_fetch_allowed_agents(&login).await;
+    state.ui_clients.lock().await.insert(
+        client_id,
+        UiClient {
+            tx: tx.clone(),
+            allowed_agents: allowed_agents.clone(),
+        },
+    );
 
     // Terminal sessions this client opened, so recordings are stopped if the
     // socket drops without an explicit StopTerminalRequest.
@@ -1458,7 +1473,10 @@ async fn handle_ui_socket(
             .map(|(id, entry)| (id.clone(), entry.capabilities.clone()))
             .collect();
         let (agents, capabilities) = ee_filter_agent_list(agents, capabilities, &allowed_agents);
-        let _ = tx.send(UiMessage::ListAgentsResponse { agents, capabilities });
+        let _ = tx.send(UiMessage::ListAgentsResponse {
+            agents,
+            capabilities,
+        });
     }
 
     let send_task = tokio::spawn(async move {
@@ -1515,19 +1533,21 @@ async fn handle_ui_socket(
                         .iter()
                         .map(|(id, entry)| (id.clone(), entry.capabilities.clone()))
                         .collect();
-                    let (agents, capabilities) = ee_filter_agent_list(agents, capabilities, &allowed_agents);
-                    let _ = tx.send(UiMessage::ListAgentsResponse { agents, capabilities });
+                    let (agents, capabilities) =
+                        ee_filter_agent_list(agents, capabilities, &allowed_agents);
+                    let _ = tx.send(UiMessage::ListAgentsResponse {
+                        agents,
+                        capabilities,
+                    });
                 }
                 UiMessage::SendToAgent { agent_id, message } => {
-                    if let Some(ref allowed) = allowed_agents {
-                        if !allowed.contains(&agent_id) {
-                            let _ = tx.send(UiMessage::PermissionDenied {
-                                agent_id: agent_id.clone(),
-                                variant_type: "agent_access".to_string(),
-                                reason: "not in your allowed agents".to_string(),
-                            });
-                            continue;
-                        }
+                    if !agent_allowed_by_patterns(&agent_id, &allowed_agents) {
+                        let _ = tx.send(UiMessage::PermissionDenied {
+                            agent_id: agent_id.clone(),
+                            variant_type: "agent_access".to_string(),
+                            reason: "not in your allowed agents".to_string(),
+                        });
+                        continue;
                     }
                     // EE ACL enforcement (skip for admins)
                     if ee::ee_active() && !auth::is_dev_mode() {
@@ -1537,7 +1557,14 @@ async fn handle_ui_socket(
                         );
                         if !is_admin {
                             if let Some(action) = ee_action_for_message(&message) {
-                                if !ee_check_permission(&login, action, &agent_id, Some(client_ip.as_str())).await {
+                                if !ee_check_permission(
+                                    &login,
+                                    action,
+                                    &agent_id,
+                                    Some(client_ip.as_str()),
+                                )
+                                .await
+                                {
                                     let _ = tx.send(UiMessage::PermissionDenied {
                                         agent_id: agent_id.clone(),
                                         variant_type: action.to_string(),
@@ -1566,8 +1593,7 @@ async fn handle_ui_socket(
                             let variant_type = serde_json::to_value(&message)
                                 .ok()
                                 .and_then(|v| {
-                                    v.get("type")
-                                        .and_then(|t| t.as_str().map(String::from))
+                                    v.get("type").and_then(|t| t.as_str().map(String::from))
                                 })
                                 .unwrap_or_else(|| "unknown".into());
                             tracing::warn!(
@@ -1609,10 +1635,15 @@ async fn handle_ui_socket(
                                 Ok(None) => { /* no rule matched — run it now */ }
                                 Ok(Some(req_id)) => {
                                     crate::db::record_audit(
-                                        &state.db, now_unix(), Some(&login), Some(&agent_id),
-                                        "ws.approval.held", true,
+                                        &state.db,
+                                        now_unix(),
+                                        Some(&login),
+                                        Some(&agent_id),
+                                        "ws.approval.held",
+                                        true,
                                         Some(&format!("action={action} request={req_id}")),
-                                    ).await;
+                                    )
+                                    .await;
                                     let _ = tx.send(UiMessage::PermissionDenied {
                                         agent_id: agent_id.clone(),
                                         variant_type: "approval_pending".to_string(),
@@ -1636,7 +1667,10 @@ async fn handle_ui_socket(
                     // Recording tap: terminal session lifecycle + INPUT (user→agent).
                     match &message {
                         Message::StartTerminalRequest { session_id } => {
-                            state.recorder.start(session_id, &agent_id, &login, "host").await;
+                            state
+                                .recorder
+                                .start(session_id, &agent_id, &login, "host")
+                                .await;
                             rec_sessions.insert(session_id.clone());
                         }
                         Message::TerminalData { session_id, data } => {
@@ -1716,6 +1750,22 @@ async fn ee_fetch_allowed_agents(login: &str) -> Option<Vec<String>> {
     )
 }
 
+fn agent_allowed_by_patterns(agent: &str, allowed: &Option<Vec<String>>) -> bool {
+    let Some(patterns) = allowed else {
+        return true;
+    };
+    patterns.iter().any(|p| {
+        if p == "*" {
+            return true;
+        }
+        if p.ends_with('*') {
+            let prefix = &p[..p.len() - 1];
+            return agent.starts_with(prefix);
+        }
+        p == agent
+    })
+}
+
 fn ee_action_for_message(msg: &Message) -> Option<&'static str> {
     use Message::*;
     match msg {
@@ -1785,7 +1835,9 @@ async fn ee_check_approval(
     payload: &str,
 ) -> Result<Option<i64>, ()> {
     // No EE configured = no approval system = proceed.
-    let Some(ee_url) = ee::ee_sidecar_url() else { return Ok(None) };
+    let Some(ee_url) = ee::ee_sidecar_url() else {
+        return Ok(None);
+    };
     let secret = std::env::var("EE_INTERNAL_SECRET").unwrap_or_default();
     let url = format!("{}/api/ee/approvals/check", ee_url.trim_end_matches('/'));
     let body = serde_json::json!({
@@ -1824,7 +1876,9 @@ async fn ee_check_permission(
     resource: &str,
     client_ip: Option<&str>,
 ) -> bool {
-    let Some(ee_url) = ee::ee_sidecar_url() else { return true };
+    let Some(ee_url) = ee::ee_sidecar_url() else {
+        return true;
+    };
     let secret = std::env::var("EE_INTERNAL_SECRET").unwrap_or_default();
     let url = format!("{}/api/ee/acl/evaluate", ee_url.trim_end_matches('/'));
     // client_ip lets ACL rules with `conditions.ip` actually match (the EE
@@ -1870,20 +1924,14 @@ fn ee_filter_agent_list(
     let Some(patterns) = allowed else {
         return (agents, capabilities);
     };
-    let matches = |agent: &str| -> bool {
-        patterns.iter().any(|p| {
-            if p == "*" { return true; }
-            if p.ends_with('*') {
-                let prefix = &p[..p.len() - 1];
-                return agent.starts_with(prefix);
-            }
-            p == agent
-        })
-    };
-    let filtered: Vec<String> = agents.into_iter().filter(|a| matches(a)).collect();
+    let allowed = Some(patterns.clone());
+    let filtered: Vec<String> = agents
+        .into_iter()
+        .filter(|a| agent_allowed_by_patterns(a, &allowed))
+        .collect();
     let filtered_caps: HashMap<String, Vec<String>> = capabilities
         .into_iter()
-        .filter(|(k, _)| matches(k))
+        .filter(|(k, _)| agent_allowed_by_patterns(k, &allowed))
         .collect();
     (filtered, filtered_caps)
 }
@@ -1918,5 +1966,20 @@ mod tests {
             session_id: "s".into(),
             data: vec![1, 2, 3],
         }));
+        assert!(is_mutating_agent_message(&Message::DriftSnapshotRequest {
+            snapshot_id: "snap".into(),
+            categories: vec!["configs".into()],
+            config_paths: vec!["/etc/hostname".into()],
+        }));
+    }
+
+    #[test]
+    fn agent_visibility_patterns_gate_receive_paths() {
+        let allowed = Some(vec!["prod-*".into(), "agent-exact".into()]);
+
+        assert!(agent_allowed_by_patterns("prod-db-1", &allowed));
+        assert!(agent_allowed_by_patterns("agent-exact", &allowed));
+        assert!(!agent_allowed_by_patterns("dev-db-1", &allowed));
+        assert!(agent_allowed_by_patterns("anything", &None));
     }
 }

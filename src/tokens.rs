@@ -1,9 +1,15 @@
-use axum::{extract::State, http::StatusCode, response::IntoResponse, routing::{get, post}, Json, Router};
+use axum::{
+    Json, Router,
+    extract::State,
+    http::StatusCode,
+    response::IntoResponse,
+    routing::{get, post},
+};
 use axum_extra::extract::cookie::CookieJar;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-use crate::{auth::verify_token, db, AppState};
+use crate::{AppState, auth::verify_token, db};
 
 #[derive(Serialize)]
 struct TokenRow {
@@ -48,7 +54,14 @@ fn preview(token: &str) -> String {
         return "*".repeat(chars.len());
     }
     let head: String = chars.iter().take(4).collect();
-    let tail: String = chars.iter().rev().take(4).collect::<Vec<_>>().into_iter().rev().collect();
+    let tail: String = chars
+        .iter()
+        .rev()
+        .take(4)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
     format!("{head}…{tail}")
 }
 

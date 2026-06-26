@@ -44,7 +44,7 @@ use std::sync::{Arc, OnceLock};
 
 use serde::Serialize;
 use sqlx::SqlitePool;
-use tokio::sync::{mpsc, Semaphore};
+use tokio::sync::{Semaphore, mpsc};
 
 use crate::db;
 
@@ -107,7 +107,13 @@ fn last_n_lines(log: &str, n: usize) -> String {
         .join("\n")
 }
 
-fn slack_text(headline: &str, agent_id: &str, status: &str, error: Option<&str>, log: &str) -> String {
+fn slack_text(
+    headline: &str,
+    agent_id: &str,
+    status: &str,
+    error: Option<&str>,
+    log: &str,
+) -> String {
     let icon = if matches!(status, "success" | "green" | "connected") {
         ":white_check_mark:"
     } else if status == "disconnected" {
@@ -126,7 +132,13 @@ fn slack_text(headline: &str, agent_id: &str, status: &str, error: Option<&str>,
     text
 }
 
-fn discord_text(headline: &str, agent_id: &str, status: &str, error: Option<&str>, log: &str) -> String {
+fn discord_text(
+    headline: &str,
+    agent_id: &str,
+    status: &str,
+    error: Option<&str>,
+    log: &str,
+) -> String {
     let icon = if matches!(status, "success" | "green" | "connected") {
         "✅"
     } else if status == "disconnected" {
@@ -145,10 +157,7 @@ fn discord_text(headline: &str, agent_id: &str, status: &str, error: Option<&str
     // Discord caps message at 2000 chars. Truncate hard on the way out.
     if text.len() > 1900 {
         let cut = text.len() - 1900;
-        text = format!(
-            "…[{cut} bytes truncated]…\n{}",
-            &text[text.len() - 1900..]
-        );
+        text = format!("…[{cut} bytes truncated]…\n{}", &text[text.len() - 1900..]);
     }
     text
 }
@@ -229,7 +238,13 @@ impl RedactedToken {
     }
 }
 
-fn telegram_text(headline: &str, agent_id: &str, status: &str, error: Option<&str>, log: &str) -> String {
+fn telegram_text(
+    headline: &str,
+    agent_id: &str,
+    status: &str,
+    error: Option<&str>,
+    log: &str,
+) -> String {
     let icon = if matches!(status, "success" | "green" | "connected") {
         "✅"
     } else if status == "disconnected" {
@@ -267,7 +282,10 @@ enum Sink {
     /// Telegram Bot API. The token is wrapped in `RedactedToken` so
     /// it never lands in `?sink`-style debug prints; only `expose()`
     /// hands it back as a `&str` for URL construction.
-    Telegram { bot_token: RedactedToken, chat_id: String },
+    Telegram {
+        bot_token: RedactedToken,
+        chat_id: String,
+    },
 }
 
 impl Sink {
@@ -686,7 +704,11 @@ pub fn fire_backup_result(
             kind: "backup_job.result",
             headline: format!("shellfleet backup `{name}`"),
             agent_id,
-            status: if success { "success".into() } else { "failed".into() },
+            status: if success {
+                "success".into()
+            } else {
+                "failed".into()
+            },
             log,
             error,
             at,
@@ -778,9 +800,15 @@ mod tests {
         // blindly, would land inside a multi-byte character.
         let s = "héllo wörld ☃ über alles";
         let out = truncate(s, 8);
-        assert!(out.contains("truncated"), "must carry the truncation marker");
+        assert!(
+            out.contains("truncated"),
+            "must carry the truncation marker"
+        );
         let tail = out.rsplit('\n').next().unwrap();
-        assert!(s.ends_with(tail), "kept tail must be a valid char-boundary suffix");
+        assert!(
+            s.ends_with(tail),
+            "kept tail must be a valid char-boundary suffix"
+        );
     }
 
     #[test]

@@ -9,7 +9,7 @@
 use axum::{
     body::Body,
     extract::Request,
-    http::{header, HeaderValue, Response},
+    http::{HeaderValue, Response, header},
     middleware::Next,
 };
 
@@ -20,9 +20,8 @@ pub async fn middleware(req: Request, next: Next) -> Response<Body> {
     // 1 year HSTS, include subdomains, preload-eligible. The live
     // deploy is HTTPS-only behind Cloudflare; an in-cluster client
     // on Tailscale also gets HTTPS via the cert pinned at the edge.
-    h.entry(header::STRICT_TRANSPORT_SECURITY).or_insert_with(|| {
-        HeaderValue::from_static("max-age=31536000; includeSubDomains")
-    });
+    h.entry(header::STRICT_TRANSPORT_SECURITY)
+        .or_insert_with(|| HeaderValue::from_static("max-age=31536000; includeSubDomains"));
     // No legacy MIME sniffing.
     h.entry(header::X_CONTENT_TYPE_OPTIONS)
         .or_insert_with(|| HeaderValue::from_static("nosniff"));
@@ -37,9 +36,7 @@ pub async fn middleware(req: Request, next: Next) -> Response<Body> {
     // The dashboard doesn't use camera, mic, geolocation, etc.
     h.entry(header::HeaderName::from_static("permissions-policy"))
         .or_insert_with(|| {
-            HeaderValue::from_static(
-                "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
-            )
+            HeaderValue::from_static("camera=(), microphone=(), geolocation=(), payment=(), usb=()")
         });
     // Content-Security-Policy. The dashboard self-hosts its JS/CSS
     // (Next.js standalone build) and only talks to its own origin

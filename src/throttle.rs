@@ -217,7 +217,10 @@ fn peer_is_trusted_proxy(peer: IpAddr) -> bool {
 pub fn real_client_ip(headers: &HeaderMap, peer: Option<IpAddr>) -> String {
     let peer_trusted = peer.map(peer_is_trusted_proxy).unwrap_or(false);
     if peer_trusted {
-        if let Some(v) = headers.get("cf-connecting-ip").and_then(|h| h.to_str().ok()) {
+        if let Some(v) = headers
+            .get("cf-connecting-ip")
+            .and_then(|h| h.to_str().ok())
+        {
             if v.parse::<IpAddr>().is_ok() {
                 return v.to_string();
             }
@@ -236,7 +239,8 @@ pub fn real_client_ip(headers: &HeaderMap, peer: Option<IpAddr>) -> String {
             }
         }
     }
-    peer.map(|p| p.to_string()).unwrap_or_else(|| "unknown".into())
+    peer.map(|p| p.to_string())
+        .unwrap_or_else(|| "unknown".into())
 }
 
 pub fn now_secs_f64() -> f64 {

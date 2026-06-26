@@ -18,7 +18,7 @@ use axum::{
 use axum_extra::extract::cookie::CookieJar;
 use std::sync::Arc;
 
-use crate::{auth, AppState};
+use crate::{AppState, auth};
 
 /// Exact-or-`/`-bounded match for the api-keys route, post-`/api`-strip form.
 /// Never a bare `starts_with("/ee/keys")` (would swallow `/ee/keys-extra`).
@@ -102,7 +102,10 @@ pub async fn middleware(
     // Single DB lookup that handles both the session-epoch invalidation
     // check and the role re-resolution. Avoids a second hit for the
     // mutating-method branch.
-    let user_row = crate::db::get_user(&state.db, &claims.sub).await.ok().flatten();
+    let user_row = crate::db::get_user(&state.db, &claims.sub)
+        .await
+        .ok()
+        .flatten();
     if let Some(ref row) = user_row {
         if claims.iat < row.session_epoch {
             return unauthorized("session revoked — please sign in again");

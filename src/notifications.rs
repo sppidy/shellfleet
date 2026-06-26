@@ -3,18 +3,18 @@
 //! of the optional outbound `webhook.rs` forwarder.
 
 use axum::{
+    Json, Router,
     extract::{Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
     routing::{delete, get, post},
-    Json, Router,
 };
 use axum_extra::extract::cookie::CookieJar;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use std::sync::Arc;
 
-use crate::{auth::verify_token, db, AppState};
+use crate::{AppState, auth::verify_token, db};
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
@@ -147,16 +147,8 @@ pub async fn notify(
     title: &str,
     body: Option<&str>,
 ) {
-    if let Err(e) = db::insert_notification(
-        db,
-        kind,
-        agent_id,
-        level,
-        title,
-        body,
-        crate::now_unix(),
-    )
-    .await
+    if let Err(e) =
+        db::insert_notification(db, kind, agent_id, level, title, body, crate::now_unix()).await
     {
         tracing::warn!(error = %e, "failed to insert notification");
     }
