@@ -56,6 +56,9 @@ async fn list_agents(
     let Ok((_login, _role)) = require_api_key(&headers) else {
         return (StatusCode::UNAUTHORIZED, "API key required").into_response();
     };
+    if let Err((code, msg)) = crate::api_auth::require_key_action(&headers, &state.db, "agent:View").await {
+        return (code, msg).into_response();
+    }
     let map = state.agents.lock().await;
     let agents: Vec<AgentSummary> = map
         .iter()
@@ -75,6 +78,9 @@ async fn get_agent(
     let Ok((_login, _role)) = require_api_key(&headers) else {
         return (StatusCode::UNAUTHORIZED, "API key required").into_response();
     };
+    if let Err((code, msg)) = crate::api_auth::require_key_action(&headers, &state.db, "agent:View").await {
+        return (code, msg).into_response();
+    }
     let agent_id = format!("{name}-id");
     let map = state.agents.lock().await;
     match map.get(&agent_id) {
@@ -115,6 +121,9 @@ async fn exec_command(
     };
     if role != "admin" {
         return (StatusCode::FORBIDDEN, "admin only").into_response();
+    }
+    if let Err((code, msg)) = crate::api_auth::require_key_action(&headers, &state.db, "agent:Exec").await {
+        return (code, msg).into_response();
     }
 
     let agent_id = format!("{name}-id");
@@ -185,6 +194,16 @@ async fn control_service(
         return (StatusCode::BAD_REQUEST, "action must be start, stop, or restart").into_response();
     }
 
+    let service_action = match action.as_str() {
+        "start" => "service:Start",
+        "stop" => "service:Stop",
+        "restart" => "service:Restart",
+        _ => unreachable!(),
+    };
+    if let Err((code, msg)) = crate::api_auth::require_key_action(&headers, &state.db, service_action).await {
+        return (code, msg).into_response();
+    }
+
     let agent_id = format!("{name}-id");
     let entry = {
         let map = state.agents.lock().await;
@@ -223,16 +242,25 @@ async fn list_users(
     if role != "admin" {
         return (StatusCode::FORBIDDEN, "admin only").into_response();
     }
+    if let Err((code, msg)) = crate::api_auth::require_key_action(&headers, &state.db, "user:List").await {
+        return (code, msg).into_response();
+    }
     match db::list_users(&state.db).await {
         Ok(users) => axum::Json(users).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")).into_response(),
     }
 }
 
-async fn get_acl(headers: HeaderMap) -> impl IntoResponse {
+async fn get_acl(
+    headers: HeaderMap,
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
     let Ok((_login, _role)) = require_api_key(&headers) else {
         return (StatusCode::UNAUTHORIZED, "API key required").into_response();
     };
+    if let Err((code, msg)) = crate::api_auth::require_key_action(&headers, &state.db, "acl:View").await {
+        return (code, msg).into_response();
+    }
     if !ee::ee_active() {
         return (StatusCode::SERVICE_UNAVAILABLE, "EE not active").into_response();
     }
@@ -257,12 +285,19 @@ async fn get_acl(headers: HeaderMap) -> impl IntoResponse {
     }
 }
 
-async fn put_acl(headers: HeaderMap, body: String) -> impl IntoResponse {
+async fn put_acl(
+    headers: HeaderMap,
+    State(state): State<Arc<AppState>>,
+    body: String,
+) -> impl IntoResponse {
     let Ok((_login, role)) = require_api_key(&headers) else {
         return (StatusCode::UNAUTHORIZED, "API key required").into_response();
     };
     if role != "admin" {
         return (StatusCode::FORBIDDEN, "admin only").into_response();
+    }
+    if let Err((code, msg)) = crate::api_auth::require_key_action(&headers, &state.db, "acl:Write").await {
+        return (code, msg).into_response();
     }
     if !ee::ee_active() {
         return (StatusCode::SERVICE_UNAVAILABLE, "EE not active").into_response();
@@ -304,6 +339,9 @@ async fn export_audit(
     let Ok((_login, _role)) = require_api_key(&headers) else {
         return (StatusCode::UNAUTHORIZED, "API key required").into_response();
     };
+    if let Err((code, msg)) = crate::api_auth::require_key_action(&headers, &state.db, "audit:Read").await {
+        return (code, msg).into_response();
+    }
     let limit = q.limit.unwrap_or(200).clamp(1, 10000);
     match db::recent_audit(&state.db, limit).await {
         Ok(rows) => axum::Json(rows).into_response(),
@@ -311,10 +349,17 @@ async fn export_audit(
     }
 }
 
-async fn query_metrics(headers: HeaderMap, body: String) -> impl IntoResponse {
+async fn query_metrics(
+    headers: HeaderMap,
+    State(state): State<Arc<AppState>>,
+    body: String,
+) -> impl IntoResponse {
     let Ok((_login, _role)) = require_api_key(&headers) else {
         return (StatusCode::UNAUTHORIZED, "API key required").into_response();
     };
+    if let Err((code, msg)) = crate::api_auth::require_key_action(&headers, &state.db, "metric:Query").await {
+        return (code, msg).into_response();
+    }
     if !ee::ee_active() {
         return (StatusCode::SERVICE_UNAVAILABLE, "EE not active").into_response();
     }
