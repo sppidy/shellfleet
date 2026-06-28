@@ -510,6 +510,9 @@ async fn main() {
                                         stdout: r.stdout,
                                         stderr: r.stderr,
                                         error: r.error,
+                                        truncated: r.truncated,
+                                        timed_out: r.timed_out,
+                                        duration_ms: r.duration_ms,
                                     });
                                 });
                             }
