@@ -300,8 +300,15 @@ pub enum Message {
         exit_code: i32,
         stdout: String,
         stderr: String,
-        /// Set when the command couldn't be run at all (spawn failed / timed out).
+        /// Set when the command couldn't be run at all (spawn failed / timed out),
+        /// or when output capture was incomplete (reader I/O error / panic).
         error: Option<String>,
+        #[serde(default)]
+        truncated: bool,      // output exceeded MAX_OUTPUT_BYTES or capture incomplete
+        #[serde(default)]
+        timed_out: bool,      // timeout fired before process exited
+        #[serde(default)]
+        duration_ms: u64,     // agent wall-clock from spawn to ExecResult
     },
 
     /// Slice 6 (v2) — mutating API. All admin-only on the server
@@ -1106,6 +1113,18 @@ pub struct SwarmServiceSpecSummary {
 fn default_exec_timeout() -> u64 {
     60
 }
+
+// ── execution constants (shared across agent, CE server, and EE) ──
+
+/// Maximum combined stdout+stderr bytes for RunCommand.
+pub const MAX_OUTPUT_BYTES: usize = 1_048_576;   // 1 MiB
+
+/// Grace period (seconds) for agent reader-task abort after child exit.
+pub const EXEC_READER_GRACE_SECS: u64 = 5;
+
+/// Server-side margin (seconds) beyond the agent timeout, ensuring the
+/// agent has time to kill, reap, and respond before the server gives up.
+pub const EXEC_TRANSPORT_MARGIN_SECS: u64 = 5;
 
 fn default_tail() -> u32 {
     200
