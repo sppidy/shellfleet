@@ -7,6 +7,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use std::time::Instant;
 
 use crate::{AppState, db, ee};
 
@@ -108,12 +109,6 @@ fn default_timeout() -> u64 {
     30
 }
 
-#[derive(Serialize)]
-struct ExecResponse {
-    stdout: String,
-    duration_ms: u64,
-}
-
 async fn exec_command(
     headers: HeaderMap,
     State(state): State<Arc<AppState>>,
@@ -133,54 +128,91 @@ async fn exec_command(
     }
 
     let agent_id = format!("{name}-id");
-    let timeout = body.timeout_secs.clamp(1, 300);
+    let timer = Instant::now();
+    let timeout_secs = body.timeout_secs.clamp(1, 300);
 
-    let entry = {
-        let map = state.agents.lock().await;
-        map.get(&agent_id).cloned()
+    let pending = match crate::agent_dispatch::dispatch_run_command(
+        &state, &agent_id, body.command.clone(), timeout_secs,
+    ).await {
+        Ok(p) => p,
+        Err(crate::agent_dispatch::DispatchError::AgentNotFound) => {
+            api_exec_audit(&state, &login, &agent_id, &body.command,
+                false, None, Some("agent not found"), false, false, &timer).await;
+            return (StatusCode::NOT_FOUND, "agent not connected").into_response();
+        }
+        Err(crate::agent_dispatch::DispatchError::AgentDisconnected) => {
+            api_exec_audit(&state, &login, &agent_id, &body.command,
+                false, None, Some("agent disconnected"), false, false, &timer).await;
+            return (StatusCode::BAD_GATEWAY, "agent disconnected").into_response();
+        }
     };
-    let Some(entry) = entry else {
-        return (StatusCode::NOT_FOUND, "agent not connected").into_response();
+
+    let outer = std::time::Duration::from_secs(
+        timeout_secs + shared::EXEC_READER_GRACE_SECS + shared::EXEC_TRANSPORT_MARGIN_SECS,
+    );
+    let resp = match tokio::time::timeout(outer, pending.rx).await {
+        Ok(Ok(msg)) => msg,
+        Ok(Err(_)) => {
+            api_exec_audit(&state, &login, &agent_id, &body.command,
+                false, None, Some("agent disconnected mid-exec"), false, false, &timer).await;
+            return (StatusCode::BAD_GATEWAY, "agent disconnected").into_response();
+        }
+        Err(_) => {
+            api_exec_audit(&state, &login, &agent_id, &body.command,
+                false, None, None, false, true, &timer).await;
+            return (StatusCode::GATEWAY_TIMEOUT, "agent did not respond in time").into_response();
+        }
     };
 
-    let session_id = format!("api-exec-{}", crate::now_unix());
+    match &resp {
+        shared::Message::RunCommandResponse {
+            exit_code, stdout, stderr, error,
+            truncated, timed_out, duration_ms, ..
+        } => {
+            let is_legacy = *exit_code == -1 && error.as_deref().unwrap_or("").contains("timed out");
+            let effective_timed_out = *timed_out || is_legacy;
 
-    let _ = entry.tx.send(shared::Message::StartTerminalRequest {
-        session_id: session_id.clone(),
-    });
+            api_exec_audit(&state, &login, &agent_id, &body.command,
+                *exit_code == 0 && !effective_timed_out,
+                Some(*exit_code), error.as_deref(),
+                *truncated, effective_timed_out, &timer).await;
 
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-    let cmd_bytes = format!("{}\nexit\n", body.command).into_bytes();
-    let _ = entry.tx.send(shared::Message::TerminalData {
-        session_id: session_id.clone(),
-        data: cmd_bytes,
-    });
+            let dur = if *duration_ms > 0 { *duration_ms } else { timer.elapsed().as_millis() as u64 };
+            let http_status = if effective_timed_out { StatusCode::GATEWAY_TIMEOUT } else { StatusCode::OK };
+            let ec = if *exit_code == -1 {
+                serde_json::Value::Null
+            } else {
+                serde_json::json!(*exit_code)
+            };
 
-    let start = std::time::Instant::now();
-    tokio::time::sleep(std::time::Duration::from_secs(timeout)).await;
-    let _ = entry
-        .tx
-        .send(shared::Message::StopTerminalRequest { session_id });
+            let json = serde_json::json!({
+                "stdout": stdout,
+                "stderr": stderr,
+                "exit_code": ec,
+                "error": error,
+                "truncated": truncated,
+                "timed_out": effective_timed_out,
+                "duration_ms": dur,
+            });
+            (http_status, axum::Json(json)).into_response()
+        }
+        _ => (StatusCode::INTERNAL_SERVER_ERROR, "unexpected response").into_response(),
+    }
+}
 
-    let duration_ms = start.elapsed().as_millis() as u64;
-
-    db::record_audit(
-        &state.db,
-        crate::now_unix(),
-        Some(&login),
-        Some(&agent_id),
-        "api.exec",
-        true,
-        Some(&format!("cmd={}", body.command)),
-    )
-    .await;
-
-    axum::Json(ExecResponse {
-        stdout: "(exec via API — full output collection requires pending_exec infrastructure)"
-            .to_string(),
-        duration_ms,
-    })
-    .into_response()
+async fn api_exec_audit(
+    state: &Arc<AppState>, login: &str, agent_id: &str, cmd: &str,
+    ok: bool, exit_code: Option<i32>, err_detail: Option<&str>,
+    truncated: bool, timed_out: bool, elapsed: &Instant,
+) {
+    let dur = elapsed.elapsed().as_millis() as u64;
+    let ec = exit_code.map(|c| format!(" exit_code={c}")).unwrap_or_default();
+    let err = err_detail.map(|e| format!(" err={e}")).unwrap_or_default();
+    let detail = format!("cmd={cmd}{ec} truncated={truncated} timed_out={timed_out} dur={dur}ms{err}");
+    crate::db::record_audit(
+        &state.db, crate::now_unix(), Some(login), Some(agent_id),
+        "api.exec", ok, Some(&detail),
+    ).await;
 }
 
 async fn control_service(

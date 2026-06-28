@@ -16,6 +16,7 @@
 mod anon_limiter;
 mod api_auth;
 mod api_v1;
+mod agent_dispatch;
 mod auth;
 mod backups;
 mod crypto;
@@ -167,7 +168,7 @@ pub struct AppState {
     /// In-flight EE runbook command executions: request_id → oneshot waiter.
     /// `/internal/exec-command` inserts a waiter and awaits it; the agent WS
     /// receive loop resolves it when the matching `RunCommandResponse` lands.
-    pub pending_exec: Mutex<HashMap<String, tokio::sync::oneshot::Sender<shared::Message>>>,
+    pub pending_exec: Mutex<HashMap<String, (String, tokio::sync::oneshot::Sender<shared::Message>)>>,
     /// Cached global IP allowlist `(cidr, enabled)`, refreshed from EE every
     /// 30s. Empty / all-disabled = no restriction. Enforced on dashboard paths
     /// by `ip_allowlist::middleware`.
@@ -1077,9 +1078,20 @@ async fn handle_agent_socket(socket: WebSocket, state: Arc<AppState>, token: Str
                         // Runbook one-shot exec: resolve the waiter keyed by
                         // request_id (set by /internal/exec-command).
                         if let Message::RunCommandResponse { request_id, .. } = &other {
-                            if let Some(tx) = state.pending_exec.lock().await.remove(request_id) {
+                            let mut pe = state.pending_exec.lock().await;
+                            let should = pe.get(request_id)
+                                .map(|(expected, _)| expected == agent_id)
+                                .unwrap_or(false);
+                            let maybe_tx = if should {
+                                pe.remove(request_id).map(|(_, tx)| tx)
+                            } else {
+                                None
+                            };
+                            drop(pe);
+                            if let Some(tx) = maybe_tx {
                                 let _ = tx.send(other.clone());
                             }
+                            continue;
                         }
 
                         // Backup result attribution.
@@ -1313,6 +1325,11 @@ async fn handle_agent_socket(socket: WebSocket, state: Arc<AppState>, token: Str
                 return;
             }
             agents.remove(&id);
+        }
+        // Cancel any pending exec commands for the disconnected agent.
+        {
+            let mut pe = state.pending_exec.lock().await;
+            pe.retain(|_, (expected, _)| expected != &id);
         }
         tracing::info!(agent_id = %id, "agent ws closed; debouncing disconnect webhook");
         broadcast_agent_list(&state).await;

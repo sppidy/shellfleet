@@ -121,54 +121,55 @@ async fn exec_command_handler(
         return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
     }
     let timeout_secs = body.timeout_secs.clamp(1, 3600);
-    let request_id = uuid::Uuid::new_v4().to_string();
-    let (tx_os, rx_os) = tokio::sync::oneshot::channel();
-    state
-        .pending_exec
-        .lock()
-        .await
-        .insert(request_id.clone(), tx_os);
 
-    let dispatched = {
-        let agents = state.agents.lock().await;
-        match agents.get(&body.agent_id) {
-            Some(entry) => entry
-                .tx
-                .send(shared::Message::RunCommandRequest {
-                    request_id: request_id.clone(),
-                    command: body.command.clone(),
-                    timeout_secs,
-                })
-                .is_ok(),
-            None => false,
+    let pending = match crate::agent_dispatch::dispatch_run_command(
+        &state, &body.agent_id, body.command.clone(), timeout_secs,
+    )
+    .await
+    {
+        Ok(p) => p,
+        Err(crate::agent_dispatch::DispatchError::AgentNotFound) => {
+            return (StatusCode::NOT_FOUND, "agent not connected").into_response()
+        }
+        Err(crate::agent_dispatch::DispatchError::AgentDisconnected) => {
+            return (StatusCode::BAD_GATEWAY, "agent disconnected").into_response()
         }
     };
-    if !dispatched {
-        state.pending_exec.lock().await.remove(&request_id);
-        return (StatusCode::NOT_FOUND, "agent not connected").into_response();
-    }
 
-    // Wait a little past the agent-side timeout for the round-trip.
-    let wait = std::time::Duration::from_secs(timeout_secs + 10);
-    match tokio::time::timeout(wait, rx_os).await {
+    let outer = std::time::Duration::from_secs(
+        timeout_secs + shared::EXEC_READER_GRACE_SECS + shared::EXEC_TRANSPORT_MARGIN_SECS,
+    );
+    match tokio::time::timeout(outer, pending.rx).await {
         Ok(Ok(shared::Message::RunCommandResponse {
             exit_code,
             stdout,
             stderr,
             error,
+            truncated,
+            timed_out,
+            duration_ms: agent_dur,
             ..
-        })) => axum::Json(serde_json::json!({
-            "exit_code": exit_code,
-            "stdout": stdout,
-            "stderr": stderr,
-            "error": error,
-        }))
-        .into_response(),
-        Ok(_) => (StatusCode::BAD_GATEWAY, "unexpected exec response").into_response(),
-        Err(_) => {
-            state.pending_exec.lock().await.remove(&request_id);
-            (StatusCode::GATEWAY_TIMEOUT, "agent did not respond in time").into_response()
+        })) => {
+            let dur = if agent_dur > 0 {
+                agent_dur
+            } else {
+                // fallback (shouldn't happen with updated agents)
+                0
+            };
+            axum::Json(serde_json::json!({
+                "exit_code": exit_code,
+                "stdout": stdout,
+                "stderr": stderr,
+                "error": error,
+                "truncated": truncated,
+                "timed_out": timed_out,
+                "duration_ms": dur,
+            }))
+            .into_response()
         }
+        Ok(Err(_)) => (StatusCode::BAD_GATEWAY, "agent disconnected").into_response(),
+        Ok(_) => (StatusCode::BAD_GATEWAY, "unexpected exec response").into_response(),
+        Err(_) => (StatusCode::GATEWAY_TIMEOUT, "agent did not respond in time").into_response(),
     }
 }
 
