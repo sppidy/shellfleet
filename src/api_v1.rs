@@ -208,7 +208,10 @@ async fn api_exec_audit(
     let dur = elapsed.elapsed().as_millis() as u64;
     let ec = exit_code.map(|c| format!(" exit_code={c}")).unwrap_or_default();
     let err = err_detail.map(|e| format!(" err={e}")).unwrap_or_default();
-    let detail = format!("cmd={cmd}{ec} truncated={truncated} timed_out={timed_out} dur={dur}ms{err}");
+    // Sanitize command for audit — strip control characters and truncate
+    // to prevent log injection and unbounded audit rows.
+    let safe_cmd: String = cmd.chars().filter(|c| !c.is_control()).take(512).collect();
+    let detail = format!("cmd={safe_cmd}{ec} truncated={truncated} timed_out={timed_out} dur={dur}ms{err}");
     crate::db::record_audit(
         &state.db, crate::now_unix(), Some(login), Some(agent_id),
         "api.exec", ok, Some(&detail),
