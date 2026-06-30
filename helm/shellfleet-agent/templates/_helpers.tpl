@@ -43,6 +43,6 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- if .Values.serviceAccount.create -}}
 {{- default (include "shellfleet-agent.fullname" .) .Values.serviceAccount.name -}}
 {{- else -}}
-{{- default "default" .Values.serviceAccount.name -}}
+{{- required "serviceAccount.name is required when serviceAccount.create=false; refusing to bind cluster privileges to the namespace default account" .Values.serviceAccount.name -}}
 {{- end -}}
 {{- end -}}

@@ -17,7 +17,6 @@ rules:
       - events
       - namespaces
       - nodes
-      - configmaps
     verbs: ["get", "list", "watch"]
   - apiGroups: ["apps"]
     resources:
@@ -75,7 +74,7 @@ rules:
   # currently send mutating requests; this exists so flipping it on
   # later doesn't require a separate Helm upgrade for the binding.
   - apiGroups: [""]
-    resources: ["pods", "services", "persistentvolumeclaims", "configmaps"]
+    resources: ["pods", "services", "persistentvolumeclaims"]
     verbs: ["create", "update", "patch", "delete"]
   - apiGroups: ["apps"]
     resources: ["deployments", "statefulsets", "daemonsets"]

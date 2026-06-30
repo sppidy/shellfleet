@@ -6,18 +6,12 @@
 FROM rust:1-bookworm AS builder
 
 WORKDIR /src
+COPY Cargo.toml Cargo.lock /src/
 COPY agent/  /src/agent/
 COPY shared/ /src/shared/
+COPY server/ /src/server/
 
-# Trim the workspace to what we actually build.
-RUN cat > /src/Cargo.toml <<'EOF'
-[workspace]
-members = ["agent", "shared"]
-resolver = "2"
-EOF
-
-WORKDIR /src/agent
-RUN cargo build --release --features kube
+RUN cargo build --locked --release -p agent --features kube
 RUN strip /src/target/release/shellfleet-agent
 
 # ─────────────────────────────────────────────────────────────────
