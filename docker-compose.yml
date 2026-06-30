@@ -22,6 +22,9 @@ services:
       # publishing a default would mean every fresh deploy starts wide
       # open to whoever the default user is.
       - "ALLOWED_GITHUB_USERS=${ALLOWED_GITHUB_USERS:?ALLOWED_GITHUB_USERS must be set, comma-separated GitHub logins permitted to sign in}"
+      # Only these direct peer CIDRs may supply forwarded client-IP headers.
+      # Set this to the exact Docker/ingress gateway CIDR for your deployment.
+      - "TRUSTED_PROXY_CIDRS=${TRUSTED_PROXY_CIDRS:?TRUSTED_PROXY_CIDRS must be set to the exact nginx or ingress peer CIDR}"
       # Optional legacy shared agent token for one-shot bootstrapping.
       # Leave unset to disable; do NOT set it to "legacy_secret_off".
       - AGENT_SECRET=${AGENT_SECRET:-}

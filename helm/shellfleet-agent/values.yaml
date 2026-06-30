@@ -60,7 +60,9 @@ replicaCount: 1
 serviceAccount:
   create: true
   annotations: {}
-  # name: ""    # leave empty to derive from .Release.Name
+  # Required when create=false. Empty is rejected so cluster privileges are
+  # never attached to the namespace's shared default service account.
+  name: ""
 
 resources:
   requests:
