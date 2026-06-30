@@ -54,6 +54,19 @@ const DENY_PREFIXES: &[&str] = &[
     "/dev/",
 ];
 
+fn denied_path(path: &str) -> Option<String> {
+    if let Some(prefix) = DENY_PREFIXES
+        .iter()
+        .find(|prefix| path.starts_with(**prefix))
+    {
+        return Some((*prefix).to_string());
+    }
+    if path.split('/').any(|component| component == ".ssh") {
+        return Some("any .ssh directory".to_string());
+    }
+    None
+}
+
 #[derive(Debug)]
 pub enum PathError {
     NotAbsolute,
@@ -142,10 +155,8 @@ pub fn check(path: &str) -> Result<PathBuf, PathError> {
     let lower = s.to_ascii_lowercase();
 
     // Deny-list takes precedence over allow-list.
-    for d in DENY_PREFIXES {
-        if lower.starts_with(d) {
-            return Err(PathError::BlockedByDenyList(d.to_string()));
-        }
+    if let Some(reason) = denied_path(&lower) {
+        return Err(PathError::BlockedByDenyList(reason));
     }
     let allowed = ALLOW_PREFIXES.iter().any(|a| lower.starts_with(a));
     if !allowed {
@@ -167,12 +178,10 @@ pub fn check_read(path: &str) -> Result<PathBuf, PathError> {
         .to_str()
         .ok_or(PathError::InvalidUtf8)?
         .to_ascii_lowercase();
-    for d in DENY_PREFIXES {
-        if canonical_str.starts_with(d) {
-            return Err(PathError::BlockedByDenyList(format!(
-                "{d} (resolved from {path})"
-            )));
-        }
+    if let Some(reason) = denied_path(&canonical_str) {
+        return Err(PathError::BlockedByDenyList(format!(
+            "{reason} (resolved from {path})"
+        )));
     }
     if !ALLOW_PREFIXES.iter().any(|a| canonical_str.starts_with(a)) {
         return Err(PathError::OutsideAllowList);
@@ -202,12 +211,10 @@ pub fn check_write(path: &str) -> Result<(PathBuf, std::ffi::OsString), PathErro
     if !canonical_str.ends_with('/') {
         canonical_str.push('/');
     }
-    for d in DENY_PREFIXES {
-        if canonical_str.starts_with(d) {
-            return Err(PathError::BlockedByDenyList(format!(
-                "{d} (parent resolved from {path})"
-            )));
-        }
+    if let Some(reason) = denied_path(&canonical_str) {
+        return Err(PathError::BlockedByDenyList(format!(
+            "{reason} (parent resolved from {path})"
+        )));
     }
     if !ALLOW_PREFIXES.iter().any(|a| canonical_str.starts_with(a)) {
         return Err(PathError::OutsideAllowList);
@@ -301,6 +308,16 @@ mod tests {
             check("/root/.ssh/authorized_keys"),
             Err(PathError::BlockedByDenyList(_))
         ));
+        for path in [
+            "/home/alice/.ssh/id_ed25519",
+            "/home/alice/.ssh/authorized_keys",
+            "/home/alice/projects/.ssh/config",
+        ] {
+            assert!(
+                matches!(check(path), Err(PathError::BlockedByDenyList(_))),
+                "should block {path}"
+            );
+        }
     }
 
     #[test]

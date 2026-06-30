@@ -188,8 +188,8 @@ fn validate_package_arg(package: &str) -> Result<(), String> {
     if package.is_empty() {
         return Err("empty package name".to_string());
     }
-    if package.starts_with('-') {
-        return Err("package name must not start with '-'".to_string());
+    if package.starts_with('-') || package.ends_with('-') {
+        return Err("package name must not start or end with '-'".to_string());
     }
     if package
         .chars()
@@ -489,6 +489,7 @@ mod tests {
         assert!(validate_package_arg("-oDpkg::Options::=--force").is_err());
         assert!(validate_package_arg("pkg;reboot").is_err());
         assert!(validate_package_arg("").is_err());
+        assert!(validate_package_arg("curl-").is_err());
     }
 
     #[test]

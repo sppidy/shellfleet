@@ -2,6 +2,7 @@
 //! tokio task; reports flow back through the shared message channel
 //! when the state transitions (or on first sample after a sync).
 
+use futures_util::StreamExt;
 use shared::{HealthProbeKind, HealthProbeResult, HealthProbeSpec, HealthProbeState, Message};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -12,6 +13,16 @@ use tokio::process::Command;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
+
+const HTTP_BODY_CAP: usize = 1_048_576;
+
+fn append_body_chunk(body: &mut Vec<u8>, chunk: &[u8]) -> Result<(), ()> {
+    if body.len().saturating_add(chunk.len()) > HTTP_BODY_CAP {
+        return Err(());
+    }
+    body.extend_from_slice(chunk);
+    Ok(())
+}
 
 /// Where exec-kind probes are required to live. Anything else is rejected.
 fn probes_dir() -> PathBuf {
@@ -125,7 +136,11 @@ async fn run_probe(spec: HealthProbeSpec, tx: tokio::sync::mpsc::UnboundedSender
 }
 
 async fn probe_http(spec: &HealthProbeSpec, timeout: Duration) -> (HealthProbeState, String) {
-    let client = match reqwest::Client::builder().timeout(timeout).build() {
+    let client = match reqwest::Client::builder()
+        .timeout(timeout)
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+    {
         Ok(c) => c,
         Err(e) => return (HealthProbeState::Red, format!("client build: {e}")),
     };
@@ -142,10 +157,21 @@ async fn probe_http(spec: &HealthProbeSpec, timeout: Duration) -> (HealthProbeSt
         return (HealthProbeState::Red, format!("unexpected status {status}"));
     }
     if let Some(want_body) = &spec.expect_body {
-        let body = match resp.text().await {
-            Ok(t) => t,
-            Err(e) => return (HealthProbeState::Red, format!("read body: {e}")),
-        };
+        let mut bytes = Vec::new();
+        let mut stream = resp.bytes_stream();
+        while let Some(chunk) = stream.next().await {
+            let chunk = match chunk {
+                Ok(chunk) => chunk,
+                Err(e) => return (HealthProbeState::Red, format!("read body: {e}")),
+            };
+            if append_body_chunk(&mut bytes, &chunk).is_err() {
+                return (
+                    HealthProbeState::Red,
+                    format!("response body exceeds {HTTP_BODY_CAP} bytes"),
+                );
+            }
+        }
+        let body = String::from_utf8_lossy(&bytes);
         if !body.contains(want_body) {
             return (
                 HealthProbeState::Red,
@@ -190,6 +216,7 @@ async fn probe_exec(spec: &HealthProbeSpec, timeout: Duration) -> (HealthProbeSt
     }
     let mut cmd = Command::new(&path);
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+    cmd.kill_on_drop(true);
     // Per-probe env (`KEY=VALUE`). Anything malformed is silently
     // skipped — operators see the bad pair in the spec, not a
     // mid-script failure.
@@ -245,5 +272,16 @@ async fn probe_exec(spec: &HealthProbeSpec, timeout: Duration) -> (HealthProbeSt
             }
         );
         (HealthProbeState::Red, detail)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn response_body_cap_rejects_oversized_chunks() {
+        let mut body = Vec::new();
+        assert!(super::append_body_chunk(&mut body, &[1; 512]).is_ok());
+        assert!(super::append_body_chunk(&mut body, &vec![2; super::HTTP_BODY_CAP]).is_err());
+        assert!(body.len() <= super::HTTP_BODY_CAP);
     }
 }
