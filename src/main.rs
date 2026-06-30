@@ -13,10 +13,10 @@
     clippy::too_many_arguments
 )]
 
+mod agent_dispatch;
 mod anon_limiter;
 mod api_auth;
 mod api_v1;
-mod agent_dispatch;
 mod auth;
 mod backups;
 mod crypto;
@@ -33,6 +33,7 @@ mod labels;
 mod metrics;
 mod mfa;
 mod notifications;
+mod operation_routing;
 mod passkey_mfa;
 mod probe_library;
 mod rbac;
@@ -83,7 +84,16 @@ type UiTx = mpsc::UnboundedSender<UiMessage>;
 
 pub struct UiClient {
     tx: UiTx,
-    allowed_agents: Option<Vec<String>>,
+    login: String,
+    client_ip: String,
+    agent_access: AgentAccess,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "mode", rename_all = "snake_case")]
+pub(crate) enum AgentAccess {
+    Unrestricted,
+    Restricted { allowed_agents: HashSet<String> },
 }
 
 /// One row in the live-agents map. Combining the WS sender with the
@@ -136,6 +146,7 @@ pub struct AppState {
     /// pair. See `DisconnectState`.
     pub disconnect_states: Mutex<HashMap<String, DisconnectState>>,
     pub ui_clients: Mutex<HashMap<u64, UiClient>>,
+    pub operation_owners: Mutex<operation_routing::OperationOwners>,
     pub ui_id_counter: AtomicU64,
     pub db: SqlitePool,
     /// Per-login throttle for /api/auth/mfa/verify failures. Defends
@@ -168,7 +179,8 @@ pub struct AppState {
     /// In-flight EE runbook command executions: request_id → oneshot waiter.
     /// `/internal/exec-command` inserts a waiter and awaits it; the agent WS
     /// receive loop resolves it when the matching `RunCommandResponse` lands.
-    pub pending_exec: Mutex<HashMap<String, (String, tokio::sync::oneshot::Sender<shared::Message>)>>,
+    pub pending_exec:
+        Mutex<HashMap<String, (String, tokio::sync::oneshot::Sender<shared::Message>)>>,
     /// Cached global IP allowlist `(cidr, enabled)`, refreshed from EE every
     /// 30s. Empty / all-disabled = no restriction. Enforced on dashboard paths
     /// by `ip_allowlist::middleware`.
@@ -242,16 +254,30 @@ async fn broadcast_agent_list(state: &AppState) {
             .collect();
         (agents, capabilities)
     };
-    let mut clients = state.ui_clients.lock().await;
-    clients.retain(|_id, client| {
-        let (agents, capabilities) =
-            ee_filter_agent_list(agents.clone(), capabilities.clone(), &client.allowed_agents);
-        let msg = UiMessage::ListAgentsResponse {
-            agents,
-            capabilities,
+    let identities: Vec<(u64, String, String)> = state
+        .ui_clients
+        .lock()
+        .await
+        .iter()
+        .map(|(id, client)| (*id, client.login.clone(), client.client_ip.clone()))
+        .collect();
+    for (client_id, login, client_ip) in identities {
+        let access = ui_agent_access(state, &login, &client_ip, &agents).await;
+        let mut clients = state.ui_clients.lock().await;
+        let Some(client) = clients.get_mut(&client_id) else {
+            continue;
         };
-        client.tx.send(msg).is_ok()
-    });
+        client.agent_access = access;
+        let (visible_agents, visible_capabilities) =
+            ee_filter_agent_list(agents.clone(), capabilities.clone(), &client.agent_access);
+        let msg = UiMessage::ListAgentsResponse {
+            agents: visible_agents,
+            capabilities: visible_capabilities,
+        };
+        if client.tx.send(msg).is_err() {
+            clients.remove(&client_id);
+        }
+    }
 }
 
 async fn healthz() -> impl IntoResponse {
@@ -465,6 +491,7 @@ async fn main() {
         agents: Mutex::new(HashMap::new()),
         disconnect_states: Mutex::new(HashMap::new()),
         ui_clients: Mutex::new(HashMap::new()),
+        operation_owners: Mutex::new(operation_routing::OperationOwners::default()),
         ui_id_counter: AtomicU64::new(0),
         db: pool,
         mfa_throttle: throttle::Throttle::new(),
@@ -1079,7 +1106,8 @@ async fn handle_agent_socket(socket: WebSocket, state: Arc<AppState>, token: Str
                         // request_id (set by /internal/exec-command).
                         if let Message::RunCommandResponse { request_id, .. } = &other {
                             let mut pe = state.pending_exec.lock().await;
-                            let should = pe.get(request_id)
+                            let should = pe
+                                .get(request_id)
                                 .map(|(expected, _)| expected == agent_id)
                                 .unwrap_or(false);
                             let maybe_tx = if should {
@@ -1285,17 +1313,50 @@ async fn handle_agent_socket(socket: WebSocket, state: Arc<AppState>, token: Str
                         if let Message::TerminalData { session_id, data } = &other {
                             state.recorder.frame(session_id, "o", data).await;
                         }
+                        let operation = operation_routing::agent_operation(&other);
                         let ui_msg = UiMessage::AgentMessage {
                             agent_id: agent_id.clone(),
                             message: other,
                         };
-                        let mut clients = state.ui_clients.lock().await;
-                        clients.retain(|_id, ctx| {
-                            if !agent_allowed_by_patterns(agent_id, &ctx.allowed_agents) {
-                                return true;
+                        if let Some(operation) = operation {
+                            let owner = {
+                                let mut owners = state.operation_owners.lock().await;
+                                let owner = owners.owner(agent_id, &operation.key);
+                                if operation.ends {
+                                    owners.release_agent_operation(agent_id, &operation.key);
+                                }
+                                owner
+                            };
+                            if let Some(owner) = owner {
+                                let mut clients = state.ui_clients.lock().await;
+                                let remove = match clients.get(&owner) {
+                                    Some(ctx)
+                                        if agent_allowed_by_access(agent_id, &ctx.agent_access) =>
+                                    {
+                                        ctx.tx.send(ui_msg).is_err()
+                                    }
+                                    Some(_) => false,
+                                    None => false,
+                                };
+                                if remove {
+                                    clients.remove(&owner);
+                                }
+                            } else {
+                                tracing::warn!(
+                                    %agent_id,
+                                    operation = ?operation.key,
+                                    "dropping operation output without a registered UI owner"
+                                );
                             }
-                            ctx.tx.send(ui_msg.clone()).is_ok()
-                        });
+                        } else {
+                            let mut clients = state.ui_clients.lock().await;
+                            clients.retain(|_id, ctx| {
+                                if !agent_allowed_by_access(agent_id, &ctx.agent_access) {
+                                    return true;
+                                }
+                                ctx.tx.send(ui_msg.clone()).is_ok()
+                            });
+                        }
                     }
                 }
             }
@@ -1331,6 +1392,7 @@ async fn handle_agent_socket(socket: WebSocket, state: Arc<AppState>, token: Str
             let mut pe = state.pending_exec.lock().await;
             pe.retain(|_, (expected, _)| expected != &id);
         }
+        state.operation_owners.lock().await.release_agent(&id);
         tracing::info!(agent_id = %id, "agent ws closed; debouncing disconnect webhook");
         broadcast_agent_list(&state).await;
 
@@ -1386,95 +1448,39 @@ async fn handle_agent_socket(socket: WebSocket, state: Arc<AppState>, token: Str
     }
 }
 
-/// Returns true if a Message sent UI→agent should be considered a
-/// **mutating** action — that is, something that changes state on the
-/// host (start a service, write a config, run apt, send terminal
-/// keystrokes, exec into a container, etc.). Viewers are blocked from
-/// sending these over the UI WebSocket.
-///
-/// Read-only / informational variants (List*, Inspect*, Read*, Logs,
-/// Stats, Status, Refresh) return false. Default-deny: any new variant
-/// not explicitly listed here is treated as mutating, so a forgotten
-/// match arm fails closed.
-fn is_mutating_agent_message(msg: &Message) -> bool {
-    use Message::*;
-    match msg {
-        // Pure reads — viewer-OK.
-        // ReadConfigRequest is deliberately NOT in this list. The agent
-        // serves it via `std::fs::read_to_string` as root with no
-        // sandbox; granting any caller (let alone a viewer) the ability
-        // to ask for `/etc/shadow` or the agent's own token file would
-        // be an arbitrary-file-read trivially. Admin-only here, plus
-        // the agent rejects sensitive paths in `agent::config`.
-        ListServicesRequest
-        | SystemStatsRequest
-        | DockerListRequest
-        | SwarmListRequest
-        | AptStatusRequest
-        | DockerLogsRequest { .. }
-        | DockerLogsStop { .. }
-        | JournalLogsRequest { .. }
-        | JournalLogsStop { .. }
-        | JournalStreamRequest { .. }
-        | JournalStreamStop { .. }
-        // Stop is a control signal — the start (TerminalData / StartTerminal)
-        // is what's mutating-admin-only. Allowing viewers to close
-        // their own pane after an admin opened it would be ideal,
-        // but the closer matches the existing pattern of treating
-        // *Stop signals as read-only.
-        | StopTerminalRequest { .. }
-        // K8sExecRequest is the open-shell call. Same posture as
-        // host-side StartTerminalRequest — admin-only, NOT in this
-        // viewer-OK list. Falls through to the default mutating arm.
-        | SwarmServiceInspectRequest { .. }
-        | BackupListArchivesRequest { .. }
-        | DockerImageListRequest
-        | DockerNetworkListRequest
-        | DockerNetworkInspectRequest { .. }
-        | DockerVolumeListRequest
-        | DockerVolumeInspectRequest { .. }
-        | SwarmStackListRequest
-        | SwarmStackInspectRequest { .. }
-        | DockerStatsRequest
-        | K8sListPodsRequest
-        | K8sListDeploymentsRequest
-        | K8sListServicesRequest
-        | K8sListIngressesRequest
-        | K8sListPvcsRequest
-        | K8sListEventsRequest
-        | K8sDescribeRequest { .. } => false,
-        // K8sLogsRequest / K8sLogsStop are deliberately NOT in this
-        // list. Pod logs can leak Secrets, JWTs, and other sensitive
-        // material; streaming them is admin-only via the default arm.
-        // DriftSnapshotRequest is also admin-only: the configs category can
-        // make agents inspect host files, and package/service inventories are
-        // operationally sensitive enough to keep behind the same boundary.
-        // Everything else is treated as mutating. AptRefreshRequest
-        // counts as mutating because it triggers `apt-get update`,
-        // which writes to /var/lib/apt/lists and can interact with
-        // package locks; a viewer shouldn't be able to nudge that.
-        _ => true,
-    }
-}
-
 async fn handle_ui_socket(
     socket: WebSocket,
     state: Arc<AppState>,
     login: String,
-    _initial_role: auth::Role,
+    initial_role: auth::Role,
     client_ip: String,
 ) {
     tracing::info!(%login, "new ui websocket connection");
     let (mut sender, mut receiver) = socket.split();
 
-    let allowed_agents = ee_fetch_allowed_agents(&login).await;
+    let (initial_agents, initial_capabilities) = {
+        let map = state.agents.lock().await;
+        let agents = map.keys().cloned().collect::<Vec<_>>();
+        let capabilities = map
+            .iter()
+            .map(|(id, entry)| (id.clone(), entry.capabilities.clone()))
+            .collect::<HashMap<_, _>>();
+        (agents, capabilities)
+    };
+    let mut agent_access = if initial_role == auth::Role::Admin {
+        AgentAccess::Unrestricted
+    } else {
+        ee_fetch_agent_access(&login, &client_ip, &initial_agents).await
+    };
     let (tx, mut rx) = mpsc::unbounded_channel::<UiMessage>();
     let client_id = state.ui_id_counter.fetch_add(1, Ordering::Relaxed);
     state.ui_clients.lock().await.insert(
         client_id,
         UiClient {
             tx: tx.clone(),
-            allowed_agents: allowed_agents.clone(),
+            login: login.clone(),
+            client_ip: client_ip.clone(),
+            agent_access: agent_access.clone(),
         },
     );
 
@@ -1482,19 +1488,12 @@ async fn handle_ui_socket(
     // socket drops without an explicit StopTerminalRequest.
     let mut rec_sessions: std::collections::HashSet<String> = std::collections::HashSet::new();
 
-    {
-        let map = state.agents.lock().await;
-        let agents: Vec<String> = map.keys().cloned().collect();
-        let capabilities: HashMap<String, Vec<String>> = map
-            .iter()
-            .map(|(id, entry)| (id.clone(), entry.capabilities.clone()))
-            .collect();
-        let (agents, capabilities) = ee_filter_agent_list(agents, capabilities, &allowed_agents);
-        let _ = tx.send(UiMessage::ListAgentsResponse {
-            agents,
-            capabilities,
-        });
-    }
+    let (initial_agents, initial_capabilities) =
+        ee_filter_agent_list(initial_agents, initial_capabilities, &agent_access);
+    let _ = tx.send(UiMessage::ListAgentsResponse {
+        agents: initial_agents,
+        capabilities: initial_capabilities,
+    });
 
     let send_task = tokio::spawn(async move {
         let mut hb = tokio::time::interval(std::time::Duration::from_secs(25));
@@ -1544,21 +1543,42 @@ async fn handle_ui_socket(
         if let Ok(parsed_msg) = parsed {
             match parsed_msg {
                 UiMessage::ListAgentsRequest => {
-                    let map = state.agents.lock().await;
-                    let agents: Vec<String> = map.keys().cloned().collect();
-                    let capabilities: HashMap<String, Vec<String>> = map
-                        .iter()
-                        .map(|(id, entry)| (id.clone(), entry.capabilities.clone()))
-                        .collect();
+                    let (agents, capabilities) = {
+                        let map = state.agents.lock().await;
+                        let agents = map.keys().cloned().collect::<Vec<_>>();
+                        let capabilities = map
+                            .iter()
+                            .map(|(id, entry)| (id.clone(), entry.capabilities.clone()))
+                            .collect::<HashMap<_, _>>();
+                        (agents, capabilities)
+                    };
+                    agent_access = ui_agent_access(&state, &login, &client_ip, &agents).await;
+                    if let Some(client) = state.ui_clients.lock().await.get_mut(&client_id) {
+                        client.agent_access = agent_access.clone();
+                    }
                     let (agents, capabilities) =
-                        ee_filter_agent_list(agents, capabilities, &allowed_agents);
+                        ee_filter_agent_list(agents, capabilities, &agent_access);
                     let _ = tx.send(UiMessage::ListAgentsResponse {
                         agents,
                         capabilities,
                     });
                 }
                 UiMessage::SendToAgent { agent_id, message } => {
-                    if !agent_allowed_by_patterns(&agent_id, &allowed_agents) {
+                    let target_access = ui_agent_access(
+                        &state,
+                        &login,
+                        &client_ip,
+                        std::slice::from_ref(&agent_id),
+                    )
+                    .await;
+                    if let Some(client) = state.ui_clients.lock().await.get_mut(&client_id) {
+                        merge_exact_agent_access(
+                            &mut client.agent_access,
+                            &agent_id,
+                            &target_access,
+                        );
+                    }
+                    if !agent_allowed_by_access(&agent_id, &target_access) {
                         let _ = tx.send(UiMessage::PermissionDenied {
                             agent_id: agent_id.clone(),
                             variant_type: "agent_access".to_string(),
@@ -1566,6 +1586,28 @@ async fn handle_ui_socket(
                         });
                         continue;
                     }
+                    let variant_type = serde_json::to_value(&message)
+                        .ok()
+                        .and_then(|v| v.get("type").and_then(|t| t.as_str().map(String::from)))
+                        .unwrap_or_else(|| "unknown".into());
+                    let security = match message.ui_request_security() {
+                        Ok(security) => security,
+                        Err(error) => {
+                            tracing::warn!(
+                                %login,
+                                %agent_id,
+                                variant = %variant_type,
+                                ?error,
+                                "ui ws: rejected invalid or non-request message"
+                            );
+                            let _ = tx.send(UiMessage::PermissionDenied {
+                                agent_id: agent_id.clone(),
+                                variant_type,
+                                reason: "message is not an allowed UI request".to_string(),
+                            });
+                            continue;
+                        }
+                    };
                     // EE ACL enforcement (skip for admins)
                     if ee::ee_active() && !auth::is_dev_mode() {
                         let is_admin = matches!(
@@ -1573,7 +1615,7 @@ async fn handle_ui_socket(
                             Ok(Some(row)) if row.role == "admin"
                         );
                         if !is_admin {
-                            if let Some(action) = ee_action_for_message(&message) {
+                            if let Some(action) = security.action {
                                 if !ee_check_permission(
                                     &login,
                                     action,
@@ -1601,18 +1643,12 @@ async fn handle_ui_socket(
                     // model. Re-resolve the role from the DB on every
                     // mutating message so a freshly-demoted admin is
                     // blocked immediately.
-                    if !auth::is_dev_mode() && is_mutating_agent_message(&message) {
+                    if !auth::is_dev_mode() && security.class.requires_admin() {
                         let role_str = match crate::db::get_user(&state.db, &login).await {
                             Ok(Some(row)) => row.role,
                             _ => "viewer".to_string(),
                         };
                         if auth::Role::parse(&role_str) != auth::Role::Admin {
-                            let variant_type = serde_json::to_value(&message)
-                                .ok()
-                                .and_then(|v| {
-                                    v.get("type").and_then(|t| t.as_str().map(String::from))
-                                })
-                                .unwrap_or_else(|| "unknown".into());
                             tracing::warn!(
                                 %login, %agent_id, variant = %variant_type,
                                 "ui ws: rejected mutating message from non-admin"
@@ -1644,9 +1680,17 @@ async fn handle_ui_socket(
                     // serialized message in EE and tell the UI it's pending — a
                     // second admin approves in the Approvals tab, then EE calls
                     // back to /internal/execute-approved to run it. Interactive
-                    // streams are never held (see ee_approval_action_for_message).
+                    // Interactive streams and reads are never approval-held.
                     if ee::ee_active() && !auth::is_dev_mode() {
-                        if let Some(action) = ee_approval_action_for_message(&message) {
+                        if security.class.requires_approval() {
+                            let Some(action) = security.action else {
+                                let _ = tx.send(UiMessage::PermissionDenied {
+                                    agent_id: agent_id.clone(),
+                                    variant_type: variant_type.clone(),
+                                    reason: "request has no approval action mapping".to_string(),
+                                });
+                                continue;
+                            };
                             let payload = serde_json::to_string(&message).unwrap_or_default();
                             match ee_check_approval(&login, action, &agent_id, &payload).await {
                                 Ok(None) => { /* no rule matched — run it now */ }
@@ -1681,6 +1725,29 @@ async fn handle_ui_socket(
                             }
                         }
                     }
+                    if let Some(operation) = operation_routing::ui_operation(&message) {
+                        use operation_routing::UiOperation;
+                        let allowed = {
+                            let mut owners = state.operation_owners.lock().await;
+                            match &operation {
+                                UiOperation::Start(key) => {
+                                    owners.claim(&agent_id, key.clone(), client_id)
+                                }
+                                UiOperation::Use(key) => {
+                                    owners.owner(&agent_id, key) == Some(client_id)
+                                }
+                                UiOperation::Stop(key) => owners.release(&agent_id, key, client_id),
+                            }
+                        };
+                        if !allowed {
+                            let _ = tx.send(UiMessage::PermissionDenied {
+                                agent_id: agent_id.clone(),
+                                variant_type: variant_type.clone(),
+                                reason: "operation is owned by another client".to_string(),
+                            });
+                            continue;
+                        }
+                    }
                     // Recording tap: terminal session lifecycle + INPUT (user→agent).
                     match &message {
                         Message::StartTerminalRequest { session_id } => {
@@ -1710,6 +1777,11 @@ async fn handle_ui_socket(
 
     send_task.abort();
     state.ui_clients.lock().await.remove(&client_id);
+    state
+        .operation_owners
+        .lock()
+        .await
+        .release_client(client_id);
     // Close any recordings still open for this client (abrupt disconnect).
     for sid in rec_sessions {
         state.recorder.stop(&sid).await;
@@ -1717,16 +1789,22 @@ async fn handle_ui_socket(
     tracing::info!(client_id, "ui client disconnected");
 }
 
-async fn ee_fetch_allowed_agents(login: &str) -> Option<Vec<String>> {
-    // None when EE is NOT configured (CE-only deploy) = no restriction.
-    let ee_url = ee::ee_sidecar_url()?;
+pub(crate) async fn ee_fetch_agent_access(
+    login: &str,
+    client_ip: &str,
+    agents: &[String],
+) -> AgentAccess {
+    // CE-only deployments have no EE ACL feature to enforce.
+    let Some(ee_url) = ee::ee_sidecar_url() else {
+        return AgentAccess::Unrestricted;
+    };
     let secret = std::env::var("EE_INTERNAL_SECRET").unwrap_or_default();
     let url = format!("{}/api/ee/acl/user-agents", ee_url.trim_end_matches('/'));
-    let body = serde_json::json!({ "login": login });
-    // EE IS configured, so any transport/parse failure must FAIL CLOSED
-    // (empty allow-list = no agents visible) rather than degrade to
-    // "no restriction" — an attacker who can disrupt the sidecar must not
-    // gain broader visibility.
+    let body = serde_json::json!({
+        "login": login,
+        "client_ip": client_ip,
+        "agents": agents,
+    });
     let resp = match reqwest::Client::new()
         .post(&url)
         .bearer_auth(&secret)
@@ -1740,103 +1818,63 @@ async fn ee_fetch_allowed_agents(login: &str) -> Option<Vec<String>> {
             tracing::warn!(
                 login = %login,
                 ok = other.is_ok(),
-                "EE allowed-agents fetch failed; failing closed (empty allow-list)"
+                "EE agent-access fetch failed; failing closed"
             );
-            return Some(Vec::new());
+            return AgentAccess::Restricted {
+                allowed_agents: HashSet::new(),
+            };
         }
     };
-    let data: serde_json::Value = match resp.json().await {
-        Ok(d) => d,
-        Err(_) => return Some(Vec::new()),
-    };
-    // `patterns: null` is an explicit EE verdict = "no restriction".
-    if data["patterns"].is_null() {
-        return None;
-    }
-    let Some(patterns) = data["patterns"].as_array() else {
-        return Some(Vec::new());
-    };
-    if patterns.is_empty() {
-        return Some(Vec::new());
-    }
-    Some(
-        patterns
-            .iter()
-            .filter_map(|v| v.as_str().map(String::from))
-            .collect(),
-    )
+    resp.json()
+        .await
+        .unwrap_or_else(|_| AgentAccess::Restricted {
+            allowed_agents: HashSet::new(),
+        })
 }
 
-fn agent_allowed_by_patterns(agent: &str, allowed: &Option<Vec<String>>) -> bool {
-    let Some(patterns) = allowed else {
-        return true;
-    };
-    patterns.iter().any(|p| {
-        if p == "*" {
-            return true;
-        }
-        if p.ends_with('*') {
-            let prefix = &p[..p.len() - 1];
-            return agent.starts_with(prefix);
-        }
-        p == agent
-    })
-}
-
-fn ee_action_for_message(msg: &Message) -> Option<&'static str> {
-    use Message::*;
-    match msg {
-        ControlServiceRequest { .. } => Some("service:Stop"),
-        ListServicesRequest => Some("service:List"),
-        StartTerminalRequest { .. } | TerminalData { .. } | TerminalResize { .. } => {
-            Some("agent:Terminal")
-        }
-        DockerContainerActionRequest { .. } => Some("container:Stop"),
-        DockerCreateContainerRequest { .. } => Some("container:Create"),
-        DockerExecStartRequest { .. } => Some("container:Exec"),
-        DockerLogsRequest { .. } => Some("container:Logs"),
-        ReadConfigRequest { .. } => Some("config:Read"),
-        WriteConfigRequest { .. } => Some("config:Write"),
-        BackupRunRequest { .. } => Some("backup:Run"),
-        BackupRestoreRequest { .. } => Some("backup:Restore"),
-        K8sApplyRequest { .. } => Some("k8s:Apply"),
-        K8sScaleRequest { .. } => Some("k8s:Scale"),
-        K8sDeletePodRequest { .. } => Some("k8s:Delete"),
-        K8sExecRequest { .. } => Some("k8s:Exec"),
-        AptRefreshRequest => Some("apt:Refresh"),
-        AptUpgradeRequest { .. } => Some("apt:Upgrade"),
-        SwarmStackDeployRequest { .. } => Some("swarm:Deploy"),
-        SwarmServiceActionRequest { .. } => Some("swarm:Scale"),
-        DockerImagePullRequest { .. } => Some("docker:ImagePull"),
-        DockerImageRemoveRequest { .. } => Some("docker:ImageRemove"),
-        DockerSystemPruneRequest { .. } => Some("docker:Prune"),
-        DockerNetworkCreateRequest { .. } => Some("network:Create"),
-        DockerNetworkRemoveRequest { .. } => Some("network:Remove"),
-        DockerVolumeRemoveRequest { .. } => Some("volume:Remove"),
-        _ => None,
+async fn ui_agent_access(
+    state: &AppState,
+    login: &str,
+    client_ip: &str,
+    agents: &[String],
+) -> AgentAccess {
+    let is_admin = matches!(
+        crate::db::get_user(&state.db, login).await,
+        Ok(Some(row)) if row.role == "admin"
+    );
+    if is_admin {
+        AgentAccess::Unrestricted
+    } else {
+        ee_fetch_agent_access(login, client_ip, agents).await
     }
 }
 
-/// Which messages can be *held for approval*. This is the discrete subset of
-/// `ee_action_for_message`: one-shot mutating actions we can stash and replay
-/// after a second admin signs off. Interactive streams (terminal/exec) and
-/// reads (logs/list/read-config) are excluded — you can't hold a live stream,
-/// and reads aren't worth gating. Returns the action string, or None to skip.
-fn ee_approval_action_for_message(msg: &Message) -> Option<&'static str> {
-    use Message::*;
-    match msg {
-        // Interactive or read-only — never gated.
-        StartTerminalRequest { .. }
-        | TerminalData { .. }
-        | TerminalResize { .. }
-        | StopTerminalRequest { .. }
-        | DockerExecStartRequest { .. }
-        | K8sExecRequest { .. }
-        | DockerLogsRequest { .. }
-        | ListServicesRequest
-        | ReadConfigRequest { .. } => None,
-        // Everything else with a mapped action is a discrete, holdable action.
-        _ => ee_action_for_message(msg),
+pub(crate) fn agent_allowed_by_access(agent: &str, access: &AgentAccess) -> bool {
+    match access {
+        AgentAccess::Unrestricted => true,
+        AgentAccess::Restricted { allowed_agents } => allowed_agents.contains(agent),
+    }
+}
+
+fn merge_exact_agent_access(cached: &mut AgentAccess, agent: &str, exact: &AgentAccess) {
+    let AgentAccess::Restricted { allowed_agents } = exact else {
+        *cached = AgentAccess::Unrestricted;
+        return;
+    };
+    let allowed = allowed_agents.contains(agent);
+    match cached {
+        AgentAccess::Unrestricted => {
+            *cached = AgentAccess::Restricted {
+                allowed_agents: allowed.then(|| agent.to_string()).into_iter().collect(),
+            };
+        }
+        AgentAccess::Restricted { allowed_agents } => {
+            if allowed {
+                allowed_agents.insert(agent.to_string());
+            } else {
+                allowed_agents.remove(agent);
+            }
+        }
     }
 }
 
@@ -1936,19 +1974,18 @@ async fn ee_check_permission(
 fn ee_filter_agent_list(
     agents: Vec<String>,
     capabilities: HashMap<String, Vec<String>>,
-    allowed: &Option<Vec<String>>,
+    access: &AgentAccess,
 ) -> (Vec<String>, HashMap<String, Vec<String>>) {
-    let Some(patterns) = allowed else {
+    if matches!(access, AgentAccess::Unrestricted) {
         return (agents, capabilities);
-    };
-    let allowed = Some(patterns.clone());
+    }
     let filtered: Vec<String> = agents
         .into_iter()
-        .filter(|a| agent_allowed_by_patterns(a, &allowed))
+        .filter(|a| agent_allowed_by_access(a, access))
         .collect();
     let filtered_caps: HashMap<String, Vec<String>> = capabilities
         .into_iter()
-        .filter(|(k, _)| agent_allowed_by_patterns(k, &allowed))
+        .filter(|(k, _)| agent_allowed_by_access(k, access))
         .collect();
     (filtered, filtered_caps)
 }
@@ -1958,45 +1995,59 @@ mod tests {
     use super::*;
 
     #[test]
-    fn reads_are_viewer_ok_and_writes_are_admin_only() {
-        // Pure reads → viewer-OK (not mutating).
-        assert!(!is_mutating_agent_message(&Message::SystemStatsRequest));
-        assert!(!is_mutating_agent_message(&Message::DockerListRequest));
-        assert!(!is_mutating_agent_message(&Message::K8sListPodsRequest));
-        // *Stop signals are deliberately classified as read-only.
-        assert!(!is_mutating_agent_message(&Message::StopTerminalRequest {
-            session_id: String::new(),
-        }));
+    fn exact_agent_access_has_no_pattern_or_null_ambiguity() {
+        let restricted = AgentAccess::Restricted {
+            allowed_agents: HashSet::from(["prod-db-1".into(), "agent-exact".into()]),
+        };
+
+        assert!(agent_allowed_by_access("prod-db-1", &restricted));
+        assert!(!agent_allowed_by_access("prod-db-2", &restricted));
+        assert!(!agent_allowed_by_access("dev-db-1", &restricted));
+        assert!(agent_allowed_by_access(
+            "anything",
+            &AgentAccess::Unrestricted
+        ));
     }
 
     #[test]
-    fn mutating_messages_fall_through_to_admin_only() {
-        // Control + terminal-open + data are mutating (default `_ => true`).
-        assert!(is_mutating_agent_message(&Message::ControlServiceRequest {
-            name: "nginx".into(),
-            action: "restart".into(),
-        }));
-        assert!(is_mutating_agent_message(&Message::StartTerminalRequest {
-            session_id: "s".into(),
-        }));
-        assert!(is_mutating_agent_message(&Message::TerminalData {
-            session_id: "s".into(),
-            data: vec![1, 2, 3],
-        }));
-        assert!(is_mutating_agent_message(&Message::DriftSnapshotRequest {
-            snapshot_id: "snap".into(),
-            categories: vec!["configs".into()],
-            config_paths: vec!["/etc/hostname".into()],
-        }));
+    fn exact_access_refresh_updates_only_the_checked_agent() {
+        let mut cached = AgentAccess::Restricted {
+            allowed_agents: HashSet::from(["agent-a".into(), "agent-b".into()]),
+        };
+
+        merge_exact_agent_access(
+            &mut cached,
+            "agent-c",
+            &AgentAccess::Restricted {
+                allowed_agents: HashSet::from(["agent-c".into()]),
+            },
+        );
+        assert!(agent_allowed_by_access("agent-a", &cached));
+        assert!(agent_allowed_by_access("agent-c", &cached));
+
+        merge_exact_agent_access(
+            &mut cached,
+            "agent-a",
+            &AgentAccess::Restricted {
+                allowed_agents: HashSet::new(),
+            },
+        );
+        assert!(!agent_allowed_by_access("agent-a", &cached));
+        assert!(agent_allowed_by_access("agent-b", &cached));
     }
 
     #[test]
-    fn agent_visibility_patterns_gate_receive_paths() {
-        let allowed = Some(vec!["prod-*".into(), "agent-exact".into()]);
+    fn restricted_exact_refresh_replaces_stale_unrestricted_cache() {
+        let mut cached = AgentAccess::Unrestricted;
+        merge_exact_agent_access(
+            &mut cached,
+            "agent-a",
+            &AgentAccess::Restricted {
+                allowed_agents: HashSet::from(["agent-a".into()]),
+            },
+        );
 
-        assert!(agent_allowed_by_patterns("prod-db-1", &allowed));
-        assert!(agent_allowed_by_patterns("agent-exact", &allowed));
-        assert!(!agent_allowed_by_patterns("dev-db-1", &allowed));
-        assert!(agent_allowed_by_patterns("anything", &None));
+        assert!(agent_allowed_by_access("agent-a", &cached));
+        assert!(!agent_allowed_by_access("agent-b", &cached));
     }
 }

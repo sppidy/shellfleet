@@ -43,6 +43,10 @@ fn default_ttl() -> i64 {
     24
 }
 
+fn invite_created_audit_detail(role: &str, expires_at: i64) -> String {
+    format!("role={role} expires_at={expires_at}")
+}
+
 async fn create_invite(
     jar: CookieJar,
     State(state): State<Arc<AppState>>,
@@ -74,7 +78,7 @@ async fn create_invite(
                 None,
                 "invite.created",
                 true,
-                Some(&format!("code={code} role={role}")),
+                Some(&invite_created_audit_detail(role, expires_at)),
             )
             .await;
             (
@@ -160,7 +164,7 @@ async fn accept_invite(
                     None,
                     "invite.redeemed",
                     true,
-                    Some(&format!("code={code}")),
+                    None,
                 )
                 .await;
                 let ui_url = std::env::var("UI_URL").unwrap_or_else(|_| "/".into());
@@ -173,4 +177,14 @@ async fn accept_invite(
     // After login, the callback will check for a pending invite
     let login_url = format!("/auth/login?invite={code}");
     Redirect::temporary(&login_url).into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn invite_audit_detail_contains_metadata_not_bearer_code() {
+        let detail = super::invite_created_audit_detail("admin", 12345);
+        assert_eq!(detail, "role=admin expires_at=12345");
+        assert!(!detail.contains("invite-secret"));
+    }
 }

@@ -1,11 +1,12 @@
 use axum::{
     Router,
-    extract::{Path, Query, State},
+    extract::{ConnectInfo, Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
     routing::{get, post},
 };
 use serde::{Deserialize, Serialize};
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -53,8 +54,12 @@ struct AgentSummary {
     capabilities: Vec<String>,
 }
 
-async fn list_agents(headers: HeaderMap, State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let Ok((_login, _role)) = require_api_key(&headers) else {
+async fn list_agents(
+    headers: HeaderMap,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    let Ok((login, role)) = require_api_key(&headers) else {
         return (StatusCode::UNAUTHORIZED, "API key required").into_response();
     };
     if let Err((code, msg)) =
@@ -62,23 +67,40 @@ async fn list_agents(headers: HeaderMap, State(state): State<Arc<AppState>>) -> 
     {
         return (code, msg).into_response();
     }
-    let map = state.agents.lock().await;
-    let agents: Vec<AgentSummary> = map
+    let summaries: Vec<AgentSummary> = state
+        .agents
+        .lock()
+        .await
         .iter()
         .map(|(id, entry)| AgentSummary {
             agent_id: id.clone(),
             capabilities: entry.capabilities.clone(),
         })
         .collect();
-    axum::Json(agents).into_response()
+    let agent_ids = summaries
+        .iter()
+        .map(|a| a.agent_id.clone())
+        .collect::<Vec<_>>();
+    let client_ip = crate::throttle::real_client_ip(&headers, Some(peer.ip()));
+    let access = if role == "admin" {
+        crate::AgentAccess::Unrestricted
+    } else {
+        crate::ee_fetch_agent_access(&login, &client_ip, &agent_ids).await
+    };
+    let visible = summaries
+        .into_iter()
+        .filter(|agent| crate::agent_allowed_by_access(&agent.agent_id, &access))
+        .collect::<Vec<_>>();
+    axum::Json(visible).into_response()
 }
 
 async fn get_agent(
     headers: HeaderMap,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
-    let Ok((_login, _role)) = require_api_key(&headers) else {
+    let Ok((login, role)) = require_api_key(&headers) else {
         return (StatusCode::UNAUTHORIZED, "API key required").into_response();
     };
     if let Err((code, msg)) =
@@ -87,6 +109,15 @@ async fn get_agent(
         return (code, msg).into_response();
     }
     let agent_id = format!("{name}-id");
+    let client_ip = crate::throttle::real_client_ip(&headers, Some(peer.ip()));
+    let access = if role == "admin" {
+        crate::AgentAccess::Unrestricted
+    } else {
+        crate::ee_fetch_agent_access(&login, &client_ip, std::slice::from_ref(&agent_id)).await
+    };
+    if !crate::agent_allowed_by_access(&agent_id, &access) {
+        return (StatusCode::NOT_FOUND, "agent not found").into_response();
+    }
     let map = state.agents.lock().await;
     match map.get(&agent_id) {
         Some(entry) => axum::Json(AgentSummary {
@@ -132,17 +163,44 @@ async fn exec_command(
     let timeout_secs = body.timeout_secs.clamp(1, 300);
 
     let pending = match crate::agent_dispatch::dispatch_run_command(
-        &state, &agent_id, body.command.clone(), timeout_secs,
-    ).await {
+        &state,
+        &agent_id,
+        body.command.clone(),
+        timeout_secs,
+    )
+    .await
+    {
         Ok(p) => p,
         Err(crate::agent_dispatch::DispatchError::AgentNotFound) => {
-            api_exec_audit(&state, &login, &agent_id, &body.command,
-                false, None, Some("agent not found"), false, false, &timer).await;
+            api_exec_audit(
+                &state,
+                &login,
+                &agent_id,
+                &body.command,
+                false,
+                None,
+                Some("agent not found"),
+                false,
+                false,
+                &timer,
+            )
+            .await;
             return (StatusCode::NOT_FOUND, "agent not connected").into_response();
         }
         Err(crate::agent_dispatch::DispatchError::AgentDisconnected) => {
-            api_exec_audit(&state, &login, &agent_id, &body.command,
-                false, None, Some("agent disconnected"), false, false, &timer).await;
+            api_exec_audit(
+                &state,
+                &login,
+                &agent_id,
+                &body.command,
+                false,
+                None,
+                Some("agent disconnected"),
+                false,
+                false,
+                &timer,
+            )
+            .await;
             return (StatusCode::BAD_GATEWAY, "agent disconnected").into_response();
         }
     };
@@ -153,32 +211,78 @@ async fn exec_command(
     let resp = match tokio::time::timeout(outer, pending.rx).await {
         Ok(Ok(msg)) => msg,
         Ok(Err(_)) => {
-            api_exec_audit(&state, &login, &agent_id, &body.command,
-                false, None, Some("agent disconnected mid-exec"), false, false, &timer).await;
+            api_exec_audit(
+                &state,
+                &login,
+                &agent_id,
+                &body.command,
+                false,
+                None,
+                Some("agent disconnected mid-exec"),
+                false,
+                false,
+                &timer,
+            )
+            .await;
             return (StatusCode::BAD_GATEWAY, "agent disconnected").into_response();
         }
         Err(_) => {
-            api_exec_audit(&state, &login, &agent_id, &body.command,
-                false, None, None, false, true, &timer).await;
+            api_exec_audit(
+                &state,
+                &login,
+                &agent_id,
+                &body.command,
+                false,
+                None,
+                None,
+                false,
+                true,
+                &timer,
+            )
+            .await;
             return (StatusCode::GATEWAY_TIMEOUT, "agent did not respond in time").into_response();
         }
     };
 
     match &resp {
         shared::Message::RunCommandResponse {
-            exit_code, stdout, stderr, error,
-            truncated, timed_out, duration_ms, ..
+            exit_code,
+            stdout,
+            stderr,
+            error,
+            truncated,
+            timed_out,
+            duration_ms,
+            ..
         } => {
-            let is_legacy = *exit_code == -1 && error.as_deref().unwrap_or("").contains("timed out");
+            let is_legacy =
+                *exit_code == -1 && error.as_deref().unwrap_or("").contains("timed out");
             let effective_timed_out = *timed_out || is_legacy;
 
-            api_exec_audit(&state, &login, &agent_id, &body.command,
+            api_exec_audit(
+                &state,
+                &login,
+                &agent_id,
+                &body.command,
                 *exit_code == 0 && !effective_timed_out,
-                Some(*exit_code), error.as_deref(),
-                *truncated, effective_timed_out, &timer).await;
+                Some(*exit_code),
+                error.as_deref(),
+                *truncated,
+                effective_timed_out,
+                &timer,
+            )
+            .await;
 
-            let dur = if *duration_ms > 0 { *duration_ms } else { timer.elapsed().as_millis() as u64 };
-            let http_status = if effective_timed_out { StatusCode::GATEWAY_TIMEOUT } else { StatusCode::OK };
+            let dur = if *duration_ms > 0 {
+                *duration_ms
+            } else {
+                timer.elapsed().as_millis() as u64
+            };
+            let http_status = if effective_timed_out {
+                StatusCode::GATEWAY_TIMEOUT
+            } else {
+                StatusCode::OK
+            };
             let ec = if *exit_code == -1 {
                 serde_json::Value::Null
             } else {
@@ -201,21 +305,37 @@ async fn exec_command(
 }
 
 async fn api_exec_audit(
-    state: &Arc<AppState>, login: &str, agent_id: &str, cmd: &str,
-    ok: bool, exit_code: Option<i32>, err_detail: Option<&str>,
-    truncated: bool, timed_out: bool, elapsed: &Instant,
+    state: &Arc<AppState>,
+    login: &str,
+    agent_id: &str,
+    cmd: &str,
+    ok: bool,
+    exit_code: Option<i32>,
+    err_detail: Option<&str>,
+    truncated: bool,
+    timed_out: bool,
+    elapsed: &Instant,
 ) {
     let dur = elapsed.elapsed().as_millis() as u64;
-    let ec = exit_code.map(|c| format!(" exit_code={c}")).unwrap_or_default();
+    let ec = exit_code
+        .map(|c| format!(" exit_code={c}"))
+        .unwrap_or_default();
     let err = err_detail.map(|e| format!(" err={e}")).unwrap_or_default();
     // Sanitize command for audit — strip control characters and truncate
     // to prevent log injection and unbounded audit rows.
     let safe_cmd: String = cmd.chars().filter(|c| !c.is_control()).take(512).collect();
-    let detail = format!("cmd={safe_cmd}{ec} truncated={truncated} timed_out={timed_out} dur={dur}ms{err}");
+    let detail =
+        format!("cmd={safe_cmd}{ec} truncated={truncated} timed_out={timed_out} dur={dur}ms{err}");
     crate::db::record_audit(
-        &state.db, crate::now_unix(), Some(login), Some(agent_id),
-        "api.exec", ok, Some(&detail),
-    ).await;
+        &state.db,
+        crate::now_unix(),
+        Some(login),
+        Some(agent_id),
+        "api.exec",
+        ok,
+        Some(&detail),
+    )
+    .await;
 }
 
 async fn control_service(

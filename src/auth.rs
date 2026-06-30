@@ -630,7 +630,7 @@ async fn callback_handler(
                 None,
                 "invite.redeemed",
                 true,
-                Some(&format!("code={code}")),
+                None,
             )
             .await;
         }

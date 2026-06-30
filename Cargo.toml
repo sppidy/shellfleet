@@ -10,7 +10,7 @@ description = "ShellFleet control-plane server: axum HTTP/WS hub for the ShellFl
 axum = { version = "0.8.9", features = ["ws", "macros"] }
 axum-extra = { version = "0.12.6", features = ["cookie"] }
 futures-util = "0.3.32"
-jsonwebtoken = { version = "10.3.0", features = ["rust_crypto"] }
+jsonwebtoken = { version = "10.3.0", default-features = false, features = ["aws_lc_rs"] }
 rand = "0.8"
 reqwest = { version = "0.13.2", default-features = false, features = ["form", "json", "native-tls"] }
 serde = { version = "1.0.228", features = ["derive"] }
