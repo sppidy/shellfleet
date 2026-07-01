@@ -4,6 +4,10 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    ignore:
+      - dependency-name: time
+        versions:
+          - "0.3.52"
   - package-ecosystem: github-actions
     directory: /
     schedule:
