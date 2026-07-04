@@ -18,9 +18,10 @@ EnvironmentFile=-/etc/shellfleet/env
 Restart=on-failure
 RestartSec=5s
 
-# Modest hardening — the agent needs root to control systemd, but it does not
-# need network namespaces or kernel module loading.
-NoNewPrivileges=false
+# Modest hardening — the agent still needs root for the current systemd,
+# package, Docker, and config surfaces, but may not gain additional privileges
+# through setuid/setgid binaries or file capabilities.
+NoNewPrivileges=true
 ProtectKernelModules=true
 ProtectKernelLogs=true
 ProtectControlGroups=true

@@ -25,6 +25,50 @@ pub struct ExecResult {
 }
 
 const READER_GRACE_SECS: u64 = 5;
+const EXEC_ALLOWLIST_ENV: &str = "SHELLFLEET_EXEC_ALLOW_JSON";
+
+fn parse_command_allowlist(raw: Option<&str>) -> Result<Vec<String>, String> {
+    let raw = raw
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| format!("{EXEC_ALLOWLIST_ENV} is not configured"))?;
+    let entries: Vec<String> = serde_json::from_str(raw)
+        .map_err(|e| format!("{EXEC_ALLOWLIST_ENV} must be a JSON array of strings: {e}"))?;
+    let entries: Vec<String> = entries
+        .into_iter()
+        .map(|entry| entry.trim().to_string())
+        .filter(|entry| !entry.is_empty())
+        .collect();
+    if entries.is_empty() {
+        return Err(format!("{EXEC_ALLOWLIST_ENV} must contain at least one command"));
+    }
+    Ok(entries)
+}
+
+fn configured_command_allowlist() -> Result<Vec<String>, String> {
+    let raw = std::env::var(EXEC_ALLOWLIST_ENV).ok();
+    parse_command_allowlist(raw.as_deref())
+}
+
+fn command_allowed(command: &str, allowlist: &[String]) -> bool {
+    let command = command.trim();
+    !command.is_empty() && allowlist.iter().any(|allowed| command == allowed)
+}
+
+pub fn enabled() -> bool {
+    configured_command_allowlist().is_ok()
+}
+
+fn blocked_result(error: String) -> ExecResult {
+    ExecResult {
+        exit_code: -1,
+        stdout: String::new(),
+        stderr: String::new(),
+        error: Some(error),
+        truncated: false,
+        timed_out: false,
+        duration_ms: 0,
+    }
+}
 
 // ── read_to_limit ────────────────────────────────────────────────────
 
@@ -92,6 +136,14 @@ fn concatenate(rx: &mut mpsc::UnboundedReceiver<Vec<u8>>) -> String {
 // ── run ───────────────────────────────────────────────────────────────
 
 pub async fn run(command: &str, timeout_secs: u64) -> ExecResult {
+    let allowlist = match configured_command_allowlist() {
+        Ok(allowlist) => allowlist,
+        Err(error) => return blocked_result(error),
+    };
+    if !command_allowed(command, &allowlist) {
+        return blocked_result("command blocked by agent execution allow-list".to_string());
+    }
+
     let dur = Duration::from_secs(timeout_secs.clamp(1, 3600));
 
     let mut cmd = Command::new("/bin/sh");
@@ -251,5 +303,32 @@ pub async fn run(command: &str, timeout_secs: u64) -> ExecResult {
         truncated,
         timed_out,
         duration_ms: timer.elapsed().as_millis() as u64,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn execution_allowlist_is_required_and_must_be_valid_json() {
+        assert!(parse_command_allowlist(None).is_err());
+        assert!(parse_command_allowlist(Some("")).is_err());
+        assert!(parse_command_allowlist(Some("not-json")).is_err());
+        assert!(parse_command_allowlist(Some("[]")).is_err());
+    }
+
+    #[test]
+    fn execution_allowlist_matches_only_complete_commands() {
+        let allow = parse_command_allowlist(Some(
+            r#"["uptime","systemctl restart nginx"]"#,
+        ))
+        .unwrap();
+
+        assert!(command_allowed("uptime", &allow));
+        assert!(command_allowed("  systemctl restart nginx  ", &allow));
+        assert!(!command_allowed("uptime; id", &allow));
+        assert!(!command_allowed("systemctl restart nginx; id", &allow));
+        assert!(!command_allowed("systemctl restart sshd", &allow));
     }
 }

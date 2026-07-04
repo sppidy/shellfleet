@@ -46,6 +46,9 @@ const DENY_PREFIXES: &[&str] = &[
     "/etc/gshadow",
     "/etc/sudoers",
     "/etc/ssh/",
+    "/etc/letsencrypt/",
+    "/etc/ssl/private/",
+    "/etc/kubernetes/",
     "/etc/shellfleet/agent-token",
     "/root/",
     "/home/.ssh/",
@@ -61,8 +64,17 @@ fn denied_path(path: &str) -> Option<String> {
     {
         return Some((*prefix).to_string());
     }
-    if path.split('/').any(|component| component == ".ssh") {
-        return Some("any .ssh directory".to_string());
+    if let Some(component) = path
+        .split('/')
+        .find(|component| matches!(*component, ".ssh" | ".aws" | ".kube" | ".gnupg"))
+    {
+        return Some(format!("any {component} directory"));
+    }
+    if path.split('/').any(|component| component == ".netrc") {
+        return Some("any .netrc file".to_string());
+    }
+    if path.ends_with("/.docker/config.json") {
+        return Some("any .docker/config.json file".to_string());
     }
     None
 }
@@ -326,6 +338,25 @@ mod tests {
             check("/etc/shellfleet/agent-token.txt"),
             Err(PathError::BlockedByDenyList(_))
         ));
+    }
+
+    #[test]
+    fn blocks_common_credential_stores() {
+        for path in [
+            "/home/alice/.aws/credentials",
+            "/home/alice/.kube/config",
+            "/home/alice/.gnupg/private-keys-v1.d/key",
+            "/home/alice/.docker/config.json",
+            "/home/alice/.netrc",
+            "/etc/letsencrypt/live/example.test/privkey.pem",
+            "/etc/ssl/private/server.key",
+            "/etc/kubernetes/admin.conf",
+        ] {
+            assert!(
+                matches!(check(path), Err(PathError::BlockedByDenyList(_))),
+                "should block {path}"
+            );
+        }
     }
 
     #[test]

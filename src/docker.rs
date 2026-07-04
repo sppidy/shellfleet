@@ -37,6 +37,61 @@ struct DockerInfo {
     swarm: Option<DockerInfoSwarm>,
 }
 
+fn validate_object_ref(value: &str) -> Result<(), String> {
+    if value.is_empty() || value.len() > 255 {
+        return Err("docker object reference must be 1..=255 characters".into());
+    }
+    if !value
+        .as_bytes()
+        .first()
+        .is_some_and(|byte| byte.is_ascii_alphanumeric())
+        || !value.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b':')
+        })
+    {
+        return Err("invalid docker object reference".into());
+    }
+    Ok(())
+}
+
+fn validate_image_ref(value: &str) -> Result<(), String> {
+    if value.is_empty() || value.len() > 512 {
+        return Err("docker image reference must be 1..=512 characters".into());
+    }
+    if !value
+        .as_bytes()
+        .first()
+        .is_some_and(|byte| byte.is_ascii_alphanumeric())
+        || !value.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric()
+                || matches!(byte, b'.' | b'_' | b'-' | b':' | b'/' | b'@' | b'+')
+        })
+    {
+        return Err("invalid docker image reference".into());
+    }
+    Ok(())
+}
+
+fn validate_network_driver(value: &str) -> Result<(), String> {
+    validate_object_ref(value).map_err(|_| "invalid docker network driver".into())
+}
+
+fn validate_subnet(value: &str) -> Result<(), String> {
+    if value.is_empty()
+        || value.len() > 128
+        || !value
+            .as_bytes()
+            .first()
+            .is_some_and(|byte| byte.is_ascii_hexdigit())
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() || matches!(byte, b'.' | b':' | b'/'))
+    {
+        return Err("invalid docker network subnet".into());
+    }
+    Ok(())
+}
+
 pub async fn docker_available() -> bool {
     Command::new("docker")
         .arg("version")
@@ -181,6 +236,9 @@ pub async fn run_container_action(
     id: &str,
     action: DockerContainerAction,
 ) -> (bool, String, Option<String>) {
+    if let Err(error) = validate_object_ref(id) {
+        return (false, String::new(), Some(error));
+    }
     let mut cmd = Command::new("docker");
     match action {
         DockerContainerAction::Start => cmd.args(["start", id]),
@@ -216,6 +274,9 @@ pub async fn run_container_action(
 /// said. Only valid on a manager — the caller should gate with
 /// swarm_role().
 pub async fn run_swarm_action(name: &str, action: &SwarmAction) -> (bool, String, Option<String>) {
+    if let Err(error) = validate_object_ref(name) {
+        return (false, String::new(), Some(error));
+    }
     let mut cmd = Command::new("docker");
     match action {
         SwarmAction::Scale(n) => {
@@ -269,6 +330,7 @@ struct ServicePsRow {
 }
 
 pub async fn service_ps(name: &str) -> Result<Vec<SwarmTask>, String> {
+    validate_object_ref(name)?;
     let output = Command::new("docker")
         .args([
             "service",
@@ -309,6 +371,7 @@ pub async fn service_ps(name: &str) -> Result<Vec<SwarmTask>, String> {
 }
 
 pub async fn service_inspect(name: &str) -> Result<SwarmServiceSpecSummary, String> {
+    validate_object_ref(name)?;
     let output = Command::new("docker")
         .args(["service", "inspect", name])
         .output()
@@ -426,6 +489,9 @@ pub async fn stack_deploy(
     compose_yaml: &str,
     prune: bool,
 ) -> (bool, String, Option<String>) {
+    if let Err(error) = validate_object_ref(stack_name) {
+        return (false, String::new(), Some(error));
+    }
     let mut cmd = Command::new("docker");
     cmd.args([
         "stack",
@@ -604,6 +670,9 @@ fn parse_docker_size(s: &str) -> u64 {
 }
 
 pub async fn remove_image(id: &str, force: bool) -> (bool, String, Option<String>) {
+    if let Err(error) = validate_image_ref(id) {
+        return (false, String::new(), Some(error));
+    }
     let mut cmd = Command::new("docker");
     cmd.arg("rmi");
     if force {
@@ -625,6 +694,9 @@ pub async fn remove_image(id: &str, force: bool) -> (bool, String, Option<String
 }
 
 pub async fn pull_image(reference: &str) -> (bool, String, Option<String>) {
+    if let Err(error) = validate_image_ref(reference) {
+        return (false, String::new(), Some(error));
+    }
     let output = match Command::new("docker")
         .args(["pull", reference])
         .output()
@@ -720,6 +792,9 @@ pub async fn list_networks() -> Result<Vec<shared::DockerNetwork>, String> {
 }
 
 pub async fn inspect_network(id: &str) -> (bool, String, Option<String>) {
+    if let Err(error) = validate_object_ref(id) {
+        return (false, String::new(), Some(error));
+    }
     let output = match Command::new("docker")
         .args(["network", "inspect", id])
         .output()
@@ -745,6 +820,17 @@ pub async fn create_network(
     attachable: bool,
     internal: bool,
 ) -> (bool, Option<String>, String, Option<String>) {
+    if let Err(error) = validate_object_ref(name) {
+        return (false, None, String::new(), Some(error));
+    }
+    if let Err(error) = validate_network_driver(driver) {
+        return (false, None, String::new(), Some(error));
+    }
+    if let Some(subnet) = subnet.filter(|subnet| !subnet.is_empty()) {
+        if let Err(error) = validate_subnet(subnet) {
+            return (false, None, String::new(), Some(error));
+        }
+    }
     let mut cmd = Command::new("docker");
     cmd.args(["network", "create", "--driver", driver]);
     if let Some(s) = subnet {
@@ -781,6 +867,9 @@ pub async fn create_network(
 }
 
 pub async fn remove_network(id: &str) -> (bool, String, Option<String>) {
+    if let Err(error) = validate_object_ref(id) {
+        return (false, String::new(), Some(error));
+    }
     let output = match Command::new("docker")
         .args(["network", "rm", id])
         .output()
@@ -848,6 +937,9 @@ pub async fn list_volumes() -> Result<Vec<shared::DockerVolume>, String> {
 }
 
 pub async fn inspect_volume(name: &str) -> (bool, String, Option<String>) {
+    if let Err(error) = validate_object_ref(name) {
+        return (false, String::new(), Some(error));
+    }
     let output = match Command::new("docker")
         .args(["volume", "inspect", name])
         .output()
@@ -867,6 +959,9 @@ pub async fn inspect_volume(name: &str) -> (bool, String, Option<String>) {
 }
 
 pub async fn remove_volume(name: &str, force: bool) -> (bool, String, Option<String>) {
+    if let Err(error) = validate_object_ref(name) {
+        return (false, String::new(), Some(error));
+    }
     let mut cmd = Command::new("docker");
     cmd.args(["volume", "rm"]);
     if force {
@@ -981,6 +1076,7 @@ pub async fn list_stacks() -> Result<Vec<shared::SwarmStack>, String> {
 }
 
 pub async fn stack_services(name: &str) -> Result<Vec<shared::SwarmService>, String> {
+    validate_object_ref(name)?;
     let output = match Command::new("docker")
         .args(["stack", "services", "--format", "{{json .}}", name])
         .output()
@@ -1029,6 +1125,7 @@ pub async fn stack_services(name: &str) -> Result<Vec<shared::SwarmService>, Str
 }
 
 pub async fn stack_tasks(name: &str) -> Result<Vec<shared::SwarmTask>, String> {
+    validate_object_ref(name)?;
     let output = match Command::new("docker")
         .args(["stack", "ps", "--no-trunc", "--format", "{{json .}}", name])
         .output()
@@ -1344,6 +1441,9 @@ fn parse_pair(s: &str) -> (u64, u64) {
 }
 
 pub async fn remove_stack(name: &str) -> (bool, String, Option<String>) {
+    if let Err(error) = validate_object_ref(name) {
+        return (false, String::new(), Some(error));
+    }
     let output = match Command::new("docker")
         .args(["stack", "rm", name])
         .output()
@@ -1360,4 +1460,59 @@ pub async fn remove_stack(name: &str) -> (bool, String, Option<String>) {
         Some(format!("docker stack rm exit {:?}", output.status.code()))
     };
     (success, log, err)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn docker_object_references_reject_flags_and_unsafe_characters() {
+        for value in ["", "--help", "-f", "name with space", "name\nnext", "name/child"] {
+            assert!(validate_object_ref(value).is_err(), "accepted {value:?}");
+        }
+        for value in ["abc123", "container-name", "stack_service", "sha256:abcd"] {
+            assert!(validate_object_ref(value).is_ok(), "rejected {value:?}");
+        }
+    }
+
+    #[test]
+    fn docker_image_references_reject_flags_and_accept_registry_paths() {
+        for value in ["", "--privileged", "image with space", "repo/image\n--pull"] {
+            assert!(validate_image_ref(value).is_err(), "accepted {value:?}");
+        }
+        for value in [
+            "nginx:latest",
+            "registry.example:5000/team/image:v1",
+            "alpine@sha256:abcdef",
+        ] {
+            assert!(validate_image_ref(value).is_ok(), "rejected {value:?}");
+        }
+    }
+
+    #[test]
+    fn docker_network_values_reject_option_injection() {
+        assert!(validate_network_driver("--help").is_err());
+        assert!(validate_subnet("--subnet=0.0.0.0/0").is_err());
+        assert!(validate_network_driver("overlay").is_ok());
+        assert!(validate_subnet("10.20.0.0/16").is_ok());
+        assert!(validate_subnet("2001:db8::/64").is_ok());
+    }
+
+    #[tokio::test]
+    async fn docker_operations_reject_injected_options_before_spawn() {
+        let (ok, _, error) =
+            run_container_action("--help", DockerContainerAction::Start).await;
+        assert!(!ok);
+        assert!(error.is_some_and(|message| message.contains("invalid docker object")));
+
+        let (ok, _, error) = pull_image("--privileged").await;
+        assert!(!ok);
+        assert!(error.is_some_and(|message| message.contains("image reference")));
+
+        let (ok, _, _, error) =
+            create_network("safe", "bridge", Some("--subnet=0.0.0.0/0"), false, false).await;
+        assert!(!ok);
+        assert!(error.is_some_and(|message| message.contains("network subnet")));
+    }
 }

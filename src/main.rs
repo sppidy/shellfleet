@@ -296,8 +296,11 @@ async fn main() {
     // never has a Docker tab cluttering its view. K8s detection lands
     // in v1 with the kube-rs feature; for now we never advertise it.
     let mut capabilities: Vec<String> = Vec::with_capacity(5);
-    // Every agent can run one-shot commands for runbooks (sh -c).
-    capabilities.push("exec".into());
+    // One-shot root command execution is advertised only when the operator
+    // configured the agent-side exact-command allow-list.
+    if exec::enabled() {
+        capabilities.push("exec".into());
+    }
     if systemd::systemd_available().await {
         capabilities.push("systemd".into());
     }
@@ -345,9 +348,9 @@ async fn main() {
         loop {
             tokio::time::sleep(delay).await;
             let mut fresh: Vec<String> = Vec::with_capacity(5);
-            // Always present (one-shot exec for runbooks). Must mirror the
-            // initial capability list so the periodic refresh doesn't drop it.
-            fresh.push("exec".into());
+            if exec::enabled() {
+                fresh.push("exec".into());
+            }
             if systemd::systemd_available().await {
                 fresh.push("systemd".into());
             }
@@ -499,8 +502,8 @@ async fn main() {
                                 });
                             }
                             Message::RunCommandRequest { request_id, command, timeout_secs } => {
-                                // One-shot exec for EE runbooks (gated upstream
-                                // by the runbook allow-list + CE ACL).
+                                // The execution sink independently enforces the
+                                // local exact-command allow-list.
                                 let tx_clone = tx.clone();
                                 tokio::spawn(async move {
                                     let r = exec::run(&command, timeout_secs).await;

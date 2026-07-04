@@ -394,6 +394,209 @@ pub async fn describe(kind: &str, namespace: Option<&str>, name: &str) -> Result
 // ─── slice 6 (v2): apply / scale / delete ──────────────────────
 
 const APPLY_FIELD_MANAGER: &str = "shellfleet";
+const APPLY_NAMESPACES_ENV: &str = "SHELLFLEET_K8S_APPLY_NAMESPACES";
+
+const ALLOWED_APPLY_RESOURCES: &[(&str, &str)] = &[
+    ("v1", "Pod"),
+    ("v1", "Service"),
+    ("v1", "ConfigMap"),
+    ("v1", "Secret"),
+    ("v1", "PersistentVolumeClaim"),
+    ("apps/v1", "Deployment"),
+    ("apps/v1", "StatefulSet"),
+    ("apps/v1", "DaemonSet"),
+    ("apps/v1", "ReplicaSet"),
+    ("batch/v1", "Job"),
+    ("batch/v1", "CronJob"),
+    ("networking.k8s.io/v1", "Ingress"),
+    ("autoscaling/v2", "HorizontalPodAutoscaler"),
+];
+
+fn configured_apply_namespaces() -> Result<Vec<String>, String> {
+    let raw = std::env::var(APPLY_NAMESPACES_ENV).map_err(|_| {
+        format!(
+            "Kubernetes apply is disabled: set {APPLY_NAMESPACES_ENV} to a comma-separated namespace allow-list"
+        )
+    })?;
+    let namespaces: Vec<String> = raw
+        .split(',')
+        .map(str::trim)
+        .filter(|namespace| !namespace.is_empty())
+        .map(str::to_owned)
+        .collect();
+
+    if namespaces.is_empty() {
+        return Err(format!(
+            "Kubernetes apply is disabled: {APPLY_NAMESPACES_ENV} contains no namespaces"
+        ));
+    }
+    if namespaces.iter().any(|namespace| namespace == "*") {
+        return Err(format!(
+            "Kubernetes apply refuses wildcard namespaces in {APPLY_NAMESPACES_ENV}"
+        ));
+    }
+    Ok(namespaces)
+}
+
+fn validate_pod_spec(spec: &serde_json::Value) -> Result<(), String> {
+    for field in ["hostNetwork", "hostPID", "hostIPC"] {
+        if spec.get(field).and_then(serde_json::Value::as_bool) == Some(true) {
+            return Err(format!("pod spec may not enable {field}"));
+        }
+    }
+
+    if spec
+        .get("automountServiceAccountToken")
+        .and_then(serde_json::Value::as_bool)
+        != Some(false)
+    {
+        return Err(
+            "pod spec must set automountServiceAccountToken: false to prevent service-account impersonation"
+                .into(),
+        );
+    }
+
+    if let Some(volumes) = spec.get("volumes").and_then(serde_json::Value::as_array) {
+        for volume in volumes {
+            if volume.get("hostPath").is_some() {
+                return Err("pod spec may not mount hostPath volumes".into());
+            }
+            let projected_sources = volume
+                .pointer("/projected/sources")
+                .and_then(serde_json::Value::as_array);
+            if projected_sources.is_some_and(|sources| {
+                sources
+                    .iter()
+                    .any(|source| source.get("serviceAccountToken").is_some())
+            }) {
+                return Err("pod spec may not project service-account tokens".into());
+            }
+        }
+    }
+
+    for container_field in ["containers", "initContainers", "ephemeralContainers"] {
+        let Some(containers) = spec
+            .get(container_field)
+            .and_then(serde_json::Value::as_array)
+        else {
+            continue;
+        };
+        for container in containers {
+            let security = container.get("securityContext");
+            if security.and_then(|value| value.get("privileged"))
+                .and_then(serde_json::Value::as_bool)
+                == Some(true)
+            {
+                return Err(format!("{container_field} may not run privileged"));
+            }
+            if security
+                .and_then(|value| value.get("allowPrivilegeEscalation"))
+                .and_then(serde_json::Value::as_bool)
+                == Some(true)
+            {
+                return Err(format!(
+                    "{container_field} may not allow privilege escalation"
+                ));
+            }
+            if security
+                .and_then(|value| value.pointer("/capabilities/add"))
+                .and_then(serde_json::Value::as_array)
+                .is_some_and(|capabilities| !capabilities.is_empty())
+            {
+                return Err(format!("{container_field} may not add Linux capabilities"));
+            }
+            if security
+                .and_then(|value| value.get("procMount"))
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|mode| mode.eq_ignore_ascii_case("Unmasked"))
+            {
+                return Err(format!("{container_field} may not use an unmasked /proc"));
+            }
+            if security
+                .and_then(|value| value.pointer("/seccompProfile/type"))
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|mode| mode.eq_ignore_ascii_case("Unconfined"))
+            {
+                return Err(format!("{container_field} may not disable seccomp"));
+            }
+            if security
+                .and_then(|value| value.pointer("/windowsOptions/hostProcess"))
+                .and_then(serde_json::Value::as_bool)
+                == Some(true)
+            {
+                return Err(format!("{container_field} may not use Windows HostProcess"));
+            }
+
+            if container
+                .get("ports")
+                .and_then(serde_json::Value::as_array)
+                .is_some_and(|ports| {
+                    ports.iter().any(|port| {
+                        port.get("hostPort")
+                            .and_then(serde_json::Value::as_u64)
+                            .is_some_and(|port| port > 0)
+                    })
+                })
+            {
+                return Err(format!("{container_field} may not expose host ports"));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_apply_document(
+    document: &serde_json::Value,
+    allowed_namespaces: &[String],
+    force: bool,
+) -> Result<(), String> {
+    if force {
+        return Err("forced server-side apply is disabled because it can seize field ownership".into());
+    }
+
+    let api_version = document
+        .get("apiVersion")
+        .and_then(serde_json::Value::as_str)
+        .ok_or("manifest is missing apiVersion")?;
+    let kind = document
+        .get("kind")
+        .and_then(serde_json::Value::as_str)
+        .ok_or("manifest is missing kind")?;
+    if !ALLOWED_APPLY_RESOURCES.contains(&(api_version, kind)) {
+        return Err(format!(
+            "apply of {api_version} {kind} is not allowed; cluster-scoped, RBAC, and custom resources are denied"
+        ));
+    }
+
+    let namespace = document
+        .pointer("/metadata/namespace")
+        .and_then(serde_json::Value::as_str)
+        .filter(|namespace| !namespace.is_empty())
+        .ok_or("manifest must set metadata.namespace")?;
+    if !allowed_namespaces
+        .iter()
+        .any(|allowed| allowed == namespace)
+    {
+        return Err(format!("apply to namespace {namespace:?} is not allowed"));
+    }
+
+    let pod_spec_pointer = match kind {
+        "Pod" => Some("/spec"),
+        "Deployment" | "StatefulSet" | "DaemonSet" | "ReplicaSet" | "Job" => {
+            Some("/spec/template/spec")
+        }
+        "CronJob" => Some("/spec/jobTemplate/spec/template/spec"),
+        _ => None,
+    };
+    if let Some(pointer) = pod_spec_pointer {
+        let spec = document
+            .pointer(pointer)
+            .ok_or_else(|| format!("{kind} manifest is missing its pod spec"))?;
+        validate_pod_spec(spec)?;
+    }
+
+    Ok(())
+}
 
 /// Server-side apply of one or more YAML docs. Multi-doc input
 /// (`---` separated) is supported; each doc is applied in order
@@ -401,6 +604,7 @@ const APPLY_FIELD_MANAGER: &str = "shellfleet";
 /// uses kube's discovery to resolve the GVK to an `ApiResource`,
 /// so any cluster-known kind works without a per-kind match.
 pub async fn apply(yaml: &str, dry_run: bool, force: bool) -> Result<String, String> {
+    let allowed_namespaces = configured_apply_namespaces()?;
     let client = Client::try_default()
         .await
         .map_err(|e| format!("kube client: {e}"))?;
@@ -414,6 +618,10 @@ pub async fn apply(yaml: &str, dry_run: bool, force: bool) -> Result<String, Str
         }
         let obj: DynamicObject =
             serde_yaml::from_str(raw).map_err(|e| format!("doc {i}: parse: {e}"))?;
+        let document = serde_json::to_value(&obj)
+            .map_err(|e| format!("doc {i}: normalize manifest: {e}"))?;
+        validate_apply_document(&document, &allowed_namespaces, force)
+            .map_err(|e| format!("doc {i}: policy: {e}"))?;
         let types = obj
             .types
             .as_ref()
@@ -444,9 +652,6 @@ pub async fn apply(yaml: &str, dry_run: bool, force: bool) -> Result<String, Str
         };
 
         let mut params = PatchParams::apply(APPLY_FIELD_MANAGER);
-        if force {
-            params = params.force();
-        }
         if dry_run {
             params.dry_run = true;
         }
@@ -556,4 +761,88 @@ where
     // Strip managedFields — verbose, useless in a describe view.
     obj.meta_mut().managed_fields = None;
     serde_yaml::to_string(&obj).map_err(|e| format!("yaml: {e}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_apply_document;
+    use serde_json::json;
+
+    fn allowed_namespaces() -> Vec<String> {
+        vec!["ops".to_string()]
+    }
+
+    fn safe_deployment() -> serde_json::Value {
+        json!({
+            "apiVersion": "apps/v1",
+            "kind": "Deployment",
+            "metadata": { "name": "web", "namespace": "ops" },
+            "spec": {
+                "selector": { "matchLabels": { "app": "web" } },
+                "template": {
+                    "metadata": { "labels": { "app": "web" } },
+                    "spec": {
+                        "containers": [{
+                            "name": "web",
+                            "image": "nginx:1.27",
+                            "securityContext": {
+                                "allowPrivilegeEscalation": false
+                            }
+                        }],
+                        "automountServiceAccountToken": false
+                    }
+                }
+            }
+        })
+    }
+
+    #[test]
+    fn apply_policy_allows_safe_namespaced_workload() {
+        assert!(validate_apply_document(&safe_deployment(), &allowed_namespaces(), false).is_ok());
+
+        // Exercise the same DynamicObject normalization used by apply(), not
+        // only a hand-built JSON value.
+        let manifest = serde_yaml::to_string(&safe_deployment()).unwrap();
+        let object: kube::api::DynamicObject = serde_yaml::from_str(&manifest).unwrap();
+        let normalized = serde_json::to_value(object).unwrap();
+        assert!(validate_apply_document(&normalized, &allowed_namespaces(), false).is_ok());
+    }
+
+    #[test]
+    fn apply_policy_rejects_cluster_scoped_and_wrong_namespace() {
+        let binding = json!({
+            "apiVersion": "rbac.authorization.k8s.io/v1",
+            "kind": "ClusterRoleBinding",
+            "metadata": { "name": "takeover" }
+        });
+        assert!(validate_apply_document(&binding, &allowed_namespaces(), false).is_err());
+
+        let mut deployment = safe_deployment();
+        deployment["metadata"]["namespace"] = json!("kube-system");
+        assert!(validate_apply_document(&deployment, &allowed_namespaces(), false).is_err());
+    }
+
+    #[test]
+    fn apply_policy_rejects_forced_field_ownership() {
+        assert!(validate_apply_document(&safe_deployment(), &allowed_namespaces(), true).is_err());
+    }
+
+    #[test]
+    fn apply_policy_rejects_privileged_pod_settings() {
+        let mut deployment = safe_deployment();
+        deployment["spec"]["template"]["spec"]["hostPID"] = json!(true);
+        assert!(validate_apply_document(&deployment, &allowed_namespaces(), false).is_err());
+
+        let mut deployment = safe_deployment();
+        deployment["spec"]["template"]["spec"]["containers"][0]["securityContext"]
+            ["privileged"] = json!(true);
+        assert!(validate_apply_document(&deployment, &allowed_namespaces(), false).is_err());
+
+        let mut deployment = safe_deployment();
+        deployment["spec"]["template"]["spec"]["volumes"] = json!([{
+            "name": "host",
+            "hostPath": { "path": "/" }
+        }]);
+        assert!(validate_apply_document(&deployment, &allowed_namespaces(), false).is_err());
+    }
 }
