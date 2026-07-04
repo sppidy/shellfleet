@@ -27,6 +27,12 @@
 //! Per-event vars still override when both are set, so you can route
 //! one event differently while leaving the rest on the default.
 //!
+//! Outbound payloads are privacy-preserving by default: agent IDs are
+//! replaced and command/probe output is omitted. Set
+//! `<PREFIX>_WEBHOOK_EXPOSE_AGENT_ID=true` and/or
+//! `<PREFIX>_WEBHOOK_INCLUDE_OUTPUT=true` (or the prefix-less variants)
+//! only for destinations approved to receive those fields.
+//!
 //! ## Sink suffixes (per prefix)
 //!
 //! | Suffix                      | Format                                |
@@ -314,6 +320,23 @@ fn env_with_fallback(prefix: &str, suffix: &str) -> String {
     env_or_empty(suffix)
 }
 
+fn env_bool_with_fallback(prefix: &str, suffix: &str) -> bool {
+    matches!(
+        env_with_fallback(prefix, suffix)
+            .trim()
+            .to_ascii_lowercase()
+            .as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
+
+fn configured_privacy(prefix: &str) -> WebhookPrivacy {
+    WebhookPrivacy {
+        expose_agent_id: env_bool_with_fallback(prefix, "WEBHOOK_EXPOSE_AGENT_ID"),
+        include_output: env_bool_with_fallback(prefix, "WEBHOOK_INCLUDE_OUTPUT"),
+    }
+}
+
 fn configured_sinks(prefix: &str) -> Vec<Sink> {
     let mut sinks = Vec::new();
 
@@ -369,6 +392,23 @@ struct Event {
     log: String,
     error: Option<String>,
     at: i64,
+}
+
+#[derive(Default)]
+struct WebhookPrivacy {
+    expose_agent_id: bool,
+    include_output: bool,
+}
+
+fn sanitize_outbound_event(mut event: Event, privacy: &WebhookPrivacy) -> Event {
+    if !privacy.expose_agent_id {
+        event.agent_id = "<redacted-agent>".into();
+    }
+    if !privacy.include_output {
+        event.log.clear();
+        event.error = None;
+    }
+    event
 }
 
 /// One job pushed onto the dispatch queue. Held briefly while the
@@ -459,6 +499,8 @@ async fn fire_inner(db: SqlitePool, prefix: &'static str, event: Event) {
     if sinks.is_empty() {
         return;
     }
+    let audit_agent_id = event.agent_id.clone();
+    let event = sanitize_outbound_event(event, &configured_privacy(prefix));
     let truncated = truncate(&event.log, LOG_CAP);
     let client = match reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
@@ -471,7 +513,7 @@ async fn fire_inner(db: SqlitePool, prefix: &'static str, event: Event) {
                 &db,
                 crate::now_unix(),
                 Some("webhook"),
-                Some(&event.agent_id),
+                Some(&audit_agent_id),
                 &format!("webhook.{}", event.kind),
                 false,
                 Some(&format!("client: {e}")),
@@ -485,10 +527,11 @@ async fn fire_inner(db: SqlitePool, prefix: &'static str, event: Event) {
     for sink in sinks {
         let client = client.clone();
         let db = db.clone();
+        let audit_agent_id = audit_agent_id.clone();
         let mut event = event.clone();
         event.log = truncated.clone();
         handles.push(tokio::spawn(async move {
-            deliver(&client, db, sink, event).await
+            deliver(&client, db, sink, event, audit_agent_id).await
         }));
     }
     for h in handles {
@@ -496,7 +539,29 @@ async fn fire_inner(db: SqlitePool, prefix: &'static str, event: Event) {
     }
 }
 
-async fn deliver(client: &reqwest::Client, db: SqlitePool, sink: Sink, event: Event) {
+fn request_error_summary(error: &reqwest::Error) -> &'static str {
+    if error.is_timeout() {
+        "request timed out"
+    } else if error.is_connect() {
+        "connection failed"
+    } else if error.is_redirect() {
+        "redirect policy failed"
+    } else if error.is_body() {
+        "request body failed"
+    } else if error.is_decode() {
+        "response decode failed"
+    } else {
+        "request failed"
+    }
+}
+
+async fn deliver(
+    client: &reqwest::Client,
+    db: SqlitePool,
+    sink: Sink,
+    event: Event,
+    audit_agent_id: String,
+) {
     let label = sink.label();
     let audit_kind = format!("webhook.{}", event.kind);
     let req = match &sink {
@@ -559,7 +624,7 @@ async fn deliver(client: &reqwest::Client, db: SqlitePool, sink: Sink, event: Ev
     match req.send().await {
         Ok(resp) if resp.status().is_success() => {
             tracing::info!(
-                agent_id = %event.agent_id,
+                agent_id = %audit_agent_id,
                 status = %event.status,
                 kind = %event.kind,
                 sink = %label,
@@ -570,7 +635,7 @@ async fn deliver(client: &reqwest::Client, db: SqlitePool, sink: Sink, event: Ev
                 &db,
                 crate::now_unix(),
                 Some("webhook"),
-                Some(&event.agent_id),
+                Some(&audit_agent_id),
                 &audit_kind,
                 true,
                 Some(&format!("sink={label} code={}", resp.status().as_u16())),
@@ -589,7 +654,7 @@ async fn deliver(client: &reqwest::Client, db: SqlitePool, sink: Sink, event: Ev
             let snippet: String = strip_ansi(&body).chars().take(200).collect();
             let snippet = html_escape(&snippet);
             tracing::warn!(
-                agent_id = %event.agent_id,
+                agent_id = %audit_agent_id,
                 kind = %event.kind,
                 sink = %label,
                 code,
@@ -600,7 +665,7 @@ async fn deliver(client: &reqwest::Client, db: SqlitePool, sink: Sink, event: Ev
                 &db,
                 crate::now_unix(),
                 Some("webhook"),
-                Some(&event.agent_id),
+                Some(&audit_agent_id),
                 &audit_kind,
                 false,
                 Some(&format!("sink={label} code={code} body={snippet}")),
@@ -608,21 +673,25 @@ async fn deliver(client: &reqwest::Client, db: SqlitePool, sink: Sink, event: Ev
             .await;
         }
         Err(e) => {
+            // Webhook credentials are commonly embedded in URL paths. Never
+            // format reqwest::Error here: its source URL may include Slack,
+            // Discord, generic-webhook, or Telegram credentials.
+            let summary = request_error_summary(&e);
             tracing::warn!(
-                agent_id = %event.agent_id,
+                agent_id = %audit_agent_id,
                 kind = %event.kind,
                 sink = %label,
-                error = %e,
+                error = %summary,
                 "webhook send failed"
             );
             db::record_audit(
                 &db,
                 crate::now_unix(),
                 Some("webhook"),
-                Some(&event.agent_id),
+                Some(&audit_agent_id),
                 &audit_kind,
                 false,
-                Some(&format!("sink={label} send: {e}")),
+                Some(&format!("sink={label} send: {summary}")),
             )
             .await;
         }
@@ -788,6 +857,40 @@ pub fn fire_agent_still_offline(db: SqlitePool, agent_id: String, down_secs: i64
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_event() -> Event {
+        Event {
+            kind: "backup_job.result",
+            headline: "shellfleet backup `database`".into(),
+            agent_id: "prod-db-01-id".into(),
+            status: "failed".into(),
+            log: "password=super-secret".into(),
+            error: Some("upload failed with token abc".into()),
+            at: 123,
+        }
+    }
+
+    #[test]
+    fn outbound_privacy_defaults_remove_agent_identity_and_output() {
+        let event = sanitize_outbound_event(test_event(), &WebhookPrivacy::default());
+        assert_eq!(event.agent_id, "<redacted-agent>");
+        assert!(event.log.is_empty());
+        assert!(event.error.is_none());
+    }
+
+    #[test]
+    fn outbound_identity_and_output_need_explicit_opt_in() {
+        let event = sanitize_outbound_event(
+            test_event(),
+            &WebhookPrivacy {
+                expose_agent_id: true,
+                include_output: true,
+            },
+        );
+        assert_eq!(event.agent_id, "prod-db-01-id");
+        assert_eq!(event.log, "password=super-secret");
+        assert_eq!(event.error.as_deref(), Some("upload failed with token abc"));
+    }
 
     #[test]
     fn truncate_returns_short_strings_unchanged() {
