@@ -60,6 +60,7 @@ impl Message {
             | TerminalData { .. }
             | StopTerminalRequest { .. }
             | TerminalResize { .. } => request(Some("agent:Terminal"), Interactive),
+            TrustedOperationClient { .. } => request(Some("agent:TrustedRoot"), Interactive),
 
             K8sListPodsRequest
             | K8sListDeploymentsRequest
@@ -202,6 +203,7 @@ impl Message {
             | DockerStatsResponse { .. }
             | DockerExecStartResponse { .. }
             | DriftSnapshotResponse { .. } => return Err(UiRequestError::NotUiRequest),
+            TrustedOperationHost { .. } => return Err(UiRequestError::NotUiRequest),
         };
         Ok(security)
     }

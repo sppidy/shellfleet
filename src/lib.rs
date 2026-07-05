@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 pub mod internal_auth;
 mod security;
+pub mod trusted;
 pub use security::{UiRequestClass, UiRequestError, UiRequestSecurity};
 
 /// Protocol version sent by the agent in the Register handshake. Bump when
@@ -29,7 +30,7 @@ pub use security::{UiRequestClass, UiRequestError, UiRequestSecurity};
 ///
 /// v14: terminal variants gain `session_id` for multi-PTY per host.
 /// Empty string = the singleton container-exec session (DockerExec*).
-pub const PROTOCOL_VERSION: u32 = 18;
+pub const PROTOCOL_VERSION: u32 = 19;
 
 fn default_protocol_version() -> u32 {
     0
@@ -166,6 +167,24 @@ pub enum Message {
         session_id: String,
         cols: u16,
         rows: u16,
+    },
+
+    /// Opaque, end-to-end authenticated trusted-operation traffic from a
+    /// native client to the host broker. The server may route but cannot
+    /// authorize, inspect, or alter the embedded protocol successfully.
+    TrustedOperationClient {
+        request_id: String,
+        start: bool,
+        close: bool,
+        payload: Vec<u8>,
+    },
+
+    /// Opaque host-broker response routed only to the client that owns the
+    /// matching request id. Root-session data remains ciphertext here.
+    TrustedOperationHost {
+        request_id: String,
+        complete: bool,
+        payload: Vec<u8>,
     },
 
     /// List pods across every namespace the agent's k8s identity can
