@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+pub mod internal_auth;
 mod security;
 pub use security::{UiRequestClass, UiRequestError, UiRequestSecurity};
 
