@@ -1,0 +1,35 @@
+#include <tunables/global>
+
+profile shellfleet-agent /usr/bin/shellfleet-agent flags=(attach_disconnected,mediate_deleted) {
+  #include <abstractions/base>
+  #include <abstractions/nameservice>
+  #include <abstractions/ssl_certs>
+
+  network inet stream,
+  network inet6 stream,
+  network unix stream,
+
+  /usr/bin/shellfleet-agent mr,
+  /var/lib/shellfleet-agent/** rwk,
+  /etc/shellfleet/env r,
+  /etc/shellfleet/probes.d/* rix,
+  /usr/share/shellfleet/probes.d/* rix,
+  /run/shellfleet/approval-gate.sock rw,
+  /proc/** r,
+  /sys/** r,
+  /etc/hostname r,
+  /etc/os-release r,
+  /usr/bin/** rix,
+  /bin/** rix,
+
+  deny /run/docker.sock rw,
+  deny /var/run/docker.sock rw,
+  deny /run/dbus/system_bus_socket rw,
+  deny /etc/shellfleet/approvers.json rw,
+  deny /var/lib/shellfleet-gate/** rwklx,
+  deny /etc/sudoers{,/**} rwklx,
+  deny /root/** rwklx,
+  deny /dev/mem rwklx,
+  deny capability,
+  deny ptrace,
+}

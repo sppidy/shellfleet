@@ -5,15 +5,37 @@ CONF_DIR=/etc/shellfleet
 ENV_FILE="$CONF_DIR/env"
 ENV_EXAMPLE="$CONF_DIR/env.example"
 STATE_DIR=/var/lib/shellfleet
+AGENT_STATE_DIR=/var/lib/shellfleet-agent
+GATE_STATE_DIR=/var/lib/shellfleet-gate
 PROBES_DIR="$CONF_DIR/probes.d"
 
 case "$1" in
     configure|reconfigure)
+        if ! getent group shellfleet >/dev/null; then
+            addgroup --system shellfleet
+        fi
+        if ! getent passwd shellfleet >/dev/null; then
+            adduser --system --ingroup shellfleet --home "$AGENT_STATE_DIR" \
+                --no-create-home --disabled-login --disabled-password shellfleet
+        fi
+
         # Make sure the config dir exists with safe perms.
         if [ ! -d "$CONF_DIR" ]; then
             mkdir -p "$CONF_DIR"
-            chown root:root "$CONF_DIR"
-            chmod 0750 "$CONF_DIR"
+        fi
+        chown root:shellfleet "$CONF_DIR"
+        chmod 0750 "$CONF_DIR"
+
+        install -d -o shellfleet -g shellfleet -m 0700 "$AGENT_STATE_DIR"
+        install -d -o root -g root -m 0700 "$GATE_STATE_DIR"
+        if [ -f "$CONF_DIR/agent-token.txt" ] && [ ! -f "$AGENT_STATE_DIR/agent-token.txt" ]; then
+            install -o shellfleet -g shellfleet -m 0600 \
+                "$CONF_DIR/agent-token.txt" "$AGENT_STATE_DIR/agent-token.txt"
+        fi
+        if [ ! -e "$CONF_DIR/approvers.json" ]; then
+            printf '{}\n' > "$CONF_DIR/approvers.json"
+            chown root:root "$CONF_DIR/approvers.json"
+            chmod 0600 "$CONF_DIR/approvers.json"
         fi
 
         # Persistent state dir for apt-run journaling — survives reboot
@@ -31,9 +53,9 @@ case "$1" in
         # management without exposing arbitrary code paths.
         if [ ! -d "$PROBES_DIR" ]; then
             mkdir -p "$PROBES_DIR"
-            chown root:root "$PROBES_DIR"
-            chmod 0750 "$PROBES_DIR"
         fi
+        chown root:shellfleet "$PROBES_DIR"
+        chmod 0750 "$PROBES_DIR"
 
         # Seed the stock probe library into /etc/shellfleet/probes.d/
         # exactly once, gated by a stamp file. After the seed has run,
@@ -61,9 +83,16 @@ case "$1" in
         # existing operator-edited file on upgrade.
         if [ ! -e "$ENV_FILE" ] && [ -e "$ENV_EXAMPLE" ]; then
             cp "$ENV_EXAMPLE" "$ENV_FILE"
-            chown root:root "$ENV_FILE"
+            chown root:shellfleet "$ENV_FILE"
             chmod 0640 "$ENV_FILE"
         fi
+
+        if command -v apparmor_parser >/dev/null 2>&1; then
+            apparmor_parser -r /etc/apparmor.d/shellfleet-agent || true
+            apparmor_parser -r /etc/apparmor.d/shellfleet-approval-gate || true
+        fi
+        systemctl daemon-reload >/dev/null 2>&1 || true
+        systemctl enable shellfleet-approval-gate.service >/dev/null 2>&1 || true
         ;;
 esac
 

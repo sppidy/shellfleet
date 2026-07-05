@@ -1,16 +1,17 @@
 [Unit]
 Description=ShellFleet Agent
-After=network-online.target docker.service k3s.service
+After=network-online.target shellfleet-approval-gate.service
 Wants=network-online.target
+Requires=shellfleet-approval-gate.service
 
 [Service]
 Type=simple
-User=root
-Group=root
+User=shellfleet
+Group=shellfleet
 
 ExecStart=/usr/bin/shellfleet-agent
 
-# State (auth token) lives at /etc/shellfleet/agent-token.txt; read-only fields
+# State (auth token) lives under /var/lib/shellfleet-agent; read-only fields
 # go in /etc/shellfleet/env. A bind mount of /etc lets the config editor see
 # host configs even on systems with strict ProtectHome/ProtectSystem defaults.
 EnvironmentFile=-/etc/shellfleet/env
@@ -18,13 +19,31 @@ EnvironmentFile=-/etc/shellfleet/env
 Restart=on-failure
 RestartSec=5s
 
-# Modest hardening — the agent still needs root for the current systemd,
-# package, Docker, and config surfaces, but may not gain additional privileges
-# through setuid/setgid binaries or file capabilities.
 NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectKernelLogs=true
 ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+ProcSubset=pid
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+UMask=0077
+ReadWritePaths=/var/lib/shellfleet-agent
+AppArmorProfile=-shellfleet-agent
 
 [Install]
 WantedBy=multi-user.target

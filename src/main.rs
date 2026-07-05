@@ -116,7 +116,7 @@ enum DeviceTokenResponse {
     Error { error: String },
 }
 
-const TOKEN_PATH: &str = "/etc/shellfleet/agent-token.txt";
+const TOKEN_PATH: &str = "/var/lib/shellfleet-agent/agent-token.txt";
 
 fn read_token() -> Option<String> {
     for path in [TOKEN_PATH, "agent-token.txt"] {
@@ -129,6 +129,53 @@ fn read_token() -> Option<String> {
     }
     None
 }
+
+#[cfg(unix)]
+fn assert_unprivileged_runtime() {
+    if unsafe { libc::geteuid() } == 0 {
+        eprintln!(
+            "shellfleet-agent refuses to run as root; use the separate approval gate for trusted root operations"
+        );
+        std::process::exit(78);
+    }
+    if let Ok(status) = std::fs::read_to_string("/proc/self/status") {
+        let effective = status
+            .lines()
+            .find_map(|line| line.strip_prefix("CapEff:\t"))
+            .and_then(|hex| u64::from_str_radix(hex.trim(), 16).ok())
+            .unwrap_or(0);
+        if effective != 0 {
+            eprintln!("shellfleet-agent refuses to run with effective Linux capabilities");
+            std::process::exit(78);
+        }
+    }
+    let docker_gid = std::fs::read_to_string("/etc/group")
+        .ok()
+        .and_then(|groups| {
+            groups.lines().find_map(|line| {
+                let mut fields = line.split(':');
+                (fields.next()? == "docker")
+                    .then(|| fields.nth(1)?.parse::<libc::gid_t>().ok())
+                    .flatten()
+            })
+        });
+    if let Some(docker_gid) = docker_gid {
+        let count = unsafe { libc::getgroups(0, std::ptr::null_mut()) };
+        if count > 0 {
+            let mut groups = vec![0 as libc::gid_t; count as usize];
+            let read = unsafe { libc::getgroups(count, groups.as_mut_ptr()) };
+            if read > 0 && groups[..read as usize].contains(&docker_gid) {
+                eprintln!(
+                    "shellfleet-agent refuses membership in the root-equivalent docker group"
+                );
+                std::process::exit(78);
+            }
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn assert_unprivileged_runtime() {}
 
 async fn drift_config_fingerprint(path: &str) -> Option<shared::DriftConfigFile> {
     let safe_path = config::check_read(path).ok()?;
@@ -211,6 +258,7 @@ async fn main() {
 
     let args: Vec<String> = std::env::args().collect();
     let is_pair = args.iter().any(|a| a == "--pair" || a == "pair");
+    assert_unprivileged_runtime();
 
     let api_url = std::env::var("SERVER_API_URL")
         .unwrap_or_else(|_| "https://dashboard.example.com".to_string());
@@ -295,11 +343,18 @@ async fn main() {
     // hides tabs that aren't represented here, so a host with no docker
     // never has a Docker tab cluttering its view. K8s detection lands
     // in v1 with the kube-rs feature; for now we never advertise it.
-    let mut capabilities: Vec<String> = Vec::with_capacity(5);
+    let mut capabilities: Vec<String> = Vec::with_capacity(6);
     // One-shot root command execution is advertised only when the operator
     // configured the agent-side exact-command allow-list.
     if exec::enabled() {
         capabilities.push("exec".into());
+    }
+    if std::path::Path::new(agent::privileged::client::DEFAULT_GATE_SOCKET).exists()
+        || std::env::var("SHELLFLEET_GATE_SOCKET")
+            .ok()
+            .is_some_and(|path| std::path::Path::new(&path).exists())
+    {
+        capabilities.push("trusted-root".into());
     }
     if systemd::systemd_available().await {
         capabilities.push("systemd".into());
@@ -347,9 +402,16 @@ async fn main() {
         let mut current = initial_caps;
         loop {
             tokio::time::sleep(delay).await;
-            let mut fresh: Vec<String> = Vec::with_capacity(5);
+            let mut fresh: Vec<String> = Vec::with_capacity(6);
             if exec::enabled() {
                 fresh.push("exec".into());
+            }
+            if std::path::Path::new(agent::privileged::client::DEFAULT_GATE_SOCKET).exists()
+                || std::env::var("SHELLFLEET_GATE_SOCKET")
+                    .ok()
+                    .is_some_and(|path| std::path::Path::new(&path).exists())
+            {
+                fresh.push("trusted-root".into());
             }
             if systemd::systemd_available().await {
                 fresh.push("systemd".into());
@@ -409,6 +471,10 @@ async fn main() {
     let mut term_sessions: std::collections::HashMap<String, terminal::TerminalSession> =
         std::collections::HashMap::new();
     let mut exec_session: Option<terminal::TerminalSession> = None;
+    let mut trusted_sessions: std::collections::HashMap<
+        String,
+        agent::privileged::client::RelaySession,
+    > = std::collections::HashMap::new();
     let log_streams = logs::LogStreams::default();
     let journal_streams = journal::JournalStreams::default();
     let journal_stream_mgr = journal_stream::JournalStreams::default();
@@ -481,6 +547,98 @@ async fn main() {
                     }
                     if let Ok(parsed_msg) = parsed {
                         match parsed_msg {
+                            Message::TrustedOperationClient {
+                                request_id,
+                                start,
+                                close,
+                                payload,
+                            } => {
+                                let decoded = shared::trusted::decode_client(&payload);
+                                let inner_matches = match &decoded {
+                                    Ok(shared::trusted::TrustedClientFrame::Start { request_id: inner, .. }) => {
+                                        start && !close && inner == &request_id
+                                    }
+                                    Ok(shared::trusted::TrustedClientFrame::Approve { signed_manifest, .. }) => {
+                                        !start && !close && signed_manifest.manifest.request_id == request_id
+                                    }
+                                    Ok(shared::trusted::TrustedClientFrame::Close) => !start && close,
+                                    Ok(shared::trusted::TrustedClientFrame::Ciphertext { .. }
+                                        | shared::trusted::TrustedClientFrame::Resize { .. }) => !start && !close,
+                                    Err(_) => false,
+                                };
+                                if !inner_matches {
+                                    let error = shared::trusted::encode_host(
+                                        &shared::trusted::TrustedHostFrame::Error {
+                                            message: "trusted relay envelope mismatch".into(),
+                                        },
+                                    ).unwrap_or_default();
+                                    let _ = tx.send(Message::TrustedOperationHost {
+                                        request_id,
+                                        complete: true,
+                                        payload: error,
+                                    });
+                                    continue;
+                                }
+                                if start {
+                                    if trusted_sessions.contains_key(&request_id) {
+                                        let error = shared::trusted::encode_host(
+                                            &shared::trusted::TrustedHostFrame::Error {
+                                                message: "trusted request id is already active".into(),
+                                            },
+                                        ).unwrap_or_default();
+                                        let _ = tx.send(Message::TrustedOperationHost {
+                                            request_id,
+                                            complete: true,
+                                            payload: error,
+                                        });
+                                        continue;
+                                    }
+                                    match agent::privileged::client::connect(
+                                        request_id.clone(),
+                                        payload,
+                                        tx.clone(),
+                                    ).await {
+                                        Ok(session) => {
+                                            trusted_sessions.insert(request_id, session);
+                                        }
+                                        Err(message) => {
+                                            let error = shared::trusted::encode_host(
+                                                &shared::trusted::TrustedHostFrame::Error { message },
+                                            ).unwrap_or_default();
+                                            let _ = tx.send(Message::TrustedOperationHost {
+                                                request_id,
+                                                complete: true,
+                                                payload: error,
+                                            });
+                                        }
+                                    }
+                                } else if let Some(session) = trusted_sessions.get(&request_id) {
+                                    if let Err(message) = session.send(payload) {
+                                        let error = shared::trusted::encode_host(
+                                            &shared::trusted::TrustedHostFrame::Error { message },
+                                        ).unwrap_or_default();
+                                        let _ = tx.send(Message::TrustedOperationHost {
+                                            request_id: request_id.clone(),
+                                            complete: true,
+                                            payload: error,
+                                        });
+                                    }
+                                    if close {
+                                        trusted_sessions.remove(&request_id);
+                                    }
+                                } else {
+                                    let error = shared::trusted::encode_host(
+                                        &shared::trusted::TrustedHostFrame::Error {
+                                            message: "trusted request is not active".into(),
+                                        },
+                                    ).unwrap_or_default();
+                                    let _ = tx.send(Message::TrustedOperationHost {
+                                        request_id,
+                                        complete: true,
+                                        payload: error,
+                                    });
+                                }
+                            }
                             Message::ListServicesRequest => {
                                 let tx_clone = tx.clone();
                                 tokio::spawn(async move {
