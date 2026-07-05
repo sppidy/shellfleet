@@ -72,6 +72,14 @@ services:
       # session to EE for playback on the /recordings page. Best-effort — never
       # blocks or breaks a live terminal.
       - EE_RECORD_TERMINALS=${EE_RECORD_TERMINALS:-off}
+      # Directional CE↔EE authentication. Each JSON object maps a key id to a
+      # base64-encoded independent 32-byte key. Both processes accept every
+      # key in each ring and sign with the named active key, enabling overlap
+      # during rotation without restoring the legacy shared bearer secret.
+      - CE_TO_EE_HMAC_KEYS_JSON=${CE_TO_EE_HMAC_KEYS_JSON:-}
+      - CE_TO_EE_HMAC_ACTIVE_KEY_ID=${CE_TO_EE_HMAC_ACTIVE_KEY_ID:-}
+      - EE_TO_CE_HMAC_KEYS_JSON=${EE_TO_CE_HMAC_KEYS_JSON:-}
+      - EE_TO_CE_HMAC_ACTIVE_KEY_ID=${EE_TO_CE_HMAC_ACTIVE_KEY_ID:-}
     volumes:
       - server_data:/data
     healthcheck:

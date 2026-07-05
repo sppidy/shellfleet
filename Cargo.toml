@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "agent",
+    "cli",
     "server",
     "shared",
 ]
