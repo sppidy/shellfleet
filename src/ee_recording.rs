@@ -22,10 +22,6 @@ pub fn enabled() -> bool {
         )
 }
 
-fn secret() -> String {
-    std::env::var("EE_INTERNAL_SECRET").unwrap_or_default()
-}
-
 /// Standard base64 (the EE frame handler base64-decodes `data`). Inline to avoid
 /// a new dependency.
 fn b64(data: &[u8]) -> String {
@@ -120,19 +116,20 @@ async fn drain(
     mut rx: mpsc::UnboundedReceiver<(String, Vec<u8>)>,
 ) {
     let base = url.trim_end_matches('/').to_string();
-    let secret = secret();
     let client = reqwest::Client::new();
     let post = |path: String, body: serde_json::Value| {
         let c = client.clone();
-        let s = secret.clone();
         async move {
-            let _ = c
-                .post(path)
-                .bearer_auth(&s)
-                .json(&body)
-                .timeout(Duration::from_secs(5))
-                .send()
-                .await;
+            let _ = crate::internal_auth::send_json(
+                &c,
+                reqwest::Method::POST,
+                &path,
+                &body,
+                "system",
+                "admin",
+                Duration::from_secs(5),
+            )
+            .await;
         }
     };
 

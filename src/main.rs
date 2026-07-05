@@ -27,6 +27,7 @@ mod ee;
 mod ee_recording;
 mod fan_out;
 mod health;
+mod internal_auth;
 mod invites;
 mod ip_allowlist;
 mod labels;
@@ -336,18 +337,22 @@ async fn audit_handler(
             ee_url.trim_end_matches('/'),
             limit
         );
-        let secret = std::env::var("EE_INTERNAL_SECRET").unwrap_or_default();
-        match reqwest::Client::new()
-            .get(&url)
-            .bearer_auth(&secret)
-            .timeout(std::time::Duration::from_secs(10))
-            .send()
-            .await
+        match internal_auth::send(
+            &reqwest::Client::new(),
+            reqwest::Method::GET,
+            &url,
+            Vec::new(),
+            "",
+            "system",
+            "admin",
+            std::time::Duration::from_secs(10),
+        )
+        .await
         {
             Ok(resp) => {
                 let status =
-                    StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
-                let body = resp.text().await.unwrap_or_default();
+                    StatusCode::from_u16(resp.status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+                let body = resp.text();
                 return (
                     status,
                     [(axum::http::header::CONTENT_TYPE, "application/json")],
@@ -424,6 +429,12 @@ async fn main() {
     // most common deployment footgun: a freshly cloned compose stanza
     // launched without an `.env` override.
     auth::assert_jwt_secret_present();
+    if ee::ee_active() {
+        if let Err(error) = internal_auth::validate_config() {
+            tracing::error!(%error, "directional CE/EE authentication is not configured");
+            std::process::exit(1);
+        }
+    }
 
     let pool = match db::init().await {
         Ok(p) => p,
@@ -592,7 +603,10 @@ async fn main() {
             url = %ee::ee_sidecar_url().unwrap_or_default(),
             "EE sidecar detected — mounting /internal routes (the /api/ee proxy is mounted inside the authenticated /api nest)"
         );
-        app = app.nest("/internal", ee::routes().with_state(state.clone()));
+        app = app.nest(
+            "/internal",
+            ee::routes(state.clone()).with_state(state.clone()),
+        );
         // Keep the global IP allowlist cache warm so the gate can enforce it.
         ip_allowlist::spawn_refresher(state.clone());
     }
@@ -954,7 +968,6 @@ async fn handle_agent_socket(socket: WebSocket, state: Arc<AppState>, token: Str
 
                     if ee::ee_active() {
                         let ee_url = ee::ee_sidecar_url().unwrap_or_default();
-                        let secret = std::env::var("EE_INTERNAL_SECRET").unwrap_or_default();
                         let tag_body = serde_json::json!({
                             "agent_id": id,
                             "hostname": hostname,
@@ -963,13 +976,16 @@ async fn handle_agent_socket(socket: WebSocket, state: Arc<AppState>, token: Str
                         });
                         let url = format!("{}/internal/tag-resolve", ee_url.trim_end_matches('/'));
                         tokio::spawn(async move {
-                            let _ = reqwest::Client::new()
-                                .post(&url)
-                                .bearer_auth(&secret)
-                                .json(&tag_body)
-                                .timeout(std::time::Duration::from_secs(5))
-                                .send()
-                                .await;
+                            let _ = internal_auth::send_json(
+                                &reqwest::Client::new(),
+                                reqwest::Method::POST,
+                                &url,
+                                &tag_body,
+                                "system",
+                                "admin",
+                                std::time::Duration::from_secs(5),
+                            )
+                            .await;
                         });
                     }
                 }
@@ -1798,22 +1814,24 @@ pub(crate) async fn ee_fetch_agent_access(
     let Some(ee_url) = ee::ee_sidecar_url() else {
         return AgentAccess::Unrestricted;
     };
-    let secret = std::env::var("EE_INTERNAL_SECRET").unwrap_or_default();
     let url = format!("{}/api/ee/acl/user-agents", ee_url.trim_end_matches('/'));
     let body = serde_json::json!({
         "login": login,
         "client_ip": client_ip,
         "agents": agents,
     });
-    let resp = match reqwest::Client::new()
-        .post(&url)
-        .bearer_auth(&secret)
-        .json(&body)
-        .timeout(std::time::Duration::from_secs(5))
-        .send()
-        .await
+    let resp = match internal_auth::send_json(
+        &reqwest::Client::new(),
+        reqwest::Method::POST,
+        &url,
+        &body,
+        login,
+        "viewer",
+        std::time::Duration::from_secs(5),
+    )
+    .await
     {
-        Ok(r) if r.status().is_success() => r,
+        Ok(r) if r.status.is_success() => r,
         other => {
             tracing::warn!(
                 login = %login,
@@ -1825,11 +1843,9 @@ pub(crate) async fn ee_fetch_agent_access(
             };
         }
     };
-    resp.json()
-        .await
-        .unwrap_or_else(|_| AgentAccess::Restricted {
-            allowed_agents: HashSet::new(),
-        })
+    resp.json().unwrap_or_else(|_| AgentAccess::Restricted {
+        allowed_agents: HashSet::new(),
+    })
 }
 
 async fn ui_agent_access(
@@ -1893,7 +1909,6 @@ async fn ee_check_approval(
     let Some(ee_url) = ee::ee_sidecar_url() else {
         return Ok(None);
     };
-    let secret = std::env::var("EE_INTERNAL_SECRET").unwrap_or_default();
     let url = format!("{}/api/ee/approvals/check", ee_url.trim_end_matches('/'));
     let body = serde_json::json!({
         "login": login,
@@ -1902,16 +1917,19 @@ async fn ee_check_approval(
         "agent_id": agent_id,
         "payload": payload,
     });
-    match reqwest::Client::new()
-        .post(&url)
-        .bearer_auth(&secret)
-        .json(&body)
-        .timeout(std::time::Duration::from_secs(3))
-        .send()
-        .await
+    match internal_auth::send_json(
+        &reqwest::Client::new(),
+        reqwest::Method::POST,
+        &url,
+        &body,
+        login,
+        "",
+        std::time::Duration::from_secs(3),
+    )
+    .await
     {
-        Ok(resp) if resp.status().is_success() => {
-            let data: serde_json::Value = resp.json().await.unwrap_or_default();
+        Ok(resp) if resp.status.is_success() => {
+            let data: serde_json::Value = resp.json().unwrap_or_default();
             if data["requires_approval"].as_bool().unwrap_or(false) {
                 Ok(Some(data["request_id"].as_i64().unwrap_or(0)))
             } else {
@@ -1934,7 +1952,6 @@ async fn ee_check_permission(
     let Some(ee_url) = ee::ee_sidecar_url() else {
         return true;
     };
-    let secret = std::env::var("EE_INTERNAL_SECRET").unwrap_or_default();
     let url = format!("{}/api/ee/acl/evaluate", ee_url.trim_end_matches('/'));
     // client_ip lets ACL rules with `conditions.ip` actually match (the EE
     // evaluator ignores the condition when no IP is supplied).
@@ -1944,16 +1961,19 @@ async fn ee_check_permission(
         "resource": resource,
         "client_ip": client_ip,
     });
-    match reqwest::Client::new()
-        .post(&url)
-        .bearer_auth(&secret)
-        .json(&body)
-        .timeout(std::time::Duration::from_secs(3))
-        .send()
-        .await
+    match internal_auth::send_json(
+        &reqwest::Client::new(),
+        reqwest::Method::POST,
+        &url,
+        &body,
+        login,
+        "",
+        std::time::Duration::from_secs(3),
+    )
+    .await
     {
-        Ok(resp) if resp.status().is_success() => {
-            let data: serde_json::Value = resp.json().await.unwrap_or_default();
+        Ok(resp) if resp.status.is_success() => {
+            let data: serde_json::Value = resp.json().unwrap_or_default();
             // Malformed / missing `allowed` => deny (fail closed).
             data["allowed"].as_bool().unwrap_or(false)
         }

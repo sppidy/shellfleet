@@ -319,6 +319,8 @@ pub async fn init() -> Result<SqlitePool, sqlx::Error> {
     .execute(&pool)
     .await?;
 
+    crate::internal_auth::init_nonce_schema(&pool).await?;
+
     migrate_legacy_tokens(&pool).await?;
 
     Ok(pool)

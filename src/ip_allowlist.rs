@@ -18,7 +18,7 @@ use axum::{
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 
-use crate::{AppState, ee, throttle};
+use crate::{AppState, ee, internal_auth, throttle};
 
 /// Pull the allowlist from EE into the CE cache every 30s. Treats any
 /// failure / unlicensed (402) response as "no allowlist" (clears the cache).
@@ -26,19 +26,21 @@ pub fn spawn_refresher(state: Arc<AppState>) {
     tokio::spawn(async move {
         loop {
             if let Some(ee_url) = ee::ee_sidecar_url() {
-                let secret = std::env::var("EE_INTERNAL_SECRET").unwrap_or_default();
                 let url = format!("{}/api/ee/ip-allowlist", ee_url.trim_end_matches('/'));
-                match reqwest::Client::new()
-                    .get(&url)
-                    .bearer_auth(&secret)
-                    .header("x-shellfleet-login", "system")
-                    .header("x-shellfleet-role", "admin")
-                    .timeout(std::time::Duration::from_secs(5))
-                    .send()
-                    .await
+                match internal_auth::send(
+                    &reqwest::Client::new(),
+                    reqwest::Method::GET,
+                    &url,
+                    Vec::new(),
+                    "",
+                    "system",
+                    "admin",
+                    std::time::Duration::from_secs(5),
+                )
+                .await
                 {
-                    Ok(resp) if resp.status().is_success() => {
-                        if let Ok(entries) = resp.json::<Vec<serde_json::Value>>().await {
+                    Ok(resp) if resp.status.is_success() => {
+                        if let Ok(entries) = resp.json::<Vec<serde_json::Value>>() {
                             let list: Vec<(String, bool)> = entries
                                 .iter()
                                 .filter_map(|e| {

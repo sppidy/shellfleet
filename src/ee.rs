@@ -1,7 +1,8 @@
 use axum::{
     Router,
     extract::{OriginalUri, Request, State},
-    http::{HeaderMap, StatusCode},
+    http::StatusCode,
+    middleware::from_fn_with_state,
     response::IntoResponse,
     routing::{get, post},
 };
@@ -9,7 +10,7 @@ use axum_extra::extract::cookie::CookieJar;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-use crate::{AppState, auth, db};
+use crate::{AppState, auth, db, internal_auth};
 
 pub fn ee_sidecar_url() -> Option<String> {
     std::env::var("EE_SIDECAR_URL")
@@ -21,30 +22,7 @@ pub fn ee_active() -> bool {
     ee_sidecar_url().is_some()
 }
 
-fn internal_secret() -> Option<String> {
-    std::env::var("EE_INTERNAL_SECRET")
-        .ok()
-        .filter(|s| !s.is_empty())
-}
-
-fn ct_eq(a: &str, b: &str) -> bool {
-    use subtle::ConstantTimeEq;
-    a.as_bytes().ct_eq(b.as_bytes()).into()
-}
-
-fn verify_internal_auth(headers: &HeaderMap) -> bool {
-    let Some(expected) = internal_secret() else {
-        return false;
-    };
-    headers
-        .get(axum::http::header::AUTHORIZATION)
-        .and_then(|h| h.to_str().ok())
-        .and_then(|s| s.strip_prefix("Bearer "))
-        .map(|t| ct_eq(t.trim(), &expected))
-        .unwrap_or(false)
-}
-
-pub fn routes() -> Router<Arc<AppState>> {
+pub fn routes(state: Arc<AppState>) -> Router<Arc<AppState>> {
     Router::new()
         .route("/auth/resolve", post(auth_resolve_handler))
         .route("/seat-limit", post(seat_limit_handler))
@@ -53,6 +31,10 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/execute-approved", post(execute_approved_handler))
         .route("/exec-command", post(exec_command_handler))
         .route("/audit", post(internal_audit_handler))
+        .layer(from_fn_with_state(
+            state,
+            internal_auth::require_ee_signature,
+        ))
 }
 
 fn default_audit_ok() -> bool {
@@ -73,13 +55,9 @@ struct InternalAuditRequest {
 /// request/approval), so it surfaces at `/activity` and streams to any SIEM
 /// via the EE audit archiver. Internal-secret gated.
 async fn internal_audit_handler(
-    headers: HeaderMap,
     State(state): State<Arc<AppState>>,
     axum::Json(body): axum::Json<InternalAuditRequest>,
 ) -> impl IntoResponse {
-    if !verify_internal_auth(&headers) {
-        return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
-    }
     db::record_audit(
         &state.db,
         crate::now_unix(),
@@ -113,26 +91,25 @@ struct ExecCommandRequest {
 /// normal 200 (the runbook treats it as a failed step); only infrastructure
 /// failures (agent offline, timeout) are non-2xx.
 async fn exec_command_handler(
-    headers: HeaderMap,
     State(state): State<Arc<AppState>>,
     axum::Json(body): axum::Json<ExecCommandRequest>,
 ) -> impl IntoResponse {
-    if !verify_internal_auth(&headers) {
-        return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
-    }
     let timeout_secs = body.timeout_secs.clamp(1, 3600);
 
     let pending = match crate::agent_dispatch::dispatch_run_command(
-        &state, &body.agent_id, body.command.clone(), timeout_secs,
+        &state,
+        &body.agent_id,
+        body.command.clone(),
+        timeout_secs,
     )
     .await
     {
         Ok(p) => p,
         Err(crate::agent_dispatch::DispatchError::AgentNotFound) => {
-            return (StatusCode::NOT_FOUND, "agent not connected").into_response()
+            return (StatusCode::NOT_FOUND, "agent not connected").into_response();
         }
         Err(crate::agent_dispatch::DispatchError::AgentDisconnected) => {
-            return (StatusCode::BAD_GATEWAY, "agent disconnected").into_response()
+            return (StatusCode::BAD_GATEWAY, "agent disconnected").into_response();
         }
     };
 
@@ -187,13 +164,9 @@ struct ExecuteApprovedRequest {
 /// execute it. Internal-secret gated. The original ACL/RBAC checks already
 /// passed at request time — approval is the *additional* dual-control gate.
 async fn execute_approved_handler(
-    headers: HeaderMap,
     State(state): State<Arc<AppState>>,
     axum::Json(body): axum::Json<ExecuteApprovedRequest>,
 ) -> impl IntoResponse {
-    if !verify_internal_auth(&headers) {
-        return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
-    }
     let message: shared::Message = match serde_json::from_str(&body.payload) {
         Ok(m) => m,
         Err(e) => {
@@ -225,13 +198,9 @@ struct SendToAgentRequest {
 /// link, so it round-trips through CE. 404 when the agent isn't connected so the
 /// caller can surface "agent offline".
 async fn send_to_agent_handler(
-    headers: HeaderMap,
     State(state): State<Arc<AppState>>,
     axum::Json(body): axum::Json<SendToAgentRequest>,
 ) -> impl IntoResponse {
-    if !verify_internal_auth(&headers) {
-        return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
-    }
     let agents = state.agents.lock().await;
     match agents.get(&body.agent_id) {
         Some(entry) if entry.tx.send(body.message).is_ok() => {
@@ -261,14 +230,9 @@ struct AuthResolveResponse {
 }
 
 async fn auth_resolve_handler(
-    headers: HeaderMap,
     State(state): State<Arc<AppState>>,
     axum::Json(body): axum::Json<AuthResolveRequest>,
 ) -> impl IntoResponse {
-    if !verify_internal_auth(&headers) {
-        return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
-    }
-
     let role = match body.role.as_str() {
         "admin" | "viewer" => body.role.as_str(),
         _ => "viewer",
@@ -297,14 +261,9 @@ struct SeatLimitRequest {
 }
 
 async fn seat_limit_handler(
-    headers: HeaderMap,
     State(state): State<Arc<AppState>>,
     axum::Json(body): axum::Json<SeatLimitRequest>,
 ) -> impl IntoResponse {
-    if !verify_internal_auth(&headers) {
-        return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
-    }
-
     match db::set_ee_seat_limit(&state.db, body.seats).await {
         Ok(_) => {
             tracing::info!(seats = body.seats, "EE seat limit updated");
@@ -323,14 +282,7 @@ struct AgentInfo {
     capabilities: Vec<String>,
 }
 
-async fn agents_handler(
-    headers: HeaderMap,
-    State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
-    if !verify_internal_auth(&headers) {
-        return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
-    }
-
+async fn agents_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let map = state.agents.lock().await;
     let agents: Vec<AgentInfo> = map
         .iter()
@@ -353,7 +305,6 @@ pub async fn forward_drift_snapshot(
     let Some(ee_url) = ee_sidecar_url() else {
         return;
     };
-    let secret = internal_secret().unwrap_or_default();
     let url = format!("{}/internal/drift-snapshot", ee_url.trim_end_matches('/'));
     let body = serde_json::json!({
         "agent_id": agent_id,
@@ -366,13 +317,16 @@ pub async fn forward_drift_snapshot(
     });
 
     let client = reqwest::Client::new();
-    if let Err(e) = client
-        .post(&url)
-        .bearer_auth(&secret)
-        .json(&body)
-        .timeout(std::time::Duration::from_secs(10))
-        .send()
-        .await
+    if let Err(e) = internal_auth::send_json(
+        &client,
+        reqwest::Method::POST,
+        &url,
+        &body,
+        "",
+        "",
+        std::time::Duration::from_secs(10),
+    )
+    .await
     {
         tracing::warn!(error = %e, "failed to forward drift snapshot to EE");
     }
@@ -395,8 +349,6 @@ pub async fn ee_proxy_handler(
         Ok(c) => c,
         Err(e) => return e.into_response(),
     };
-    let secret = internal_secret().unwrap_or_default();
-
     // The proxy route is nested under `/api`, so `req.uri()` is
     // prefix-stripped — forward the FULL original path (`/api/ee/...`)
     // which is what the EE sidecar serves.
@@ -416,27 +368,29 @@ pub async fn ee_proxy_handler(
     // Build a FRESH upstream request: client-supplied headers (including
     // any spoofed x-shellfleet-* / Authorization) are deliberately NOT
     // copied. We attach the internal bearer plus the CE-verified identity.
-    let mut builder = client
-        .request(
-            reqwest::Method::from_bytes(method.as_str().as_bytes()).unwrap_or(reqwest::Method::GET),
-            &url,
-        )
-        .bearer_auth(&secret)
-        .header("x-shellfleet-login", claims.sub.as_str())
-        .header("x-shellfleet-role", claims.role.as_str())
-        .timeout(std::time::Duration::from_secs(30));
-
-    if !body_bytes.is_empty() {
-        builder = builder
-            .header("content-type", "application/json")
-            .body(body_bytes.to_vec());
-    }
-
-    match builder.send().await {
+    let upstream_method =
+        reqwest::Method::from_bytes(method.as_str().as_bytes()).unwrap_or(reqwest::Method::GET);
+    let content_type = if body_bytes.is_empty() {
+        ""
+    } else {
+        "application/json"
+    };
+    match internal_auth::send(
+        &client,
+        upstream_method,
+        &url,
+        body_bytes.to_vec(),
+        content_type,
+        &claims.sub,
+        &claims.role,
+        std::time::Duration::from_secs(30),
+    )
+    .await
+    {
         Ok(resp) => {
             let status =
-                StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
-            let body = resp.text().await.unwrap_or_default();
+                StatusCode::from_u16(resp.status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+            let body = resp.text();
             (
                 status,
                 [(axum::http::header::CONTENT_TYPE, "application/json")],

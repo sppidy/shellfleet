@@ -51,22 +51,26 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 
-use crate::{AppState, auth};
+use crate::{AppState, auth, internal_auth};
 
 async fn proxy_get_to_ee(ee_url: &str, path: &str) -> axum::response::Response {
     let url = format!("{}{}", ee_url.trim_end_matches('/'), path);
-    let secret = std::env::var("EE_INTERNAL_SECRET").unwrap_or_default();
-    match reqwest::Client::new()
-        .get(&url)
-        .bearer_auth(&secret)
-        .timeout(std::time::Duration::from_secs(10))
-        .send()
-        .await
+    match internal_auth::send(
+        &reqwest::Client::new(),
+        reqwest::Method::GET,
+        &url,
+        Vec::new(),
+        "",
+        "",
+        "",
+        std::time::Duration::from_secs(10),
+    )
+    .await
     {
         Ok(resp) => {
             let status =
-                StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
-            let body = resp.text().await.unwrap_or_default();
+                StatusCode::from_u16(resp.status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+            let body = resp.text();
             (
                 status,
                 [(axum::http::header::CONTENT_TYPE, "application/json")],
@@ -87,19 +91,21 @@ async fn proxy_post_json_to_ee(
     body: &impl Serialize,
 ) -> axum::response::Response {
     let url = format!("{}{}", ee_url.trim_end_matches('/'), path);
-    let secret = std::env::var("EE_INTERNAL_SECRET").unwrap_or_default();
-    match reqwest::Client::new()
-        .post(&url)
-        .bearer_auth(&secret)
-        .json(body)
-        .timeout(std::time::Duration::from_secs(30))
-        .send()
-        .await
+    match internal_auth::send_json(
+        &reqwest::Client::new(),
+        reqwest::Method::POST,
+        &url,
+        body,
+        "",
+        "",
+        std::time::Duration::from_secs(30),
+    )
+    .await
     {
         Ok(resp) => {
             let status =
-                StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
-            let body = resp.text().await.unwrap_or_default();
+                StatusCode::from_u16(resp.status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+            let body = resp.text();
             (
                 status,
                 [(axum::http::header::CONTENT_TYPE, "application/json")],

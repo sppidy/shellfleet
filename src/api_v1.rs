@@ -418,7 +418,7 @@ async fn list_users(headers: HeaderMap, State(state): State<Arc<AppState>>) -> i
 }
 
 async fn get_acl(headers: HeaderMap, State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let Ok((_login, _role)) = require_api_key(&headers) else {
+    let Ok((login, role)) = require_api_key(&headers) else {
         return (StatusCode::UNAUTHORIZED, "API key required").into_response();
     };
     if let Err((code, msg)) =
@@ -430,17 +430,22 @@ async fn get_acl(headers: HeaderMap, State(state): State<Arc<AppState>>) -> impl
         return (StatusCode::SERVICE_UNAVAILABLE, "EE not active").into_response();
     }
     let url = format!("{}/api/ee/acl/document", ee::ee_sidecar_url().unwrap());
-    let secret = std::env::var("EE_INTERNAL_SECRET").unwrap_or_default();
-    match reqwest::Client::new()
-        .get(&url)
-        .bearer_auth(&secret)
-        .send()
-        .await
+    match crate::internal_auth::send(
+        &reqwest::Client::new(),
+        reqwest::Method::GET,
+        &url,
+        Vec::new(),
+        "",
+        &login,
+        &role,
+        std::time::Duration::from_secs(30),
+    )
+    .await
     {
         Ok(resp) => {
             let status =
-                StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
-            let body = resp.text().await.unwrap_or_default();
+                StatusCode::from_u16(resp.status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+            let body = resp.text();
             (status, body).into_response()
         }
         Err(_) => (StatusCode::BAD_GATEWAY, "EE unavailable").into_response(),
@@ -452,7 +457,7 @@ async fn put_acl(
     State(state): State<Arc<AppState>>,
     body: String,
 ) -> impl IntoResponse {
-    let Ok((_login, role)) = require_api_key(&headers) else {
+    let Ok((login, role)) = require_api_key(&headers) else {
         return (StatusCode::UNAUTHORIZED, "API key required").into_response();
     };
     if role != "admin" {
@@ -467,19 +472,22 @@ async fn put_acl(
         return (StatusCode::SERVICE_UNAVAILABLE, "EE not active").into_response();
     }
     let url = format!("{}/api/ee/acl/document", ee::ee_sidecar_url().unwrap());
-    let secret = std::env::var("EE_INTERNAL_SECRET").unwrap_or_default();
-    match reqwest::Client::new()
-        .put(&url)
-        .bearer_auth(&secret)
-        .header("content-type", "application/json")
-        .body(body)
-        .send()
-        .await
+    match crate::internal_auth::send(
+        &reqwest::Client::new(),
+        reqwest::Method::PUT,
+        &url,
+        body.into_bytes(),
+        "application/json",
+        &login,
+        &role,
+        std::time::Duration::from_secs(30),
+    )
+    .await
     {
         Ok(resp) => {
             let status =
-                StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
-            let body = resp.text().await.unwrap_or_default();
+                StatusCode::from_u16(resp.status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+            let body = resp.text();
             (status, body).into_response()
         }
         Err(_) => (StatusCode::BAD_GATEWAY, "EE unavailable").into_response(),
@@ -517,7 +525,7 @@ async fn query_metrics(
     State(state): State<Arc<AppState>>,
     body: String,
 ) -> impl IntoResponse {
-    let Ok((_login, _role)) = require_api_key(&headers) else {
+    let Ok((login, role)) = require_api_key(&headers) else {
         return (StatusCode::UNAUTHORIZED, "API key required").into_response();
     };
     if let Err((code, msg)) =
@@ -529,19 +537,22 @@ async fn query_metrics(
         return (StatusCode::SERVICE_UNAVAILABLE, "EE not active").into_response();
     }
     let url = format!("{}/api/ee/metrics/query", ee::ee_sidecar_url().unwrap());
-    let secret = std::env::var("EE_INTERNAL_SECRET").unwrap_or_default();
-    match reqwest::Client::new()
-        .post(&url)
-        .bearer_auth(&secret)
-        .header("content-type", "application/json")
-        .body(body)
-        .send()
-        .await
+    match crate::internal_auth::send(
+        &reqwest::Client::new(),
+        reqwest::Method::POST,
+        &url,
+        body.into_bytes(),
+        "application/json",
+        &login,
+        &role,
+        std::time::Duration::from_secs(30),
+    )
+    .await
     {
         Ok(resp) => {
             let status =
-                StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
-            let text = resp.text().await.unwrap_or_default();
+                StatusCode::from_u16(resp.status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+            let text = resp.text();
             (
                 status,
                 [(axum::http::header::CONTENT_TYPE, "application/json")],

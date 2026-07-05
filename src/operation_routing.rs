@@ -9,6 +9,7 @@ pub enum OperationKey {
     DockerLogs(String),
     JournalLogs(String),
     JournalStream(String),
+    Trusted(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -101,6 +102,21 @@ pub fn ui_operation(message: &Message) -> Option<UiOperation> {
         JournalStreamStop { stream_id } => {
             UiOperation::Stop(OperationKey::JournalStream(stream_id.clone()))
         }
+        TrustedOperationClient {
+            request_id,
+            start,
+            close,
+            ..
+        } => {
+            let key = OperationKey::Trusted(request_id.clone());
+            if *start {
+                UiOperation::Start(key)
+            } else if *close {
+                UiOperation::Stop(key)
+            } else {
+                UiOperation::Use(key)
+            }
+        }
         _ => return None,
     };
     Some(operation)
@@ -132,6 +148,11 @@ pub fn agent_operation(message: &Message) -> Option<AgentOperation> {
         JournalStreamEnd { stream_id, .. } => {
             (OperationKey::JournalStream(stream_id.clone()), true)
         }
+        TrustedOperationHost {
+            request_id,
+            complete,
+            ..
+        } => (OperationKey::Trusted(request_id.clone()), *complete),
         _ => return None,
     };
     Some(AgentOperation { key, ends })
@@ -272,5 +293,38 @@ mod tests {
 
         assert_eq!(owners.owner("agent-a", &OperationKey::DockerExec), None);
         assert_eq!(owners.owner("agent-b", &OperationKey::DockerExec), Some(11));
+    }
+
+    #[test]
+    fn trusted_root_ciphertext_routes_only_to_request_owner() {
+        let request = Message::TrustedOperationClient {
+            request_id: "trusted-1".into(),
+            start: true,
+            close: false,
+            payload: vec![1, 2, 3],
+        };
+        assert_eq!(
+            ui_operation(&request),
+            Some(UiOperation::Start(OperationKey::Trusted(
+                "trusted-1".into()
+            )))
+        );
+        let response = Message::TrustedOperationHost {
+            request_id: "trusted-1".into(),
+            complete: false,
+            payload: vec![9, 8, 7],
+        };
+        assert_eq!(
+            agent_operation(&response),
+            Some(AgentOperation {
+                key: OperationKey::Trusted("trusted-1".into()),
+                ends: false,
+            })
+        );
+        let mut owners = OperationOwners::default();
+        let key = OperationKey::Trusted("trusted-1".into());
+        assert!(owners.claim("host", key.clone(), 10));
+        assert_eq!(owners.owner("host", &key), Some(10));
+        assert!(!owners.claim("host", key, 11));
     }
 }

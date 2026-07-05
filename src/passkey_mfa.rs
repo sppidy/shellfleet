@@ -28,7 +28,7 @@ use axum::{
 use axum_extra::extract::cookie::CookieJar;
 use std::sync::Arc;
 
-use crate::{AppState, auth, ee};
+use crate::{AppState, auth, ee, internal_auth};
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
@@ -41,11 +41,9 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/login/finish", post(login_finish_handler))
 }
 
-/// EE base url + internal secret, or None when EE isn't active.
-fn ee_ctx() -> Option<(String, String)> {
-    let url = ee::ee_sidecar_url()?;
-    let secret = std::env::var("EE_INTERNAL_SECRET").unwrap_or_default();
-    Some((url, secret))
+/// EE base URL, or None when EE isn't active.
+fn ee_ctx() -> Option<String> {
+    ee::ee_sidecar_url()
 }
 
 /// `{ available: bool }` — whether the pending user has a registered passkey.
@@ -56,21 +54,24 @@ async fn available_handler(jar: CookieJar) -> impl IntoResponse {
     let Some(pending) = auth::pending_mfa_claims(&jar) else {
         return deny().into_response();
     };
-    let Some((url, secret)) = ee_ctx() else {
+    let Some(url) = ee_ctx() else {
         return deny().into_response();
     };
     let endpoint = format!("{}/api/ee/webauthn/credentials", url.trim_end_matches('/'));
-    let available = match reqwest::Client::new()
-        .get(&endpoint)
-        .bearer_auth(&secret)
-        .header("x-shellfleet-login", &pending.sub)
-        .header("x-shellfleet-role", &pending.role)
-        .timeout(std::time::Duration::from_secs(5))
-        .send()
-        .await
+    let available = match internal_auth::send(
+        &reqwest::Client::new(),
+        reqwest::Method::GET,
+        &endpoint,
+        Vec::new(),
+        "",
+        &pending.sub,
+        &pending.role,
+        std::time::Duration::from_secs(5),
+    )
+    .await
     {
-        Ok(resp) if resp.status().is_success() => {
-            let creds: serde_json::Value = resp.json().await.unwrap_or_default();
+        Ok(resp) if resp.status.is_success() => {
+            let creds: serde_json::Value = resp.json().unwrap_or_default();
             creds.as_array().map(|a| !a.is_empty()).unwrap_or(false)
         }
         _ => false,
@@ -85,23 +86,26 @@ async fn begin_handler(jar: CookieJar) -> impl IntoResponse {
     let Some(pending) = auth::pending_mfa_claims(&jar) else {
         return (StatusCode::UNAUTHORIZED, "no pending mfa").into_response();
     };
-    let Some((url, secret)) = ee_ctx() else {
+    let Some(url) = ee_ctx() else {
         return (StatusCode::SERVICE_UNAVAILABLE, "passkeys require EE").into_response();
     };
     let endpoint = format!("{}/api/ee/webauthn/auth/begin", url.trim_end_matches('/'));
-    match reqwest::Client::new()
-        .post(&endpoint)
-        .bearer_auth(&secret)
-        .header("x-shellfleet-login", &pending.sub)
-        .header("x-shellfleet-role", &pending.role)
-        .timeout(std::time::Duration::from_secs(10))
-        .send()
-        .await
+    match internal_auth::send(
+        &reqwest::Client::new(),
+        reqwest::Method::POST,
+        &endpoint,
+        Vec::new(),
+        "",
+        &pending.sub,
+        &pending.role,
+        std::time::Duration::from_secs(10),
+    )
+    .await
     {
         Ok(resp) => {
             let status =
-                StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
-            let body = resp.text().await.unwrap_or_default();
+                StatusCode::from_u16(resp.status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+            let body = resp.text();
             (status, [(header::CONTENT_TYPE, "application/json")], body).into_response()
         }
         Err(_) => (StatusCode::BAD_GATEWAY, "EE unreachable").into_response(),
@@ -123,32 +127,30 @@ async fn finish_handler(
     let Some(pending) = auth::pending_mfa_claims(&jar) else {
         return (StatusCode::UNAUTHORIZED, "no pending mfa").into_response();
     };
-    let Some((url, secret)) = ee_ctx() else {
+    let Some(url) = ee_ctx() else {
         return (StatusCode::SERVICE_UNAVAILABLE, "passkeys require EE").into_response();
     };
 
     let endpoint = format!("{}/api/ee/webauthn/auth/finish", url.trim_end_matches('/'));
-    let resp = match reqwest::Client::new()
-        .post(&endpoint)
-        .bearer_auth(&secret)
-        .header("x-shellfleet-login", &pending.sub)
-        .header("x-shellfleet-role", &pending.role)
-        .header(header::CONTENT_TYPE, "application/json")
-        .body(body.to_vec())
-        .timeout(std::time::Duration::from_secs(15))
-        .send()
-        .await
+    let resp = match internal_auth::send(
+        &reqwest::Client::new(),
+        reqwest::Method::POST,
+        &endpoint,
+        body.to_vec(),
+        "application/json",
+        &pending.sub,
+        &pending.role,
+        std::time::Duration::from_secs(15),
+    )
+    .await
     {
         Ok(r) => r,
         Err(_) => return (StatusCode::BAD_GATEWAY, "EE unreachable").into_response(),
     };
 
-    if !resp.status().is_success() {
-        let code = StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::UNAUTHORIZED);
-        let msg = resp
-            .text()
-            .await
-            .unwrap_or_else(|_| "passkey verification failed".into());
+    if !resp.status.is_success() {
+        let code = StatusCode::from_u16(resp.status.as_u16()).unwrap_or(StatusCode::UNAUTHORIZED);
+        let msg = resp.text();
         crate::db::record_audit(
             &state.db,
             crate::now_unix(),
@@ -200,21 +202,26 @@ async fn finish_handler(
 /// Start a discoverable assertion (no user known yet). Returns the EE options
 /// for `navigator.credentials.get`.
 async fn login_begin_handler() -> impl IntoResponse {
-    let Some((url, secret)) = ee_ctx() else {
+    let Some(url) = ee_ctx() else {
         return (StatusCode::SERVICE_UNAVAILABLE, "passkeys require EE").into_response();
     };
     let endpoint = format!("{}/api/ee/webauthn/login/begin", url.trim_end_matches('/'));
-    match reqwest::Client::new()
-        .post(&endpoint)
-        .bearer_auth(&secret)
-        .timeout(std::time::Duration::from_secs(10))
-        .send()
-        .await
+    match internal_auth::send(
+        &reqwest::Client::new(),
+        reqwest::Method::POST,
+        &endpoint,
+        Vec::new(),
+        "",
+        "",
+        "",
+        std::time::Duration::from_secs(10),
+    )
+    .await
     {
         Ok(resp) => {
             let status =
-                StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
-            let body = resp.text().await.unwrap_or_default();
+                StatusCode::from_u16(resp.status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+            let body = resp.text();
             (status, [(header::CONTENT_TYPE, "application/json")], body).into_response()
         }
         Err(_) => (StatusCode::BAD_GATEWAY, "EE unreachable").into_response(),
@@ -229,32 +236,32 @@ async fn login_finish_handler(
     State(state): State<Arc<AppState>>,
     body: Bytes,
 ) -> impl IntoResponse {
-    let Some((url, secret)) = ee_ctx() else {
+    let Some(url) = ee_ctx() else {
         return (StatusCode::SERVICE_UNAVAILABLE, "passkeys require EE").into_response();
     };
     let endpoint = format!("{}/api/ee/webauthn/login/finish", url.trim_end_matches('/'));
-    let resp = match reqwest::Client::new()
-        .post(&endpoint)
-        .bearer_auth(&secret)
-        .header(header::CONTENT_TYPE, "application/json")
-        .body(body.to_vec())
-        .timeout(std::time::Duration::from_secs(15))
-        .send()
-        .await
+    let resp = match internal_auth::send(
+        &reqwest::Client::new(),
+        reqwest::Method::POST,
+        &endpoint,
+        body.to_vec(),
+        "application/json",
+        "",
+        "",
+        std::time::Duration::from_secs(15),
+    )
+    .await
     {
         Ok(r) => r,
         Err(_) => return (StatusCode::BAD_GATEWAY, "EE unreachable").into_response(),
     };
-    if !resp.status().is_success() {
-        let code = StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::UNAUTHORIZED);
-        let msg = resp
-            .text()
-            .await
-            .unwrap_or_else(|_| "passkey login failed".into());
+    if !resp.status.is_success() {
+        let code = StatusCode::from_u16(resp.status.as_u16()).unwrap_or(StatusCode::UNAUTHORIZED);
+        let msg = resp.text();
         return (code, msg).into_response();
     }
 
-    let data: serde_json::Value = resp.json().await.unwrap_or_default();
+    let data: serde_json::Value = resp.json().unwrap_or_default();
     let token = data["token"].as_str().unwrap_or_default().to_string();
     // The token was minted by CE's own /internal/auth/resolve; re-decode it and
     // require mfa:true before trusting it as a session.
