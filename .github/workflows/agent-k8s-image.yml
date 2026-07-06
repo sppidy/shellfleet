@@ -64,7 +64,7 @@ jobs:
               url."https://x-access-token:${SUBMODULES_PAT}@github.com/".insteadOf \
               "https://github.com/"
           fi
-          git submodule update --init --recursive --depth 1 agent server shared
+          git submodule update --init --recursive --depth 1 agent cli server shared
 
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v4
