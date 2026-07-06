@@ -12,3 +12,6 @@ exclude = [
     "ee",
 ]
 resolver = "2"
+
+[patch."https://github.com/sppidy/shellfleet-shared"]
+shared = { path = "shared" }
