@@ -17,7 +17,7 @@ jobs:
     name: rust (clippy + test)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
       - uses: dtolnay/rust-toolchain@stable
@@ -40,7 +40,7 @@ jobs:
       run:
         working-directory: web
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
       - uses: actions/setup-node@v4
@@ -57,7 +57,7 @@ jobs:
     name: helm (lint + template)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: azure/setup-helm@v4
       - name: Lint chart
         run: helm lint helm/shellfleet-agent
