@@ -5,9 +5,16 @@ services:
       context: .
       dockerfile: Dockerfile.server
     ports:
-      # Bind to loopback only: nginx (the public ingress) proxies to
-      # 127.0.0.1:8080, so the API must not be reachable on other interfaces.
+      # Browser UI / API: loopback only — nginx (the public ingress)
+      # proxies to 127.0.0.1:8080, so the HTTP API must not be reachable
+      # on other interfaces.
       - "127.0.0.1:8080:8080"
+      # Agent mTLS listener. Agents connect DIRECTLY to this port
+      # (bypassing nginx) and present a client cert verified against
+      # AGENT_MTLS_CA. Bound on all interfaces so remote agents can reach
+      # it. In production /agent/ws is served ONLY here, not on 8080.
+      # Skipped in dev mode (JWT_SECRET=dev), which keeps /agent/ws on 8080.
+      - "${AGENT_MTLS_PORT:-8443}:${AGENT_MTLS_PORT:-8443}"
     environment:
       # GitHub OAuth Configuration
       - GITHUB_CLIENT_ID=${GITHUB_CLIENT_ID}
@@ -80,8 +87,37 @@ services:
       - CE_TO_EE_HMAC_ACTIVE_KEY_ID=${CE_TO_EE_HMAC_ACTIVE_KEY_ID:-}
       - EE_TO_CE_HMAC_KEYS_JSON=${EE_TO_CE_HMAC_KEYS_JSON:-}
       - EE_TO_CE_HMAC_ACTIVE_KEY_ID=${EE_TO_CE_HMAC_ACTIVE_KEY_ID:-}
+      # Agent mutual TLS. The server presents SERVER_TLS_CERT and
+      # REQUIRES a client cert verified against AGENT_MTLS_CA. Agents
+      # connect directly to AGENT_MTLS_PORT (default 8443), bypassing
+      # nginx. Leave unset in dev mode (JWT_SECRET=dev) to skip the
+      # mTLS listener and serve /agent/ws on the plain port.
+      #
+      # Cert provisioning (run on a secure host, then place the files in
+      # $SERVER_TLS_DIR, default /etc/shellfleet/tls):
+      #   # agent CA
+      #   openssl genrsa -out agent-ca.key 4096
+      #   openssl req -x509 -new -key agent-ca.key -days 3650 -subj "/CN=ShellFleet Agent CA" -out agent-ca.pem
+      #   # server cert (CN/SAN = the host agents reach SERVER_WS_URL on)
+      #   openssl genrsa -out server-key.pem 4096
+      #   openssl req -new -key server-key.pem -subj "/CN=dashboard.example.com" -out server.csr
+      #   openssl x509 -req -in server.csr -CA agent-ca.pem -CAkey agent-ca.key -CAcreateserial -days 825 -out server.pem
+      #   # per-agent client cert (repeat per agent)
+      #   openssl genrsa -out agent-01.key 2048
+      #   openssl req -new -key agent-01.key -subj "/CN=agent-01" -out agent-01.csr
+      #   openssl x509 -req -in agent-01.csr -CA agent-ca.pem -CAkey agent-ca.key -CAcreateserial -days 825 -out agent-01.pem
+      # The agent gets AGENT_MTLS_CERT_PATH=agent-01.pem,
+      # AGENT_MTLS_KEY_PATH=agent-01.key, SERVER_TLS_CA_PATH=agent-ca.pem.
+      - SERVER_TLS_CERT_PATH=/etc/shellfleet/tls/server.pem
+      - SERVER_TLS_KEY_PATH=/etc/shellfleet/tls/server-key.pem
+      - AGENT_MTLS_CA_PATH=/etc/shellfleet/tls/agent-ca.pem
+      - AGENT_MTLS_PORT=${AGENT_MTLS_PORT:-8443}
     volumes:
       - server_data:/data
+      # Server + agent-CA certs for the mTLS listener (read-only).
+      # Populate ${SERVER_TLS_DIR} (default /etc/shellfleet/tls) with
+      # server.pem, server-key.pem, agent-ca.pem using the commands above.
+      - ${SERVER_TLS_DIR:-/etc/shellfleet/tls}:/etc/shellfleet/tls:ro
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:8080/healthz || exit 1"]
       interval: 30s

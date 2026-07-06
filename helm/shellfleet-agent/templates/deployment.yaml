@@ -52,6 +52,17 @@ spec:
               value: {{ .Values.server.apiUrl | quote }}
             - name: SERVER_WS_URL
               value: {{ .Values.server.wsUrl | quote }}
+            {{- if .Values.mtls.existingSecret }}
+            # Agent↔server mutual TLS. The agent presents its client
+            # cert and pins the server CA, so a DNS-hijack / CA compromise
+            # can't impersonate the server to this agent.
+            - name: AGENT_MTLS_CERT_PATH
+              value: /etc/shellfleet/mtls/agent.crt
+            - name: AGENT_MTLS_KEY_PATH
+              value: /etc/shellfleet/mtls/agent.key
+            - name: SERVER_TLS_CA_PATH
+              value: /etc/shellfleet/mtls/server-ca.crt
+            {{- end }}
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -73,6 +84,12 @@ spec:
               subPath: agent-token.txt
               readOnly: true
             {{- end }}
+            {{- if .Values.mtls.existingSecret }}
+            # Agent client cert + key + server CA for mutual TLS.
+            - name: agent-mtls
+              mountPath: /etc/shellfleet/mtls
+              readOnly: true
+            {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           # Container-level securityContext. Together with the
@@ -92,6 +109,21 @@ spec:
             items:
               - key: agent-token.txt
                 path: agent-token.txt
+                mode: 0400
+        {{- end }}
+        {{- if .Values.mtls.existingSecret }}
+        - name: agent-mtls
+          secret:
+            secretName: {{ .Values.mtls.existingSecret }}
+            items:
+              - key: agent.crt
+                path: agent.crt
+                mode: 0400
+              - key: agent.key
+                path: agent.key
+                mode: 0400
+              - key: server-ca.crt
+                path: server-ca.crt
                 mode: 0400
         {{- end }}
       {{- with .Values.nodeSelector }}

@@ -17,9 +17,25 @@ imagePullSecrets: []
 # How the agent reaches the dashboard. Match these to your deploy.
 # `serverApiUrl` is for HTTPS (device-auth pairing); `serverWsUrl` is the
 # WebSocket the agent uses to receive commands. Both are required.
+#
+# In a hardened deploy, point `wsUrl` at the server's mutual-TLS
+# listener (e.g. wss://dashboard.example.com:8443/agent/ws) and set
+# `mtls.existingSecret` below. The agent then presents its client cert
+# and pins the server CA, so DNS-hijack / public-CA compromise can't
+# impersonate the server.
 server:
   apiUrl: "https://dashboard.example.com"
   wsUrl:  "wss://dashboard.example.com/agent/ws"
+
+# Agent↔server mutual TLS. Create a Secret with keys
+# `agent.crt`, `agent.key`, and `server-ca.crt` (the agent's client
+# cert+key and the CA that signed the server cert), then set
+# `existingSecret` to its name. The chart mounts them read-only at
+# /etc/shellfleet/mtls and points the agent's mTLS env vars at them.
+# Leave `existingSecret` empty to disable mTLS (e.g. dev, or when the
+# server still terminates agent WS via nginx).
+mtls:
+  existingSecret: ""
 
 # Pairing token. Two paths, pick one:
 #
