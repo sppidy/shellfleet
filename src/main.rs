@@ -41,6 +41,7 @@ mod rbac;
 mod security_headers;
 mod telemetry;
 mod throttle;
+mod tls;
 mod tokens;
 mod update_windows;
 mod users;
@@ -581,10 +582,20 @@ async fn main() {
         ))
         .with_state(state.clone());
 
-    let ws_routes = Router::new()
-        .route("/agent/ws", get(agent_ws_handler))
-        .route("/ui/ws", get(ui_ws_handler))
-        .with_state(state.clone());
+    let dev_mode = crate::auth::is_dev_mode();
+
+    // In production `/agent/ws` is served ONLY on the mTLS listener
+    // (see the AgentTlsListener spawned below), so the plain HTTP port
+    // can't be used to bypass mutual TLS. In dev mode the mTLS listener
+    // isn't started (no operator certs locally), so `/agent/ws` stays on
+    // the plain port for local end-to-end testing.
+    let ws_routes = Router::new().route("/ui/ws", get(ui_ws_handler));
+    let ws_routes = if dev_mode {
+        ws_routes.route("/agent/ws", get(agent_ws_handler))
+    } else {
+        ws_routes
+    }
+    .with_state(state.clone());
 
     let trace_layer = TraceLayer::new_for_http()
         .on_response(DefaultOnResponse::new().level(Level::INFO))
@@ -632,6 +643,74 @@ async fn main() {
 
     let addr = SocketAddr::from(([0, 0, 0, 0], 8080));
     tracing::info!(%addr, "server listening");
+
+    // Production agent mTLS listener. Required (not staged): agents
+    // present a client cert verified against `AGENT_MTLS_CA_PATH`; the
+    // server presents `SERVER_TLS_CERT_PATH`/`SERVER_TLS_KEY_PATH`.
+    // `/agent/ws` is NOT mounted on the plain port in prod (above), so
+    // this is the only path agents can reach the WS handler on. If the
+    // certs aren't configured the listener isn't started and agents
+    // cannot connect — fail-closed, while the browser UI on :8080 stays
+    // up.
+    if !dev_mode {
+        let cert = std::env::var("SERVER_TLS_CERT_PATH").ok().filter(|s| !s.is_empty());
+        let key = std::env::var("SERVER_TLS_KEY_PATH").ok().filter(|s| !s.is_empty());
+        let ca = std::env::var("AGENT_MTLS_CA_PATH").ok().filter(|s| !s.is_empty());
+        match (cert, key, ca) {
+            (Some(cert), Some(key), Some(ca)) => {
+                let cert = std::path::PathBuf::from(cert);
+                let key = std::path::PathBuf::from(key);
+                let ca = std::path::PathBuf::from(ca);
+                match tls::build_server_config(&cert, &key, &ca) {
+                    Ok(config) => {
+                        let port: u16 = std::env::var("AGENT_MTLS_PORT")
+                            .ok()
+                            .and_then(|s| s.parse().ok())
+                            .unwrap_or(8443);
+                        let tls_addr = SocketAddr::from(([0, 0, 0, 0], port));
+                        match tls::AgentTlsListener::bind(tls_addr, config).await {
+                            Ok(listener) => {
+                                tracing::info!(
+                                    addr = %tls_addr,
+                                    "agent mTLS listener started (client cert required)"
+                                );
+                                let agent_app = Router::new()
+                                    .route("/agent/ws", get(agent_ws_handler))
+                                    .with_state(state.clone());
+                                tokio::spawn(async move {
+                                    if let Err(e) =
+                                        axum::serve(listener, agent_app.into_make_service()).await
+                                    {
+                                        tracing::error!(%e, "agent mTLS listener stopped");
+                                    }
+                                });
+                            }
+                            Err(e) => {
+                                tracing::error!(
+                                    %e, addr = %tls_addr,
+                                    "agent mTLS listener failed to bind — agents cannot connect"
+                                );
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            %e,
+                            "agent mTLS listener NOT started — fix SERVER_TLS_CERT_PATH / \
+                             SERVER_TLS_KEY_PATH / AGENT_MTLS_CA_PATH; agents cannot connect"
+                        );
+                    }
+                }
+            }
+            _ => {
+                tracing::error!(
+                    "agent mTLS listener NOT started — SERVER_TLS_CERT_PATH / \
+                     SERVER_TLS_KEY_PATH / AGENT_MTLS_CA_PATH are not all set; agents cannot \
+                     connect. Configure them and restart."
+                );
+            }
+        }
+    }
 
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
     // `into_make_service_with_connect_info` is required so the

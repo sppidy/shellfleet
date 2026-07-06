@@ -17,6 +17,12 @@ struct TokenRow {
     hostname: Option<String>,
     created_at: i64,
     last_seen: i64,
+    /// Access-token expiry (unix seconds). 0 for pre-rotation rows.
+    expires_at: i64,
+    /// Refresh-token expiry (unix seconds). 0 for pre-rotation rows.
+    refresh_expires_at: i64,
+    /// 1 if the token has been revoked, else 0.
+    revoked: i64,
 }
 
 #[derive(Deserialize)]
@@ -83,6 +89,9 @@ async fn list_tokens(jar: CookieJar, State(state): State<Arc<AppState>>) -> impl
             hostname: r.hostname,
             created_at: r.created_at,
             last_seen: r.last_seen,
+            expires_at: r.expires_at,
+            refresh_expires_at: r.refresh_expires_at,
+            revoked: r.revoked,
         })
         .collect();
     Json(out).into_response()

@@ -76,6 +76,9 @@ pub async fn middleware(
     //   /device/request, /token   — agent pairing handshake; the
     //                               agent has no cookie at this
     //                               point and shouldn't need one.
+    //   /device/refresh           — agent token rotation; also
+    //                               unauthenticated (authenticated by
+    //                               the presented refresh token instead).
     //                               /device/approve is NOT in the
     //                               whitelist — that's admin-only.
     if path == "/me"
@@ -83,6 +86,7 @@ pub async fn middleware(
         || path.starts_with("/auth/passkey/")
         || path == "/device/request"
         || path == "/device/token"
+        || path == "/device/refresh"
     {
         return next.run(req).await;
     }

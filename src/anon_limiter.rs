@@ -37,9 +37,10 @@ fn is_limited_path(path: &str) -> bool {
         || path == "/api/me"
         || path.starts_with("/api/auth/mfa/")
         // Device-auth: `/api/device/request` and `/api/device/approve`
-        // live on the unauth surface. `/api/device/token` is excluded —
-        // agents poll it every 5s during pairing and multiple agents
-        // behind the same Docker gateway IP would exhaust the bucket.
+        // live on the unauth surface. `/api/device/token` and
+        // `/api/device/refresh` are excluded — agents poll/token-rotate
+        // there during pairing/reconnect and multiple agents behind the
+        // same Docker gateway IP would exhaust the bucket.
         || path == "/api/device/request"
         || path == "/api/device/approve"
 }

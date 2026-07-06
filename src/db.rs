@@ -17,6 +17,9 @@ pub struct TokenRow {
     pub hostname: Option<String>,
     pub created_at: i64,
     pub last_seen: i64,
+    pub expires_at: i64,
+    pub refresh_expires_at: i64,
+    pub revoked: i64,
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]
@@ -62,6 +65,27 @@ pub async fn init() -> Result<SqlitePool, sqlx::Error> {
     )
     .execute(&pool)
     .await?;
+
+    // Short-lived access tokens + single-use refresh tokens. Old
+    // rows (created before this migration) get expires_at=0, which
+    // `token_exists` treats as expired — a hard cutover that forces
+    // already-paired agents to re-pair rather than continuing on a
+    // long-lived token. `ALTER TABLE ADD COLUMN` errors if the column
+    // already exists; the error is ignored so this is idempotent.
+    let _ = sqlx::query("ALTER TABLE tokens ADD COLUMN expires_at INTEGER NOT NULL DEFAULT 0")
+        .execute(&pool)
+        .await;
+    let _ = sqlx::query("ALTER TABLE tokens ADD COLUMN refresh_token TEXT")
+        .execute(&pool)
+        .await;
+    let _ = sqlx::query(
+        "ALTER TABLE tokens ADD COLUMN refresh_expires_at INTEGER NOT NULL DEFAULT 0",
+    )
+    .execute(&pool)
+    .await;
+    let _ = sqlx::query("ALTER TABLE tokens ADD COLUMN revoked INTEGER NOT NULL DEFAULT 0")
+        .execute(&pool)
+        .await;
 
     // Small key/value store for instance-scoped settings (anonymous
     // telemetry instance id + opt-out toggle, etc.).
@@ -398,13 +422,20 @@ async fn migrate_legacy_tokens(pool: &SqlitePool) -> Result<(), sqlx::Error> {
 }
 
 pub async fn token_exists(pool: &SqlitePool, token: &str) -> bool {
-    sqlx::query_scalar::<_, i64>("SELECT 1 FROM tokens WHERE token = ?")
-        .bind(token)
-        .fetch_optional(pool)
-        .await
-        .ok()
-        .flatten()
-        .is_some()
+    // An access token is valid only if it exists, is not revoked,
+    // and has not expired. Pre-migration rows have expires_at=0 and are
+    // rejected here (hard cutover → re-pair).
+    let now = crate::now_unix();
+    sqlx::query_scalar::<_, i64>(
+        "SELECT 1 FROM tokens WHERE token = ? AND revoked = 0 AND expires_at > ?",
+    )
+    .bind(token)
+    .bind(now)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten()
+    .is_some()
 }
 
 /// The hostname a token is bound to (the host it first registered as), if
@@ -445,23 +476,84 @@ pub async fn upsert_token_seen(
     Ok(())
 }
 
-pub async fn insert_token(pool: &SqlitePool, token: &str, now: i64) -> Result<(), sqlx::Error> {
+pub async fn insert_token(
+    pool: &SqlitePool,
+    token: &str,
+    expires_at: i64,
+    refresh_token: &str,
+    refresh_expires_at: i64,
+    now: i64,
+) -> Result<(), sqlx::Error> {
     sqlx::query(
         r#"
-        INSERT OR IGNORE INTO tokens (token, hostname, created_at, last_seen)
-        VALUES (?1, NULL, ?2, 0)
+        INSERT INTO tokens (token, hostname, created_at, last_seen, expires_at, refresh_token, refresh_expires_at, revoked)
+        VALUES (?1, NULL, ?2, 0, ?3, ?4, ?5, 0)
         "#,
     )
     .bind(token)
     .bind(now)
+    .bind(expires_at)
+    .bind(refresh_token)
+    .bind(refresh_expires_at)
     .execute(pool)
     .await?;
     Ok(())
 }
 
+/// Single-use refresh-token rotation. Given a presented refresh
+/// token, if it matches a non-revoked, non-expired row, atomically
+/// delete that row and insert a fresh access + refresh pair (preserving
+/// the hostname binding). Reuse of the old refresh token fails the
+/// lookup → the caller must re-pair. Returns `Some(hostname)` on
+/// success or `None` if the refresh token is unknown / expired / revoked.
+pub async fn replace_token_on_refresh(
+    pool: &SqlitePool,
+    presented_refresh: &str,
+    new_access: &str,
+    new_refresh: &str,
+    access_expires_at: i64,
+    refresh_expires_at: i64,
+    now: i64,
+) -> Result<Option<String>, sqlx::Error> {
+    let row: Option<(Option<String>,)> = sqlx::query_as(
+        "SELECT hostname FROM tokens \
+         WHERE refresh_token = ? AND revoked = 0 AND refresh_expires_at > ?",
+    )
+    .bind(presented_refresh)
+    .bind(now)
+    .fetch_optional(pool)
+    .await?;
+    let Some((hostname,)) = row else {
+        return Ok(None);
+    };
+
+    let mut tx = pool.begin().await?;
+    sqlx::query("DELETE FROM tokens WHERE refresh_token = ?")
+        .bind(presented_refresh)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(
+        r#"
+        INSERT INTO tokens (token, hostname, created_at, last_seen, expires_at, refresh_token, refresh_expires_at, revoked)
+        VALUES (?1, ?2, ?3, 0, ?4, ?5, ?6, 0)
+        "#,
+    )
+    .bind(new_access)
+    .bind(&hostname)
+    .bind(now)
+    .bind(access_expires_at)
+    .bind(new_refresh)
+    .bind(refresh_expires_at)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(Some(hostname.unwrap_or_default()))
+}
+
 pub async fn list_tokens(pool: &SqlitePool) -> Result<Vec<TokenRow>, sqlx::Error> {
     sqlx::query_as::<_, TokenRow>(
-        "SELECT token, hostname, created_at, last_seen FROM tokens ORDER BY last_seen DESC, created_at DESC",
+        "SELECT token, hostname, created_at, last_seen, expires_at, refresh_expires_at, revoked \
+         FROM tokens ORDER BY last_seen DESC, created_at DESC",
     )
     .fetch_all(pool)
     .await

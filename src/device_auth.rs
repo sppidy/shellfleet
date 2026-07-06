@@ -6,6 +6,24 @@ use std::sync::Arc;
 
 use crate::{AppState, auth::verify_token, db};
 
+/// Access-token lifetime. Short enough that a stolen access token
+/// is useless within an hour; long enough that a healthy agent
+/// reconnecting within the hour reuses it without a refresh round-trip.
+const ACCESS_TOKEN_TTL_SECS: i64 = 3600;
+/// Refresh-token lifetime. A stolen refresh token is single-use (rotated
+/// on every refresh), so the window is one use; the 30-day cap bounds how
+/// long an agent can stay paired without an operator re-approving it.
+const REFRESH_TOKEN_TTL_SECS: i64 = 30 * 86400;
+
+fn random_token() -> String {
+    let mut rng = rand::thread_rng();
+    (&mut rng)
+        .sample_iter(&Alphanumeric)
+        .take(64)
+        .map(char::from)
+        .collect()
+}
+
 #[derive(Serialize)]
 pub struct DeviceAuthResponse {
     pub device_code: String,
@@ -25,11 +43,19 @@ pub struct DeviceTokenRequest {
 pub enum DeviceTokenResponse {
     Token {
         access_token: String,
+        refresh_token: String,
         token_type: String,
+        expires_in: i64,
+        refresh_expires_in: i64,
     },
     Error {
         error: String,
     },
+}
+
+#[derive(Deserialize)]
+pub struct RefreshRequest {
+    pub refresh_token: String,
 }
 
 #[derive(Deserialize)]
@@ -41,6 +67,7 @@ pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/request", post(request_device_auth))
         .route("/token", post(poll_device_token))
+        .route("/refresh", post(refresh_device_token))
         .route("/approve", post(approve_device))
 }
 
@@ -122,18 +149,26 @@ async fn poll_device_token(
         .into_response();
     }
 
-    // Approved — mint a fresh access token, persist it, and clean up the
-    // pending row.
-    let token: String = {
-        let mut rng = rand::thread_rng();
-        (&mut rng)
-            .sample_iter(&Alphanumeric)
-            .take(64)
-            .map(char::from)
-            .collect()
-    };
+    // Approved — mint a short-lived access token + a single-use refresh
+    // token. The access token expires in ACCESS_TOKEN_TTL_SECS; the
+    // agent rotates both via /api/device/refresh before the access token
+    // expires, and the refresh token is single-use (rotation reuses the
+    // same row, so a replayed refresh token is rejected).
+    let access_token = random_token();
+    let refresh_token = random_token();
+    let access_expires_at = now + ACCESS_TOKEN_TTL_SECS;
+    let refresh_expires_at = now + REFRESH_TOKEN_TTL_SECS;
 
-    if let Err(e) = db::insert_token(&state.db, &token, now).await {
+    if let Err(e) = db::insert_token(
+        &state.db,
+        &access_token,
+        access_expires_at,
+        &refresh_token,
+        refresh_expires_at,
+        now,
+    )
+    .await
+    {
         tracing::error!(error = %e, "insert token failed");
         return Json(DeviceTokenResponse::Error {
             error: "server_error".to_string(),
@@ -154,10 +189,74 @@ async fn poll_device_token(
     .await;
 
     Json(DeviceTokenResponse::Token {
-        access_token: token,
+        access_token,
+        refresh_token,
         token_type: "bearer".to_string(),
+        expires_in: ACCESS_TOKEN_TTL_SECS,
+        refresh_expires_in: REFRESH_TOKEN_TTL_SECS,
     })
     .into_response()
+}
+
+/// Rotate an agent's access + refresh tokens. The agent calls this
+/// before its access token expires (and reactively on a 401). The
+/// presented refresh token is single-use: on success the old row is
+/// deleted and a fresh pair is issued, so a replayed refresh token fails
+/// the next lookup. A failed/expired/revoked refresh token returns
+/// `invalid_grant`, which tells the agent to re-pair.
+async fn refresh_device_token(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<RefreshRequest>,
+) -> impl IntoResponse {
+    let now = crate::now_unix();
+    let new_access = random_token();
+    let new_refresh = random_token();
+    let access_expires_at = now + ACCESS_TOKEN_TTL_SECS;
+    let refresh_expires_at = now + REFRESH_TOKEN_TTL_SECS;
+
+    match db::replace_token_on_refresh(
+        &state.db,
+        &payload.refresh_token,
+        &new_access,
+        &new_refresh,
+        access_expires_at,
+        refresh_expires_at,
+        now,
+    )
+    .await
+    {
+        Ok(Some(_hostname)) => {
+            db::record_audit(
+                &state.db,
+                now,
+                None,
+                None,
+                "device.token.refreshed",
+                true,
+                None,
+            )
+            .await;
+            Json(DeviceTokenResponse::Token {
+                access_token: new_access,
+                refresh_token: new_refresh,
+                token_type: "bearer".to_string(),
+                expires_in: ACCESS_TOKEN_TTL_SECS,
+                refresh_expires_in: REFRESH_TOKEN_TTL_SECS,
+            })
+            .into_response()
+        }
+        Ok(None) => Json(DeviceTokenResponse::Error {
+            error: "invalid_grant".to_string(),
+        })
+        .into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "refresh token rotation failed");
+            Json(DeviceTokenResponse::Error {
+                error: "server_error".to_string(),
+            })
+            .into_response()
+        }
+    }
 }
 
 async fn approve_device(

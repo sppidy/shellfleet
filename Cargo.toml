@@ -16,7 +16,7 @@ reqwest = { version = "0.13.2", default-features = false, features = ["form", "j
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 shared = { version = "0.1.0", path = "../shared" }
-tokio = { version = "1.52.1", features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1.52.1", features = ["macros", "rt-multi-thread", "net", "time"] }
 tower-http = { version = "0.6.8", features = ["fs", "cors", "trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
@@ -24,6 +24,14 @@ urlencoding = "2.1.3"
 cron = "0.12"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 url = "2.5"
+
+# H-7: Rust-native mTLS for the agent WebSocket path. The server presents
+# a TLS cert and REQUIRES a client cert verified against the agent CA, so
+# a DNS-hijack / CA-compromise can no longer impersonate the server to
+# agents or let an unauthenticated client reach /agent/ws.
+tokio-rustls = "0.26"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+rustls-pemfile = "2"
 
 # TOTP (RFC 6238) + recovery-code hashing for the 2FA flow.
 hmac = "0.12"
