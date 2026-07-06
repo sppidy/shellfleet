@@ -35,37 +35,40 @@ mod k8s_logs;
 #[cfg(feature = "kube")]
 mod k8s_exec;
 
+/// Write a secret file to disk with mode 0600 (Unix). Returns the io
+/// result so the caller can fall back. The agent's state dir
+/// (`/var/lib/shellfleet-agent`, writable per the systemd unit) is the
+/// expected location; no CWD fallback here — that exists only for the
+/// primary access-token path in [`write_token_secure`].
+fn write_secret_file(path: &str, contents: &str) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::io::Write as _;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)?;
+        f.write_all(contents.as_bytes())
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::write(path, contents)
+    }
+}
+
 /// Write the bearer token to disk with mode 0600. Tries the operator
 /// path first; on permission failure (e.g. the agent isn't running as
 /// root and `/etc/shellfleet` doesn't exist) falls back to a CWD-
 /// local file. Errors are intentionally swallowed because the token
 /// is also returned in-memory and the caller proceeds either way.
 fn write_token_secure(primary: &str, token: &str) {
-    fn write_with_mode(path: &str, contents: &str) -> std::io::Result<()> {
-        // Open with O_CREAT|O_TRUNC|O_WRONLY and explicit 0600 on Unix.
-        #[cfg(unix)]
-        {
-            use std::io::Write as _;
-            use std::os::unix::fs::OpenOptionsExt;
-            let mut f = std::fs::OpenOptions::new()
-                .write(true)
-                .create(true)
-                .truncate(true)
-                .mode(0o600)
-                .open(path)?;
-            f.write_all(contents.as_bytes())
-        }
-        #[cfg(not(unix))]
-        {
-            // Windows: best-effort. The dashboard targets Linux agents
-            // so this branch is for local test builds only.
-            std::fs::write(path, contents)
-        }
-    }
-    if write_with_mode(primary, token).is_ok() {
+    if write_secret_file(primary, token).is_ok() {
         return;
     }
-    let _ = write_with_mode("agent-token.txt", token);
+    let _ = write_secret_file("agent-token.txt", token);
 }
 
 #[cfg(test)]
@@ -92,10 +95,11 @@ mod tests {
 use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
 use shared::Message;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio_tungstenite::{
-    connect_async,
+    connect_async, connect_async_tls_with_config, Connector,
     tungstenite::{
         client::IntoClientRequest, http::header::AUTHORIZATION, protocol::Message as WsMessage,
     },
@@ -112,11 +116,24 @@ struct DeviceAuthResponse {
 #[derive(Deserialize)]
 #[serde(untagged)]
 enum DeviceTokenResponse {
-    Token { access_token: String },
+    Token {
+        access_token: String,
+        // Refresh token + access-token TTL. Older servers omit these;
+        // `Option` + `serde(default)` keeps deserialization forward-compat.
+        #[serde(default)]
+        refresh_token: Option<String>,
+        #[serde(default)]
+        expires_in: Option<i64>,
+    },
     Error { error: String },
 }
 
 const TOKEN_PATH: &str = "/var/lib/shellfleet-agent/agent-token.txt";
+const REFRESH_TOKEN_PATH: &str = "/var/lib/shellfleet-agent/agent-refresh.txt";
+const TOKEN_EXPIRY_PATH: &str = "/var/lib/shellfleet-agent/agent-token-expiry.txt";
+/// Refresh proactively when the access token has less than this long to
+/// live, so a normal reconnect doesn't pay a 401→refresh round-trip.
+const REFRESH_PROACTIVE_SECS: i64 = 300;
 
 fn read_token() -> Option<String> {
     for path in [TOKEN_PATH, "agent-token.txt"] {
@@ -128,6 +145,71 @@ fn read_token() -> Option<String> {
         }
     }
     None
+}
+
+fn read_refresh_token() -> Option<String> {
+    std::fs::read_to_string(REFRESH_TOKEN_PATH)
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+fn read_token_expiry() -> Option<i64> {
+    std::fs::read_to_string(TOKEN_EXPIRY_PATH)
+        .ok()
+        .and_then(|s| s.trim().parse::<i64>().ok())
+}
+
+fn now_unix() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+/// Load all PEM-encoded certificates from `path`.
+fn load_pem_certs(
+    path: &str,
+) -> std::io::Result<Vec<rustls::pki_types::CertificateDer<'static>>> {
+    let pem = std::fs::read_to_string(path)?;
+    let mut reader = std::io::Cursor::new(pem.as_bytes());
+    rustls_pemfile::certs(&mut reader).collect()
+}
+
+/// Load the first PEM-encoded private key from `path`.
+fn load_pem_key(path: &str) -> std::io::Result<rustls::pki_types::PrivateKeyDer<'static>> {
+    let pem = std::fs::read_to_string(path)?;
+    let mut reader = std::io::Cursor::new(pem.as_bytes());
+    rustls_pemfile::private_key(&mut reader)?
+        .ok_or_else(|| std::io::Error::other("no private key in pem"))
+}
+
+/// Build a rustls client config that presents the agent's client
+/// certificate and trusts ONLY the operator's server CA (certificate
+/// pinning), so a DNS hijack or public-CA compromise can't impersonate
+/// the server to the agent. Returns `None` when mTLS isn't configured
+/// (dev/local with a plain `ws://` URL) so the caller falls back to
+/// `connect_async`.
+fn build_agent_tls_client_config() -> Option<Arc<rustls::ClientConfig>> {
+    let cert_path = std::env::var("AGENT_MTLS_CERT_PATH").ok().filter(|s| !s.is_empty())?;
+    let key_path = std::env::var("AGENT_MTLS_KEY_PATH").ok().filter(|s| !s.is_empty())?;
+    let ca_path = std::env::var("SERVER_TLS_CA_PATH").ok().filter(|s| !s.is_empty())?;
+
+    let cert = load_pem_certs(&cert_path).ok()?;
+    let key = load_pem_key(&key_path).ok()?;
+    let ca = load_pem_certs(&ca_path).ok()?;
+    if cert.is_empty() || ca.is_empty() {
+        return None;
+    }
+    let mut roots = rustls::RootCertStore::empty();
+    for c in ca {
+        roots.add(c).ok()?;
+    }
+    let config = rustls::ClientConfig::builder()
+        .with_root_certificates(roots)
+        .with_client_auth_cert(cert, key)
+        .ok()?;
+    Some(Arc::new(config))
 }
 
 #[cfg(unix)]
@@ -228,9 +310,17 @@ async fn pair(api_url: &str) -> String {
         if let Ok(res) = token_res {
             if let Ok(data) = res.json::<DeviceTokenResponse>().await {
                 match data {
-                    DeviceTokenResponse::Token { access_token } => {
+                    DeviceTokenResponse::Token {
+                        access_token,
+                        refresh_token,
+                        expires_in,
+                    } => {
                         println!("Agent successfully authorized!");
-                        write_token_secure(TOKEN_PATH, &access_token);
+                        persist_token_triple(
+                            &access_token,
+                            refresh_token.as_deref(),
+                            expires_in,
+                        );
                         return access_token;
                     }
                     DeviceTokenResponse::Error { error } => {
@@ -245,16 +335,58 @@ async fn pair(api_url: &str) -> String {
     }
 }
 
+/// Persist the access token, refresh token, and access-token expiry to
+/// their respective 0600 files. The refresh token + expiry are absent on
+/// legacy servers; when missing we simply don't write those files and the
+/// agent falls back to the pre-rotation behaviour for that session.
+fn persist_token_triple(access: &str, refresh: Option<&str>, expires_in: Option<i64>) {
+    write_token_secure(TOKEN_PATH, access);
+    if let Some(refresh) = refresh {
+        let _ = write_secret_file(REFRESH_TOKEN_PATH, refresh);
+    }
+    if let Some(expires_in) = expires_in {
+        let expiry = now_unix().saturating_add(expires_in);
+        let _ = write_secret_file(TOKEN_EXPIRY_PATH, &expiry.to_string());
+    }
+}
+
+/// Exchange a refresh token for a fresh access + refresh pair.
+/// On success, persists the new triple and returns the new access token.
+/// Returns `None` on any failure (network, `invalid_grant`, missing
+/// refresh token in the response) so the caller can force a re-pair.
+async fn refresh_token_pair(api_url: &str, refresh: &str) -> Option<String> {
+    let client = reqwest::Client::new();
+    let res = client
+        .post(format!("{}/api/device/refresh", api_url))
+        .json(&serde_json::json!({ "refresh_token": refresh }))
+        .timeout(Duration::from_secs(15))
+        .send()
+        .await
+        .ok()?;
+    if !res.status().is_success() {
+        return None;
+    }
+    let data = res.json::<DeviceTokenResponse>().await.ok()?;
+    match data {
+        DeviceTokenResponse::Token {
+            access_token,
+            refresh_token,
+            expires_in,
+        } => {
+            persist_token_triple(&access_token, refresh_token.as_deref(), expires_in);
+            Some(access_token)
+        }
+        DeviceTokenResponse::Error { .. } => None,
+    }
+}
+
 #[tokio::main]
 async fn main() {
-    // rustls 0.23 demands the binary install a process-level default
-    // CryptoProvider before any TLS handshake. kube-rs (and anything
-    // else linking rustls 0.23) panics otherwise. `.ok()` because a
-    // second install_default() call would error harmlessly.
-    #[cfg(feature = "kube")]
-    {
-        let _ = rustls::crypto::ring::default_provider().install_default();
-    }
+    // rustls 0.23 requires a process-level default CryptoProvider before
+    // any TLS handshake. Needed for the agent↔server mTLS connector (and
+    // kube-rs when the kube feature is on). `install_default` errors
+    // harmlessly if already installed, hence the ignored result.
+    let _ = rustls::crypto::ring::default_provider().install_default();
 
     let args: Vec<String> = std::env::args().collect();
     let is_pair = args.iter().any(|a| a == "--pair" || a == "pair");
@@ -263,7 +395,7 @@ async fn main() {
     let api_url = std::env::var("SERVER_API_URL")
         .unwrap_or_else(|_| "https://dashboard.example.com".to_string());
 
-    let token = if let Some(t) = read_token() {
+    let mut token = if let Some(t) = read_token() {
         t
     } else if is_pair {
         pair(&api_url).await
@@ -272,8 +404,32 @@ async fn main() {
         std::process::exit(1);
     };
 
+    // Proactive refresh. If we hold a refresh token and the access
+    // token is within REFRESH_PROACTIVE_SECS of expiry (or we never
+    // recorded an expiry — e.g. a token issued by an older server),
+    // rotate now so the WS upgrade doesn't fail with a stale token.
+    // Refresh failure here is non-fatal: the connect loop below gets one
+    // reactive retry before giving up.
+    if let Some(refresh) = read_refresh_token() {
+        let expiry = read_token_expiry();
+        let stale = expiry.map_or(true, |e| e - now_unix() < REFRESH_PROACTIVE_SECS);
+        if stale {
+            println!("Access token near expiry, refreshing before connect...");
+            if let Some(new_token) = refresh_token_pair(&api_url, &refresh).await {
+                token = new_token;
+            }
+        }
+    }
+
     let wss_url_str = std::env::var("SERVER_WS_URL")
         .unwrap_or_else(|_| "wss://dashboard.example.com/agent/ws".to_string());
+
+    // When mTLS env vars are set, present a client cert and pin the
+    // server CA. When unset (dev/local), fall back to a plain connect.
+    let tls_config = build_agent_tls_client_config();
+    if tls_config.is_some() {
+        println!("Agent mTLS enabled (client cert + server-CA pinning).");
+    }
 
     println!("Connecting to server WebSocket...");
 
@@ -281,49 +437,78 @@ async fn main() {
     // `Authorization` header rather than a `?token=` query string.
     // Query strings get logged by reverse proxies, edge CDN access
     // logs, server tracing, crash reports, and operator screenshots
-    // — none of which we want to leak the long-lived agent token to.
-    // The header is only on the upgrade exchange and is dropped from
-    // the persistent WS frames that follow.
-    let mut request = match wss_url_str.as_str().into_client_request() {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("Failed to build WS request from SERVER_WS_URL={wss_url_str}: {e}");
-            std::process::exit(1);
-        }
-    };
-    let bearer = match format!("Bearer {token}").parse() {
-        Ok(v) => v,
-        Err(e) => {
-            eprintln!("Failed to encode bearer token: {e}");
-            std::process::exit(1);
-        }
-    };
-    request.headers_mut().insert(AUTHORIZATION, bearer);
-
-    // Cap the connect. `connect_async` has no built-in timeout, so a hung
-    // TCP/TLS connect (server mid-restart that accepts TCP but never finishes
-    // the WS handshake, a half-open Cloudflare/Tailscale path, etc.) used to
-    // block here FOREVER: the process stayed `active` but permanently offline,
-    // never retrying, because the only retry path is exit -> systemd restart
-    // and a hung await never reaches the error arm. The idle watchdog can't
-    // help either — it only runs once a connection is established. Time the
-    // connect out so a stuck attempt fails fast and systemd reconnects us.
+    // — none of which we want to leak the agent token to. The header
+    // is only on the upgrade exchange and is dropped from the
+    // persistent WS frames that follow.
+    //
+    // If the upgrade fails (typically a 401 from an expired access
+    // token), attempt one refresh-token rotation and retry the connect
+    // once. A second failure, or a refresh failure, exits so systemd
+    // restarts us / the operator re-pairs.
     let connect_timeout = Duration::from_secs(30);
-    let (ws_stream, _) = match tokio::time::timeout(connect_timeout, connect_async(request)).await {
-        Ok(Ok(res)) => res,
-        Ok(Err(e)) => {
-            eprintln!(
-                "Failed to connect to server: {}. Your token might have been revoked.",
-                e
-            );
-            std::process::exit(1);
-        }
-        Err(_) => {
-            eprintln!(
-                "Connect timed out after {}s; exiting so systemd reconnects.",
-                connect_timeout.as_secs()
-            );
-            std::process::exit(1);
+    let mut refreshed = false;
+    let ws_stream = 'connect: loop {
+        let mut request = match wss_url_str.as_str().into_client_request() {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("Failed to build WS request from SERVER_WS_URL={wss_url_str}: {e}");
+                std::process::exit(1);
+            }
+        };
+        let bearer = match format!("Bearer {token}").parse() {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("Failed to encode bearer token: {e}");
+                std::process::exit(1);
+            }
+        };
+        request.headers_mut().insert(AUTHORIZATION, bearer);
+
+        // Cap the connect. `connect_async` has no built-in timeout, so a
+        // hung TCP/TLS connect (server mid-restart that accepts TCP but
+        // never finishes the WS handshake, a half-open Cloudflare/Tailscale
+        // path, etc.) would block forever. Time it out so a stuck attempt
+        // fails fast and systemd reconnects us.
+        //
+        // The handshake is wrapped in a single async block so the rustls
+        // and plain branches unify into one future type.
+        let handshake = async {
+            match tls_config.as_ref() {
+                Some(cfg) => connect_async_tls_with_config(
+                    request,
+                    None,
+                    false,
+                    Some(Connector::Rustls(cfg.clone())),
+                )
+                .await,
+                None => connect_async(request).await,
+            }
+        };
+        match tokio::time::timeout(connect_timeout, handshake).await {
+            Ok(Ok((stream, _))) => break 'connect stream,
+            Ok(Err(e)) => {
+                if !refreshed {
+                    if let Some(refresh) = read_refresh_token() {
+                        println!("WS connect failed ({e}); refreshing token and retrying once...");
+                        if let Some(new_token) = refresh_token_pair(&api_url, &refresh).await {
+                            token = new_token;
+                            refreshed = true;
+                            continue 'connect;
+                        }
+                    }
+                }
+                eprintln!(
+                    "Failed to connect to server: {e}. Re-pair this agent: shellfleet-agent --pair"
+                );
+                std::process::exit(1);
+            }
+            Err(_) => {
+                eprintln!(
+                    "Connect timed out after {}s; exiting so systemd reconnects.",
+                    connect_timeout.as_secs()
+                );
+                std::process::exit(1);
+            }
         }
     };
 

@@ -109,6 +109,11 @@ pub async fn create_container(
     }
     cmd.arg(&spec.image);
     if let Some(ref command) = spec.command {
+        // `--` separates the image from the container command: without it a
+        // command argument like `--privileged` or `--security-opt=...` would
+        // be interpreted as a `docker run` flag. Anything after `--`
+        // is passed verbatim to the container's entrypoint.
+        cmd.arg("--");
         for arg in split_command(command) {
             cmd.arg(arg);
         }
@@ -221,6 +226,10 @@ pub async fn create_service(spec: &ServiceSpec) -> (bool, Option<String>, String
     }
     cmd.arg(&spec.image);
     if let Some(ref command) = spec.command {
+        // `--` separates the image from the service command: without it a
+        // command argument like `--privileged` would be interpreted as a
+        // `docker service create` flag. See `create_container` above.
+        cmd.arg("--");
         for arg in split_command(command) {
             cmd.arg(arg);
         }
