@@ -51,7 +51,11 @@ pub async fn dispatch_run_command(
 
     let request_id = uuid::Uuid::new_v4().to_string();
     let (tx_os, rx_os) = oneshot::channel();
-    state.pending_exec.lock().await.insert(request_id.clone(), (agent_id.to_string(), tx_os));
+    state
+        .pending_exec
+        .lock()
+        .await
+        .insert(request_id.clone(), (agent_id.to_string(), tx_os));
 
     let _guard = PendingExecGuard {
         state: state.clone(),
@@ -70,8 +74,5 @@ pub async fn dispatch_run_command(
         return Err(DispatchError::AgentDisconnected);
     }
 
-    Ok(PendingRunCommand {
-        rx: rx_os,
-        _guard,
-    })
+    Ok(PendingRunCommand { rx: rx_os, _guard })
 }
