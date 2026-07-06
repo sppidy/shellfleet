@@ -45,9 +45,9 @@ fn validate_object_ref(value: &str) -> Result<(), String> {
         .as_bytes()
         .first()
         .is_some_and(|byte| byte.is_ascii_alphanumeric())
-        || !value.bytes().all(|byte| {
-            byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b':')
-        })
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b':'))
     {
         return Err("invalid docker object reference".into());
     }
@@ -1468,7 +1468,14 @@ mod tests {
 
     #[test]
     fn docker_object_references_reject_flags_and_unsafe_characters() {
-        for value in ["", "--help", "-f", "name with space", "name\nnext", "name/child"] {
+        for value in [
+            "",
+            "--help",
+            "-f",
+            "name with space",
+            "name\nnext",
+            "name/child",
+        ] {
             assert!(validate_object_ref(value).is_err(), "accepted {value:?}");
         }
         for value in ["abc123", "container-name", "stack_service", "sha256:abcd"] {
@@ -1501,8 +1508,7 @@ mod tests {
 
     #[tokio::test]
     async fn docker_operations_reject_injected_options_before_spawn() {
-        let (ok, _, error) =
-            run_container_action("--help", DockerContainerAction::Start).await;
+        let (ok, _, error) = run_container_action("--help", DockerContainerAction::Start).await;
         assert!(!ok);
         assert!(error.is_some_and(|message| message.contains("invalid docker object")));
 

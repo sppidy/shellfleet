@@ -483,7 +483,8 @@ fn validate_pod_spec(spec: &serde_json::Value) -> Result<(), String> {
         };
         for container in containers {
             let security = container.get("securityContext");
-            if security.and_then(|value| value.get("privileged"))
+            if security
+                .and_then(|value| value.get("privileged"))
                 .and_then(serde_json::Value::as_bool)
                 == Some(true)
             {
@@ -551,7 +552,9 @@ fn validate_apply_document(
     force: bool,
 ) -> Result<(), String> {
     if force {
-        return Err("forced server-side apply is disabled because it can seize field ownership".into());
+        return Err(
+            "forced server-side apply is disabled because it can seize field ownership".into(),
+        );
     }
 
     let api_version = document
@@ -618,8 +621,8 @@ pub async fn apply(yaml: &str, dry_run: bool, force: bool) -> Result<String, Str
         }
         let obj: DynamicObject =
             serde_yaml::from_str(raw).map_err(|e| format!("doc {i}: parse: {e}"))?;
-        let document = serde_json::to_value(&obj)
-            .map_err(|e| format!("doc {i}: normalize manifest: {e}"))?;
+        let document =
+            serde_json::to_value(&obj).map_err(|e| format!("doc {i}: normalize manifest: {e}"))?;
         validate_apply_document(&document, &allowed_namespaces, force)
             .map_err(|e| format!("doc {i}: policy: {e}"))?;
         let types = obj
@@ -834,8 +837,8 @@ mod tests {
         assert!(validate_apply_document(&deployment, &allowed_namespaces(), false).is_err());
 
         let mut deployment = safe_deployment();
-        deployment["spec"]["template"]["spec"]["containers"][0]["securityContext"]
-            ["privileged"] = json!(true);
+        deployment["spec"]["template"]["spec"]["containers"][0]["securityContext"]["privileged"] =
+            json!(true);
         assert!(validate_apply_document(&deployment, &allowed_namespaces(), false).is_err());
 
         let mut deployment = safe_deployment();

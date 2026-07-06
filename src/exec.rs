@@ -4,8 +4,8 @@
 //! executes what it's handed and reports the result.
 
 use std::process::Stdio;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use tokio::io::{AsyncRead, AsyncReadExt, BufReader};
@@ -39,7 +39,9 @@ fn parse_command_allowlist(raw: Option<&str>) -> Result<Vec<String>, String> {
         .filter(|entry| !entry.is_empty())
         .collect();
     if entries.is_empty() {
-        return Err(format!("{EXEC_ALLOWLIST_ENV} must contain at least one command"));
+        return Err(format!(
+            "{EXEC_ALLOWLIST_ENV} must contain at least one command"
+        ));
     }
     Ok(entries)
 }
@@ -92,7 +94,12 @@ async fn read_to_limit<R: AsyncRead + Unpin>(
             if take == 0 {
                 break 0;
             }
-            match budget.compare_exchange_weak(cur, cur - take, Ordering::Relaxed, Ordering::Relaxed) {
+            match budget.compare_exchange_weak(
+                cur,
+                cur - take,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
                 Ok(_) => break take,
                 Err(_) => continue,
             }
@@ -113,7 +120,9 @@ async fn read_to_limit<R: AsyncRead + Unpin>(
 fn kill_process(child: &mut tokio::process::Child, pgid: Option<i32>) {
     #[cfg(unix)]
     if let Some(gid) = pgid {
-        unsafe { libc::kill(-gid, libc::SIGKILL); }
+        unsafe {
+            libc::kill(-gid, libc::SIGKILL);
+        }
     }
     // Always call start_kill: catches non-Unix and Unix group-kill failure.
     let _ = child.start_kill();
@@ -171,7 +180,7 @@ pub async fn run(command: &str, timeout_secs: u64) -> ExecResult {
                 truncated: false,
                 timed_out: false,
                 duration_ms: timer.elapsed().as_millis() as u64,
-            }
+            };
         }
     };
 
@@ -278,7 +287,9 @@ pub async fn run(command: &str, timeout_secs: u64) -> ExecResult {
     if readers_aborted {
         #[cfg(unix)]
         if let Some(gid) = pgid {
-            unsafe { libc::kill(-gid, libc::SIGKILL); }
+            unsafe {
+                libc::kill(-gid, libc::SIGKILL);
+            }
         }
     }
 
@@ -320,10 +331,8 @@ mod tests {
 
     #[test]
     fn execution_allowlist_matches_only_complete_commands() {
-        let allow = parse_command_allowlist(Some(
-            r#"["uptime","systemctl restart nginx"]"#,
-        ))
-        .unwrap();
+        let allow =
+            parse_command_allowlist(Some(r#"["uptime","systemctl restart nginx"]"#)).unwrap();
 
         assert!(command_allowed("uptime", &allow));
         assert!(command_allowed("  systemctl restart nginx  ", &allow));
