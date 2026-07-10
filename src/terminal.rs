@@ -1,9 +1,9 @@
 use portable_pty::{CommandBuilder, NativePtySystem, PtySize, PtySystem};
+use agent::Outgoing;
 use shared::Message;
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use tokio::sync::mpsc;
 
 pub struct TerminalSession {
     pub tx_resize: std::sync::mpsc::Sender<(u16, u16)>,
@@ -39,7 +39,7 @@ fn pick_login_shell() -> (String, Vec<&'static str>) {
 
 pub fn spawn_terminal(
     session_id: String,
-    tx_msg: mpsc::UnboundedSender<Message>,
+    tx_msg: Outgoing,
 ) -> Result<TerminalSession, String> {
     #[cfg(target_os = "windows")]
     let cmd = CommandBuilder::new("powershell.exe");
@@ -61,7 +61,7 @@ pub fn spawn_terminal(
 pub fn spawn_docker_exec(
     container_id: &str,
     shell: &str,
-    tx_msg: mpsc::UnboundedSender<Message>,
+    tx_msg: Outgoing,
 ) -> Result<TerminalSession, String> {
     // Container-exec sessions tag emitted TerminalData with an empty
     // session_id; the dashboard's exec terminal listens for "".
@@ -97,7 +97,7 @@ pub fn spawn_docker_exec(
 fn spawn_pty(
     cmd: CommandBuilder,
     session_id: String,
-    tx_msg: mpsc::UnboundedSender<Message>,
+    tx_msg: Outgoing,
 ) -> Result<TerminalSession, String> {
     let pty_system = NativePtySystem::default();
 

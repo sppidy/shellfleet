@@ -20,7 +20,7 @@
 //! used by main.rs — `check` is the building block, kept `pub` so
 //! the existing tests still cover the lexical layer.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 const ALLOW_PREFIXES: &[&str] = &[
     "/etc/",
@@ -199,6 +199,44 @@ pub fn check_read(path: &str) -> Result<PathBuf, PathError> {
         return Err(PathError::OutsideAllowList);
     }
     Ok(canonical)
+}
+
+/// Read a previously validated path without following a symlink at the final
+/// component. This closes the check-then-open race between [`check_read`] and
+/// the actual config read, while enforcing a protocol response size cap.
+#[cfg(unix)]
+pub fn read_no_follow(path: &Path, max_bytes: usize) -> std::io::Result<String> {
+    use std::io::Read;
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path)?;
+    if !file.metadata()?.file_type().is_file() {
+        return Err(std::io::Error::other("config path is not a regular file"));
+    }
+    let mut bytes = Vec::new();
+    file.take((max_bytes as u64).saturating_add(1))
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > max_bytes {
+        return Err(std::io::Error::other(format!(
+            "config exceeds {max_bytes}-byte response limit"
+        )));
+    }
+    String::from_utf8(bytes)
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
+}
+
+#[cfg(not(unix))]
+pub fn read_no_follow(path: &Path, max_bytes: usize) -> std::io::Result<String> {
+    let value = std::fs::read_to_string(path)?;
+    if value.len() > max_bytes {
+        return Err(std::io::Error::other(format!(
+            "config exceeds {max_bytes}-byte response limit"
+        )));
+    }
+    Ok(value)
 }
 
 /// Validate a path for WRITE. The target file may not exist yet

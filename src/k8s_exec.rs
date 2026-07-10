@@ -19,6 +19,7 @@ use futures_util::SinkExt;
 use k8s_openapi::api::core::v1::Pod;
 use kube::api::{AttachParams, TerminalSize};
 use kube::{Api, Client};
+use agent::Outgoing;
 use shared::Message;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::mpsc;
@@ -46,7 +47,7 @@ pub struct ExecArgs {
 
 pub async fn spawn_exec(
     args: ExecArgs,
-    tx_msg: mpsc::UnboundedSender<Message>,
+    tx_msg: Outgoing,
 ) -> Result<K8sExecSession, String> {
     let client = Client::try_default()
         .await

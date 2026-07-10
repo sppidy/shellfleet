@@ -35,23 +35,23 @@ mod k8s_logs;
 #[cfg(feature = "kube")]
 mod k8s_exec;
 
-/// Write a secret file to disk with mode 0600 (Unix). Returns the io
-/// result so the caller can fall back. The agent's state dir
-/// (`/var/lib/shellfleet-agent`, writable per the systemd unit) is the
-/// expected location; no CWD fallback here — that exists only for the
-/// primary access-token path in [`write_token_secure`].
+/// Write a secret file to disk with mode 0600 (Unix). The agent state
+/// directory is the sole accepted location: credential persistence must not
+/// silently fall back to a potentially user-writable working directory.
 fn write_secret_file(path: &str, contents: &str) -> std::io::Result<()> {
     #[cfg(unix)]
     {
         use std::io::Write as _;
-        use std::os::unix::fs::OpenOptionsExt;
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
         let mut f = std::fs::OpenOptions::new()
             .write(true)
             .create(true)
             .truncate(true)
             .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW)
             .open(path)?;
-        f.write_all(contents.as_bytes())
+        f.write_all(contents.as_bytes())?;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
     }
     #[cfg(not(unix))]
     {
@@ -59,16 +59,9 @@ fn write_secret_file(path: &str, contents: &str) -> std::io::Result<()> {
     }
 }
 
-/// Write the bearer token to disk with mode 0600. Tries the operator
-/// path first; on permission failure (e.g. the agent isn't running as
-/// root and `/etc/shellfleet` doesn't exist) falls back to a CWD-
-/// local file. Errors are intentionally swallowed because the token
-/// is also returned in-memory and the caller proceeds either way.
-fn write_token_secure(primary: &str, token: &str) {
-    if write_secret_file(primary, token).is_ok() {
-        return;
-    }
-    let _ = write_secret_file("agent-token.txt", token);
+/// Write the bearer token to its fixed 0600 state file.
+fn write_token_secure(primary: &str, token: &str) -> std::io::Result<()> {
+    write_secret_file(primary, token)
 }
 
 #[cfg(test)]
@@ -94,14 +87,15 @@ mod tests {
 
 use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
-use shared::Message;
+use shared::{MAX_OUTPUT_BYTES, Message};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio_tungstenite::{
-    connect_async, connect_async_tls_with_config, Connector,
+    connect_async_tls_with_config, connect_async_with_config, Connector,
     tungstenite::{
-        client::IntoClientRequest, http::header::AUTHORIZATION, protocol::Message as WsMessage,
+        client::IntoClientRequest, http::header::AUTHORIZATION,
+        protocol::{Message as WsMessage, WebSocketConfig},
     },
 };
 
@@ -134,28 +128,53 @@ const TOKEN_EXPIRY_PATH: &str = "/var/lib/shellfleet-agent/agent-token-expiry.tx
 /// Refresh proactively when the access token has less than this long to
 /// live, so a normal reconnect doesn't pay a 401→refresh round-trip.
 const REFRESH_PROACTIVE_SECS: i64 = 300;
+// Leave JSON framing headroom above the 1 MiB payload cap shared with the
+// response-producing handlers; a response at that cap still has to carry its
+// variant tag and metadata inside one WebSocket message.
+const MAX_WS_MESSAGE_BYTES: usize = 2 * 1_048_576;
+/// Bounded disconnect-safe queue for every response/event headed to the
+/// server. A full queue makes the producer drop the message instead of
+/// allocating indefinitely while a peer is slow or unreachable.
+const OUTGOING_QUEUE_CAPACITY: usize = 256;
+
+#[cfg(unix)]
+fn read_secret_file(path: &str) -> std::io::Result<String> {
+    use std::io::Read as _;
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path)?;
+    if !file.metadata()?.file_type().is_file() {
+        return Err(std::io::Error::other("credential path is not a regular file"));
+    }
+    let mut value = String::new();
+    file.take(16 * 1024).read_to_string(&mut value)?;
+    Ok(value)
+}
+
+#[cfg(not(unix))]
+fn read_secret_file(path: &str) -> std::io::Result<String> {
+    std::fs::read_to_string(path)
+}
 
 fn read_token() -> Option<String> {
-    for path in [TOKEN_PATH, "agent-token.txt"] {
-        if let Ok(t) = std::fs::read_to_string(path) {
-            let t = t.trim().to_string();
-            if !t.is_empty() {
-                return Some(t);
-            }
-        }
-    }
-    None
+    read_secret_file(TOKEN_PATH)
+        .ok()
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty())
 }
 
 fn read_refresh_token() -> Option<String> {
-    std::fs::read_to_string(REFRESH_TOKEN_PATH)
+    read_secret_file(REFRESH_TOKEN_PATH)
         .ok()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
 }
 
 fn read_token_expiry() -> Option<i64> {
-    std::fs::read_to_string(TOKEN_EXPIRY_PATH)
+    read_secret_file(TOKEN_EXPIRY_PATH)
         .ok()
         .and_then(|s| s.trim().parse::<i64>().ok())
 }
@@ -340,13 +359,19 @@ async fn pair(api_url: &str) -> String {
 /// legacy servers; when missing we simply don't write those files and the
 /// agent falls back to the pre-rotation behaviour for that session.
 fn persist_token_triple(access: &str, refresh: Option<&str>, expires_in: Option<i64>) {
-    write_token_secure(TOKEN_PATH, access);
+    if let Err(error) = write_token_secure(TOKEN_PATH, access) {
+        eprintln!("failed to persist agent access token: {error}");
+    }
     if let Some(refresh) = refresh {
-        let _ = write_secret_file(REFRESH_TOKEN_PATH, refresh);
+        if let Err(error) = write_secret_file(REFRESH_TOKEN_PATH, refresh) {
+            eprintln!("failed to persist agent refresh token: {error}");
+        }
     }
     if let Some(expires_in) = expires_in {
         let expiry = now_unix().saturating_add(expires_in);
-        let _ = write_secret_file(TOKEN_EXPIRY_PATH, &expiry.to_string());
+        if let Err(error) = write_secret_file(TOKEN_EXPIRY_PATH, &expiry.to_string()) {
+            eprintln!("failed to persist agent token expiry: {error}");
+        }
     }
 }
 
@@ -472,16 +497,19 @@ async fn main() {
         //
         // The handshake is wrapped in a single async block so the rustls
         // and plain branches unify into one future type.
+        let mut ws_config = WebSocketConfig::default();
+        ws_config.max_message_size = Some(MAX_WS_MESSAGE_BYTES);
+        ws_config.max_frame_size = Some(MAX_WS_MESSAGE_BYTES);
         let handshake = async {
             match tls_config.as_ref() {
                 Some(cfg) => connect_async_tls_with_config(
                     request,
-                    None,
+                    Some(ws_config),
                     false,
                     Some(Connector::Rustls(cfg.clone())),
                 )
                 .await,
-                None => connect_async(request).await,
+                None => connect_async_with_config(request, Some(ws_config), false).await,
             }
         };
         match tokio::time::timeout(connect_timeout, handshake).await {
@@ -516,7 +544,8 @@ async fn main() {
 
     let (mut write, mut read) = ws_stream.split();
 
-    let (tx, mut rx) = mpsc::unbounded_channel::<Message>();
+    let (outgoing_tx, mut rx) = mpsc::channel::<Message>(OUTGOING_QUEUE_CAPACITY);
+    let tx = agent::Outgoing::new(outgoing_tx);
 
     // Send a register message
     let hostname = hostname::get()
@@ -1839,7 +1868,10 @@ async fn main() {
                                         content: "".to_string(),
                                         error: Some(e.to_string()),
                                     },
-                                    Ok(safe_path) => match std::fs::read_to_string(&safe_path) {
+                                    Ok(safe_path) => match config::read_no_follow(
+                                        &safe_path,
+                                        MAX_OUTPUT_BYTES,
+                                    ) {
                                         Ok(c) => Message::ReadConfigResponse {
                                             path: path.clone(),
                                             content: c,

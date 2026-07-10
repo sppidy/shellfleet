@@ -2,6 +2,7 @@
 //! tokio task; reports flow back through the shared message channel
 //! when the state transitions (or on first sample after a sync).
 
+use agent::Outgoing;
 use futures_util::StreamExt;
 use shared::{HealthProbeKind, HealthProbeResult, HealthProbeSpec, HealthProbeState, Message};
 use std::collections::HashMap;
@@ -48,7 +49,7 @@ impl HealthProbes {
     pub async fn sync(
         &self,
         probes: Vec<HealthProbeSpec>,
-        tx: tokio::sync::mpsc::UnboundedSender<Message>,
+        tx: Outgoing,
     ) {
         let mut inner = self.inner.lock().await;
         let mut keep: HashMap<String, ()> = HashMap::with_capacity(probes.len());
@@ -100,7 +101,7 @@ fn now_unix() -> i64 {
         .unwrap_or(0)
 }
 
-async fn run_probe(spec: HealthProbeSpec, tx: tokio::sync::mpsc::UnboundedSender<Message>) {
+async fn run_probe(spec: HealthProbeSpec, tx: Outgoing) {
     let interval = Duration::from_secs(spec.interval_secs.max(1) as u64);
     let timeout = Duration::from_secs(spec.timeout_secs.max(1) as u64);
     let mut last_state: Option<HealthProbeState> = None;

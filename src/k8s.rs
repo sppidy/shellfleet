@@ -15,7 +15,7 @@ use k8s_openapi::api::core::v1::{Event, PersistentVolumeClaim, Pod, Service};
 use k8s_openapi::api::networking::v1::Ingress;
 use kube::api::{DeleteParams, DynamicObject, GroupVersionKind, Patch, PatchParams};
 use kube::{Api, Client, ResourceExt, discovery};
-use shared::{K8sDeployment, K8sEvent, K8sIngress, K8sPod, K8sPvc, K8sService};
+use shared::{K8sDeployment, K8sEvent, K8sIngress, K8sPod, K8sPvc, K8sService, MAX_OUTPUT_BYTES};
 
 /// Cheap availability probe used at agent startup to decide whether
 /// to advertise the `"k8s"` capability. Constructing a `Client`
@@ -388,6 +388,11 @@ pub async fn describe(kind: &str, namespace: Option<&str>, name: &str) -> Result
         "event" => describe_one::<Event>(client, namespace, name).await?,
         other => return Err(format!("unsupported kind: {other}")),
     };
+    if yaml.len() > MAX_OUTPUT_BYTES {
+        return Err(format!(
+            "describe response exceeds {MAX_OUTPUT_BYTES}-byte limit"
+        ));
+    }
     Ok(yaml)
 }
 

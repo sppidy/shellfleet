@@ -1,7 +1,7 @@
 use serde::Deserialize;
 use shared::{
     DockerContainer, DockerContainerAction, SwarmAction, SwarmNode, SwarmRole, SwarmService,
-    SwarmServiceSpecSummary, SwarmTask,
+    SwarmServiceSpecSummary, SwarmTask, MAX_OUTPUT_BYTES,
 };
 use std::process::Stdio;
 use tokio::io::AsyncWriteExt;
@@ -806,7 +806,13 @@ pub async fn inspect_network(id: &str) -> (bool, String, Option<String>) {
     let success = output.status.success();
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-    if success {
+    if success && stdout.len() > MAX_OUTPUT_BYTES {
+        (
+            false,
+            String::new(),
+            Some(format!("network inspect response exceeds {MAX_OUTPUT_BYTES}-byte limit")),
+        )
+    } else if success {
         (true, stdout, None)
     } else {
         (false, stdout, Some(stderr))

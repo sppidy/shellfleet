@@ -11,15 +11,17 @@
 use futures_util::{AsyncBufReadExt, StreamExt};
 use k8s_openapi::api::core::v1::Pod;
 use kube::{Api, Client, api::LogParams};
+use agent::Outgoing;
 use shared::Message;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 
 const MAX_LINES_PER_CHUNK: usize = 100;
 const FLUSH_INTERVAL_MS: u64 = 250;
+const MAX_K8S_TAIL_LINES: i64 = 10_000;
 
 #[derive(Default, Clone)]
 pub struct K8sLogStreams {
@@ -36,7 +38,7 @@ pub struct LogArgs {
 }
 
 impl K8sLogStreams {
-    pub async fn start(&self, args: LogArgs, tx: mpsc::UnboundedSender<Message>) {
+    pub async fn start(&self, args: LogArgs, tx: Outgoing) {
         let stream_id = args.stream_id.clone();
         // Re-issuing the same stream_id supersedes the prior task —
         // matches journal_stream behavior.
@@ -54,7 +56,7 @@ impl K8sLogStreams {
     }
 }
 
-async fn run_stream(args: LogArgs, tx: mpsc::UnboundedSender<Message>) {
+async fn run_stream(args: LogArgs, tx: Outgoing) {
     let client = match Client::try_default().await {
         Ok(c) => c,
         Err(e) => {
@@ -71,7 +73,7 @@ async fn run_stream(args: LogArgs, tx: mpsc::UnboundedSender<Message>) {
         container: args.container.clone(),
         follow: args.follow,
         tail_lines: if args.tail_lines > 0 {
-            Some(args.tail_lines)
+            Some(args.tail_lines.min(MAX_K8S_TAIL_LINES))
         } else {
             None
         },

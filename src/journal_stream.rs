@@ -30,6 +30,7 @@
 //!   * grep — passed via `journalctl -g <regex>`. journalctl handles
 //!     the regex itself; we cap length at 256 chars.
 
+use agent::Outgoing;
 use shared::Message;
 use std::collections::HashMap;
 use std::process::Stdio;
@@ -64,7 +65,7 @@ pub struct StreamArgs {
 }
 
 impl JournalStreams {
-    pub async fn start(&self, args: StreamArgs, tx: mpsc::UnboundedSender<Message>) {
+    pub async fn start(&self, args: StreamArgs, tx: Outgoing) {
         let stream_id = args.stream_id.clone();
         self.stop(&stream_id).await;
         let handle = tokio::spawn(async move {
@@ -142,7 +143,7 @@ fn build_argv(args: &StreamArgs) -> Result<Vec<String>, String> {
     Ok(argv)
 }
 
-async fn run_stream(args: StreamArgs, tx: mpsc::UnboundedSender<Message>) {
+async fn run_stream(args: StreamArgs, tx: Outgoing) {
     let argv = match build_argv(&args) {
         Ok(a) => a,
         Err(e) => {

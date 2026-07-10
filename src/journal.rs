@@ -1,10 +1,11 @@
+use agent::Outgoing;
 use shared::Message;
 use std::collections::HashMap;
 use std::process::Stdio;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 
 /// Hard cap on `journalctl --lines`. A viewer-allowed value of
@@ -38,7 +39,7 @@ impl JournalStreams {
         unit: String,
         lines: u32,
         follow: bool,
-        tx: mpsc::UnboundedSender<Message>,
+        tx: Outgoing,
     ) {
         // Reject hostile / malformed unit names before they land
         // in argv; cap the backlog before journald starts spooling.
@@ -67,7 +68,7 @@ impl JournalStreams {
     }
 }
 
-async fn run_stream(unit: String, lines: u32, follow: bool, tx: mpsc::UnboundedSender<Message>) {
+async fn run_stream(unit: String, lines: u32, follow: bool, tx: Outgoing) {
     let mut cmd = Command::new("journalctl");
     cmd.arg("--no-pager");
     cmd.arg("--output=short-iso");

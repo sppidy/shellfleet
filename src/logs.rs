@@ -1,10 +1,11 @@
+use agent::Outgoing;
 use shared::Message;
 use std::collections::HashMap;
 use std::process::Stdio;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 
 /// Hard cap on the docker `--tail` argument. A viewer-allowed
@@ -44,7 +45,7 @@ impl LogStreams {
         container_id: String,
         tail: u32,
         follow: bool,
-        tx: mpsc::UnboundedSender<Message>,
+        tx: Outgoing,
     ) {
         // Reject hostile / malformed container_ids before they
         // land in argv. The send goes to the same channel the
@@ -89,7 +90,7 @@ async fn run_stream(
     container_id: String,
     tail: u32,
     follow: bool,
-    tx: mpsc::UnboundedSender<Message>,
+    tx: Outgoing,
 ) {
     let mut cmd = Command::new("docker");
     cmd.arg("logs");

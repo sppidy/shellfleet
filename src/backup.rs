@@ -394,6 +394,7 @@ pub async fn run_backup(
             cmd.arg("--ignore-failed-read")
                 .arg("-czf")
                 .arg(&archive_path)
+                .arg("--")
                 .args(&existing)
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped());
@@ -468,6 +469,7 @@ pub async fn run_backup(
                 .arg("--ignore-failed-read")
                 .arg("-czf")
                 .arg(&tmp_path)
+                .arg("--")
                 .args(&existing)
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped());

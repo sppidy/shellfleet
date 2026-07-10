@@ -1,3 +1,4 @@
+use crate::Outgoing;
 use shared::Message;
 use tokio::sync::mpsc;
 
@@ -21,7 +22,7 @@ impl RelaySession {
 pub async fn connect(
     request_id: String,
     first_payload: Vec<u8>,
-    outgoing: mpsc::UnboundedSender<Message>,
+    outgoing: Outgoing,
 ) -> Result<RelaySession, String> {
     let socket =
         std::env::var("SHELLFLEET_GATE_SOCKET").unwrap_or_else(|_| DEFAULT_GATE_SOCKET.to_string());
