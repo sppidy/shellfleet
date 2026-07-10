@@ -215,6 +215,15 @@ async fn probe_exec(spec: &HealthProbeSpec, timeout: Duration) -> (HealthProbeSt
         );
     }
     let mut cmd = Command::new(&path);
+    // A probe inherits no agent-process environment. In particular, values
+    // such as LD_PRELOAD must never be able to alter the probe interpreter or
+    // a helper it invokes. Keep a predictable PATH for shebangs that use
+    // `/usr/bin/env` and then add only vetted operator-provided variables.
+    cmd.env_clear();
+    cmd.env(
+        "PATH",
+        "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+    );
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
     cmd.kill_on_drop(true);
     // Per-probe env (`KEY=VALUE`). Anything malformed is silently
@@ -222,7 +231,13 @@ async fn probe_exec(spec: &HealthProbeSpec, timeout: Duration) -> (HealthProbeSt
     // mid-script failure.
     for kv in &spec.env {
         if let Some((k, v)) = kv.split_once('=') {
-            cmd.env(k, v);
+            if is_safe_probe_env_key(k) {
+                cmd.env(k, v);
+            } else {
+                eprintln!(
+                    "health probe {target:?}: ignored unsafe environment variable {k:?}"
+                );
+            }
         }
     }
     let child = match cmd.spawn() {
@@ -275,8 +290,61 @@ async fn probe_exec(spec: &HealthProbeSpec, timeout: Duration) -> (HealthProbeSt
     }
 }
 
+/// A probe spec crosses the server-to-root-agent trust boundary. Dynamic
+/// loader, shell, and language-runtime controls can change what an otherwise
+/// fixed probe script executes, so reject them even though ordinary `NAME=value`
+/// configuration is allowed.
+fn is_safe_probe_env_key(key: &str) -> bool {
+    if key.is_empty()
+        || !key.bytes().enumerate().all(|(i, b)| {
+            (b == b'_' || b.is_ascii_alphanumeric())
+                && (i != 0 || b == b'_' || b.is_ascii_alphabetic())
+        })
+    {
+        return false;
+    }
+
+    !matches!(
+        key,
+        "PATH"
+            | "BASH_ENV"
+            | "ENV"
+            | "CDPATH"
+            | "GLOBIGNORE"
+            | "SHELLOPTS"
+            | "BASHOPTS"
+            | "PYTHONHOME"
+            | "PYTHONPATH"
+            | "PYTHONSTARTUP"
+            | "PERL5LIB"
+            | "PERL5OPT"
+            | "RUBYLIB"
+            | "RUBYOPT"
+            | "NODE_OPTIONS"
+            | "JAVA_TOOL_OPTIONS"
+            | "JDK_JAVA_OPTIONS"
+    ) && !key.starts_with("LD_")
+        && !key.starts_with("DYLD_")
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn probe_environment_rejects_execution_controls() {
+        for key in [
+            "LD_PRELOAD",
+            "LD_LIBRARY_PATH",
+            "PATH",
+            "BASH_ENV",
+            "PYTHONPATH",
+            "NODE_OPTIONS",
+        ] {
+            assert!(!super::is_safe_probe_env_key(key), "{key} must be rejected");
+        }
+        assert!(super::is_safe_probe_env_key("CHECK_INTERVAL"));
+        assert!(!super::is_safe_probe_env_key("1INVALID"));
+    }
+
     #[test]
     fn response_body_cap_rejects_oversized_chunks() {
         let mut body = Vec::new();

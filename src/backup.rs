@@ -24,6 +24,11 @@ const MULTIPART_CHUNK: usize = 16 * 1024 * 1024;
 /// extracts. Override with `SHELLFLEET_S3_RESTORE_MAX_BYTES` (in
 /// bytes); default is 50 GiB.
 const S3_RESTORE_MAX_BYTES_DEFAULT: u64 = 50 * 1024 * 1024 * 1024;
+/// Backups are confined to agent-managed state unless the operator makes an
+/// explicit decision to allow unrestricted host access. This keeps a
+/// compromised control plane from using the backup API to read or overwrite
+/// host credentials by default.
+const DEFAULT_BACKUP_ROOTS: &[&str] = &["/var/lib/shellfleet", "/var/backups/shellfleet"];
 
 fn s3_restore_max_bytes() -> u64 {
     std::env::var("SHELLFLEET_S3_RESTORE_MAX_BYTES")
@@ -66,22 +71,30 @@ pub fn parse_dest(dest: &str) -> Result<Dest, String> {
     Ok(Dest::Local(PathBuf::from(trimmed)))
 }
 
-/// Optional allow-list of host paths the server is permitted to back up
-/// (read) and restore into (write). Set `SHELLFLEET_BACKUP_ROOTS` to a
-/// colon-separated list of directory prefixes to confine both operations;
-/// leave it unset to preserve the historical behaviour of honouring any
-/// path the server names. Confining is opt-in so existing deployments
-/// don't break, but operators who don't fully trust the control plane can
-/// pin the agent's filesystem reach with one env var.
+/// Allow-list of host paths the server is permitted to back up (read) and
+/// restore into (write). By default this is limited to agent-managed state.
+/// Set `SHELLFLEET_BACKUP_ROOTS` to a colon-separated list of prefixes to
+/// replace the defaults. Unrestricted host access requires the explicit
+/// `SHELLFLEET_ALLOW_UNRESTRICTED_BACKUPS=1` opt-out.
 fn backup_roots() -> Option<Vec<PathBuf>> {
-    let raw = std::env::var("SHELLFLEET_BACKUP_ROOTS").ok()?;
-    let roots: Vec<PathBuf> = raw
-        .split(':')
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(PathBuf::from)
-        .collect();
-    if roots.is_empty() { None } else { Some(roots) }
+    if std::env::var("SHELLFLEET_ALLOW_UNRESTRICTED_BACKUPS").as_deref() == Ok("1") {
+        return None;
+    }
+    Some(configured_backup_roots(
+        std::env::var("SHELLFLEET_BACKUP_ROOTS").ok().as_deref(),
+    ))
+}
+
+fn configured_backup_roots(raw: Option<&str>) -> Vec<PathBuf> {
+    raw.map(|raw| {
+        raw.split(':')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(PathBuf::from)
+            .collect::<Vec<_>>()
+    })
+    .filter(|roots| !roots.is_empty())
+    .unwrap_or_else(|| DEFAULT_BACKUP_ROOTS.iter().map(PathBuf::from).collect())
 }
 
 /// Lexically resolve `.`/`..` without touching the filesystem so a
@@ -679,6 +692,10 @@ pub async fn restore(archive_uri: &str, dest_root: &str) -> (bool, String, Optio
             // as root and would faithfully apply hostile values),
             // and don't carry over the recorded mode bits.
             .arg("--no-absolute-names")
+            // Do not rely on GNU tar's implicit traversal stripping: reject
+            // archive members that contain an explicit parent component.
+            .arg("--exclude=../*")
+            .arg("--exclude=*/../*")
             .arg("--no-same-owner")
             .arg("--no-same-permissions")
             .stdin(Stdio::piped())
@@ -768,6 +785,8 @@ pub async fn restore(archive_uri: &str, dest_root: &str) -> (bool, String, Optio
             // See the s3 path above for the rationale on these
             // three flags. Same hardening for local archives.
             .arg("--no-absolute-names")
+            .arg("--exclude=../*")
+            .arg("--exclude=*/../*")
             .arg("--no-same-owner")
             .arg("--no-same-permissions")
             .stdout(Stdio::piped())
@@ -826,6 +845,17 @@ mod tests {
         assert!(!within_roots(Path::new("/etc/shadow"), &roots));
         // `..` escape out of an allowed root must be denied.
         assert!(!within_roots(Path::new("/srv/backups/../../etc"), &roots));
+    }
+
+    #[test]
+    fn backup_roots_are_restrictive_without_configuration() {
+        assert_eq!(
+            configured_backup_roots(None),
+            vec![
+                PathBuf::from("/var/lib/shellfleet"),
+                PathBuf::from("/var/backups/shellfleet"),
+            ]
+        );
     }
 
     #[test]
