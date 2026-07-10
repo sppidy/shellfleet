@@ -295,4 +295,42 @@ mod tests {
         assert!(security.class.requires_admin());
         assert!(!security.class.requires_approval());
     }
+
+    #[test]
+    fn protocol_policy_matrix_preserves_read_and_mutation_boundaries() {
+        use UiRequestClass::{Mutation, Read};
+
+        // These are deliberately asserted as a matrix rather than merely
+        // checking that messages are accepted. New protocol requests already
+        // require an exhaustive match above; this test catches an accidental
+        // change from a read to an approval-gated action (or vice versa).
+        let cases = [
+            (Message::ListServicesRequest, Some("service:List"), Read),
+            (Message::K8sListPodsRequest, Some("k8s:List"), Read),
+            (Message::K8sListDeploymentsRequest, Some("k8s:List"), Read),
+            (Message::K8sListServicesRequest, Some("k8s:List"), Read),
+            (Message::K8sListIngressesRequest, Some("k8s:List"), Read),
+            (Message::K8sListPvcsRequest, Some("k8s:List"), Read),
+            (Message::K8sListEventsRequest, Some("k8s:List"), Read),
+            (Message::AptStatusRequest, Some("apt:Status"), Read),
+            (Message::AptRefreshRequest, Some("apt:Refresh"), Mutation),
+            (Message::SystemStatsRequest, None, Read),
+            (Message::DockerListRequest, Some("container:List"), Read),
+            (Message::SwarmListRequest, Some("swarm:List"), Read),
+            (Message::DockerImageListRequest, Some("docker:ImageList"), Read),
+            (Message::DockerNetworkListRequest, Some("network:List"), Read),
+            (Message::DockerVolumeListRequest, Some("volume:List"), Read),
+            (Message::DockerVolumePruneRequest, Some("docker:Prune"), Mutation),
+            (Message::SwarmStackListRequest, Some("swarm:List"), Read),
+            (Message::DockerStatsRequest, Some("container:List"), Read),
+            (Message::DockerExecStopRequest, Some("container:Exec"), UiRequestClass::Interactive),
+        ];
+
+        for (message, action, class) in cases {
+            let security = message.ui_request_security().expect("UI request must classify");
+            assert_eq!(security.action, action);
+            assert_eq!(security.class, class);
+            assert_eq!(security.class.requires_approval(), class == Mutation);
+        }
+    }
 }
