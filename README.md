@@ -101,7 +101,9 @@ Report security issues privately: email `sppidytg@gmail.com` with the subject
 The server sends a small anonymous usage report (on by default): a random
 per-install id, the version, edition, user and agent **counts**, and enabled
 **feature names** — never logins, hostnames, IPs, or agent ids. Turn it off with
-`SHELLFLEET_TELEMETRY=off` or the toggle on `/admin`.
+`SHELLFLEET_TELEMETRY=off` or the toggle on `/admin`. Reports are HMAC-signed;
+set `SHELLFLEET_TELEMETRY_HMAC_KEY` to the same secret configured in the
+telemetry Worker before enabling the reporter.
 
 ## Contributing
 

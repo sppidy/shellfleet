@@ -74,6 +74,9 @@ services:
       # SHELLFLEET_TELEMETRY=off to disable (or toggle on the admin page).
       # The collector endpoint is hardcoded in the server; there is no URL knob.
       - SHELLFLEET_TELEMETRY=${SHELLFLEET_TELEMETRY:-on}
+      # Required when telemetry is on. The server HMAC-signs every report and
+      # the collector rejects unsigned or stale payloads.
+      - SHELLFLEET_TELEMETRY_HMAC_KEY=${SHELLFLEET_TELEMETRY_HMAC_KEY:-}
       # EE session recording (off by default): when on AND the EE sidecar is
       # active AND the license includes "recordings", CE mirrors every terminal
       # session to EE for playback on the /recordings page. Best-effort — never
