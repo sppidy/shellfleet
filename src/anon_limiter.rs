@@ -43,6 +43,11 @@ fn is_limited_path(path: &str) -> bool {
         // same Docker gateway IP would exhaust the bucket.
         || path == "/api/device/request"
         || path == "/api/device/approve"
+        // Public API-key surface: `/api/v1/*` is authenticated by a
+        // bearer API key, not a session cookie. Without per-IP throttling
+        // here an attacker can brute-force API keys unbounded — each
+        // attempt is a DB lookup with no backoff.
+        || path.starts_with("/api/v1/")
 }
 
 pub async fn middleware(
@@ -72,4 +77,16 @@ pub async fn middleware(
     }
 
     next.run(req).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_limited_path;
+
+    #[test]
+    fn api_v1_is_part_of_the_per_ip_limited_surface() {
+        assert!(is_limited_path("/api/v1/agents"));
+        assert!(is_limited_path("/api/v1/"));
+        assert!(!is_limited_path("/api/v10/agents"));
+    }
 }

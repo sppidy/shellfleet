@@ -11,6 +11,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::sync::Arc;
 use std::time::Duration;
+use hmac::{Hmac, Mac};
+use sha2::Sha256;
 
 use crate::{AppState, db, ee};
 
@@ -19,6 +21,8 @@ use crate::{AppState, db, ee};
 const TELEMETRY_URL: &str = "https://telemetry.sppidy.in/v1/telemetry";
 const REPORT_INTERVAL_SECS: u64 = 24 * 3600;
 const STARTUP_DELAY_SECS: u64 = 30;
+const TELEMETRY_TIMESTAMP_HEADER: &str = "x-shellfleet-telemetry-timestamp";
+const TELEMETRY_SIGNATURE_HEADER: &str = "x-shellfleet-telemetry-signature";
 
 #[derive(Serialize)]
 struct Report {
@@ -43,6 +47,31 @@ pub fn telemetry_enabled(env_value: Option<&str>, toggle_enabled: bool) -> bool 
         }
     }
     toggle_enabled
+}
+
+/// Sign the exact JSON body, bound to a short-lived UNIX timestamp. The
+/// telemetry Worker verifies this before parsing or storing a report, which
+/// prevents arbitrary Internet clients from poisoning another deployment's
+/// counters. The key is deployment configuration, not telemetry data, and is
+/// never sent over the wire.
+fn sign_report(secret: &str, timestamp: i64, body: &[u8]) -> String {
+    let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes())
+        .expect("HMAC accepts keys of any length");
+    mac.update(timestamp.to_string().as_bytes());
+    mac.update(b"\n");
+    mac.update(body);
+    mac.finalize()
+        .into_bytes()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+fn telemetry_hmac_key() -> Option<String> {
+    std::env::var("SHELLFLEET_TELEMETRY_HMAC_KEY")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
 }
 
 fn env_forced_off() -> bool {
@@ -114,9 +143,20 @@ pub fn spawn_reporter(state: Arc<AppState>) {
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_secs(STARTUP_DELAY_SECS)).await;
         let mut announced = false;
+        let mut missing_key_announced = false;
         loop {
             let env_val = std::env::var("SHELLFLEET_TELEMETRY").ok();
             if telemetry_enabled(env_val.as_deref(), toggle_value(&state).await) {
+                let Some(key) = telemetry_hmac_key() else {
+                    if !missing_key_announced {
+                        tracing::warn!(
+                            "telemetry is enabled but SHELLFLEET_TELEMETRY_HMAC_KEY is unset; refusing unsigned report"
+                        );
+                        missing_key_announced = true;
+                    }
+                    tokio::time::sleep(Duration::from_secs(REPORT_INTERVAL_SECS)).await;
+                    continue;
+                };
                 let report = gather(&state).await;
                 if !announced {
                     tracing::info!(
@@ -126,9 +166,22 @@ pub fn spawn_reporter(state: Arc<AppState>) {
                     );
                     announced = true;
                 }
+                let body = match serde_json::to_vec(&report) {
+                    Ok(body) => body,
+                    Err(error) => {
+                        tracing::warn!(%error, "telemetry report serialization failed");
+                        tokio::time::sleep(Duration::from_secs(REPORT_INTERVAL_SECS)).await;
+                        continue;
+                    }
+                };
+                let timestamp = crate::now_unix();
+                let signature = sign_report(&key, timestamp, &body);
                 match reqwest::Client::new()
                     .post(TELEMETRY_URL)
-                    .json(&report)
+                    .header(reqwest::header::CONTENT_TYPE, "application/json")
+                    .header(TELEMETRY_TIMESTAMP_HEADER, timestamp.to_string())
+                    .header(TELEMETRY_SIGNATURE_HEADER, signature)
+                    .body(body)
                     .timeout(Duration::from_secs(10))
                     .send()
                     .await
@@ -225,5 +278,14 @@ mod tests {
             keys, expected,
             "telemetry report must not carry any other (PII) fields"
         );
+    }
+
+    #[test]
+    fn report_signatures_bind_timestamp_and_exact_body() {
+        let body = br#"{"instance_id":"abc"}"#;
+        let signature = sign_report("test-key", 123, body);
+        assert_eq!(signature.len(), 64);
+        assert_ne!(signature, sign_report("test-key", 124, body));
+        assert_ne!(signature, sign_report("test-key", 123, b"{}"));
     }
 }

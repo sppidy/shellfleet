@@ -827,8 +827,14 @@ async fn ui_ws_handler(
     //    handle_ui_socket — neither alone is enough. Pinning catches the
     //    "log in then upgrade WS while still admin" race; re-check
     //    catches the "demoted while WS still open" case.
-    let (login, initial_role) = if dev_mode {
-        ("dev".to_string(), auth::Role::Admin)
+    //
+    //    We also capture the token's `iat` so handle_ui_socket can
+    //    reject messages once the user's session_epoch advances past it
+    //    (logout / role-change / MFA-disable). The HTTP rbac middleware
+    //    does this check on every request; without it here a revoked
+    //    session keeps its WS until the 24h JWT expiry.
+    let (login, initial_role, token_iat) = if dev_mode {
+        ("dev".to_string(), auth::Role::Admin, 0_i64)
     } else {
         let Some(cookie) = jar.get("auth_token") else {
             tracing::warn!("ui ws: no auth cookie");
@@ -842,11 +848,33 @@ async fn ui_ws_handler(
             tracing::warn!(login = %claims.sub, "ui ws: pending-mfa cookie rejected");
             return (StatusCode::FORBIDDEN, "MFA required").into_response();
         }
-        (claims.sub.clone(), auth::Role::parse(&claims.role))
+        // Reject tokens whose `iat` predates the user's session_epoch —
+        // a revoked session must not be able to open a new WebSocket.
+        match db::get_user(&state.db, &claims.sub).await {
+            Ok(Some(row)) if claims.iat >= row.session_epoch => {}
+            Ok(Some(_)) => {
+                tracing::warn!(login = %claims.sub, "ui ws: rejected revoked session (epoch)");
+                return (
+                    StatusCode::UNAUTHORIZED,
+                    "session revoked — please sign in again",
+                )
+                    .into_response();
+            }
+            Ok(None) => {
+                tracing::warn!(login = %claims.sub, "ui ws: rejected unknown user");
+                return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+            }
+            Err(error) => {
+                tracing::error!(%error, login = %claims.sub, "ui ws: session verification failed");
+                return (StatusCode::SERVICE_UNAVAILABLE, "session verification unavailable")
+                    .into_response();
+            }
+        }
+        (claims.sub.clone(), auth::Role::parse(&claims.role), claims.iat)
     };
 
     let client_ip = throttle::real_client_ip(&headers, Some(peer.ip()));
-    ws.on_upgrade(move |socket| handle_ui_socket(socket, state, login, initial_role, client_ip))
+    ws.on_upgrade(move |socket| handle_ui_socket(socket, state, login, initial_role, token_iat, client_ip))
         .into_response()
 }
 
@@ -1548,6 +1576,7 @@ async fn handle_ui_socket(
     state: Arc<AppState>,
     login: String,
     initial_role: auth::Role,
+    token_iat: i64,
     client_ip: String,
 ) {
     tracing::info!(%login, "new ui websocket connection");
@@ -1685,6 +1714,35 @@ async fn handle_ui_socket(
                         .ok()
                         .and_then(|v| v.get("type").and_then(|t| t.as_str().map(String::from)))
                         .unwrap_or_else(|| "unknown".into());
+                    // Session-epoch guard: a revoked session (logout /
+                    // role-change / MFA-disable) must not keep issuing
+                    // mutating commands over an already-open WebSocket.
+                    // The HTTP rbac middleware checks this on every
+                    // request; the WS plane bypasses that middleware, so
+                    // re-check here. A mismatch closes the socket.
+                    if !auth::is_dev_mode() {
+                        let session_reason = match crate::db::get_user(&state.db, &login).await {
+                            Ok(Some(row)) if token_iat >= row.session_epoch => None,
+                            Ok(Some(_)) => Some("session revoked — please sign in again"),
+                            Ok(None) => Some("session no longer exists"),
+                            Err(error) => {
+                                tracing::error!(%error, %login, "ui ws: session verification failed");
+                                Some("session verification unavailable")
+                            }
+                        };
+                        if let Some(reason) = session_reason {
+                            tracing::warn!(
+                                %login, %agent_id, %variant_type, %reason,
+                                "ui ws: closing socket after failed session validation"
+                            );
+                            let _ = tx.send(UiMessage::PermissionDenied {
+                                agent_id: agent_id.clone(),
+                                variant_type: "session_revoked".to_string(),
+                                reason: reason.to_string(),
+                            });
+                            break;
+                        }
+                    }
                     let security = match message.ui_request_security() {
                         Ok(security) => security,
                         Err(error) => {
