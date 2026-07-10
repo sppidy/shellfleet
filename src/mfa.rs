@@ -106,9 +106,10 @@ fn verify_totp(secret_b32: &str, code: &str) -> bool {
     let Ok(secret_bytes) = BASE32_NOPAD.decode(secret_b32.to_ascii_uppercase().as_bytes()) else {
         return false;
     };
-    let Ok(code_num) = code.trim().parse::<u32>() else {
+    let code = code.trim();
+    if code.len() != TOTP_DIGITS as usize || !code.bytes().all(|byte| byte.is_ascii_digit()) {
         return false;
-    };
+    }
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -116,7 +117,12 @@ fn verify_totp(secret_b32: &str, code: &str) -> bool {
     let step = current_step(now) as i64;
     for delta in -TOTP_SKEW_STEPS..=TOTP_SKEW_STEPS {
         let candidate_step = step.saturating_add(delta).max(0) as u64;
-        if hotp(&secret_bytes, candidate_step) == code_num {
+        let candidate = format!(
+            "{:0width$}",
+            hotp(&secret_bytes, candidate_step),
+            width = TOTP_DIGITS as usize
+        );
+        if bool::from(candidate.as_bytes().ct_eq(code.as_bytes())) {
             return true;
         }
     }
@@ -192,7 +198,7 @@ async fn status_handler(jar: CookieJar, State(state): State<Arc<AppState>>) -> i
     }
     // Allow status checks even from a pending-MFA session — the UI
     // needs to know whether the user is mid-enrollment.
-    let cookie = match jar.get("auth_token") {
+    let cookie = match jar.get(auth::session_cookie_name()) {
         Some(c) => c,
         None => return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response(),
     };
@@ -201,8 +207,17 @@ async fn status_handler(jar: CookieJar, State(state): State<Arc<AppState>>) -> i
         None => return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response(),
     };
     let enabled = match crate::db::get_user(&state.db, &claims.sub).await {
-        Ok(Some(row)) => row.totp_enabled != 0,
-        _ => false,
+        Ok(Some(row)) if claims.iat >= row.session_epoch => row.totp_enabled != 0,
+        Ok(Some(_)) => {
+            return (StatusCode::UNAUTHORIZED, "session revoked — please sign in again")
+                .into_response();
+        }
+        Ok(None) => return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response(),
+        Err(error) => {
+            tracing::error!(%error, login = %claims.sub, "session verification failed for mfa status");
+            return (StatusCode::SERVICE_UNAVAILABLE, "session verification unavailable")
+                .into_response();
+        }
     };
     Json(StatusResponse { enabled }).into_response()
 }
@@ -254,10 +269,24 @@ async fn confirm_handler(
     }
     // Encrypt sensitive columns at rest so a DB-only backup leak
     // doesn't expose TOTP secrets or recovery-code hashes.
-    let encrypted_secret = crate::crypto::encrypt(&body.secret);
+    let encrypted_secret = match crate::crypto::encrypt(&body.secret) {
+        Ok(value) => value,
+        Err(error) => {
+            tracing::error!(%error, "failed to encrypt TOTP secret");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "credential encryption unavailable")
+                .into_response();
+        }
+    };
     let hashes = hashes_for_codes(&body.recovery_codes);
     let hashes_json = serde_json::to_string(&hashes).unwrap_or_else(|_| "[]".into());
-    let encrypted_hashes = crate::crypto::encrypt(&hashes_json);
+    let encrypted_hashes = match crate::crypto::encrypt(&hashes_json) {
+        Ok(value) => value,
+        Err(error) => {
+            tracing::error!(%error, "failed to encrypt recovery hashes");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "credential encryption unavailable")
+                .into_response();
+        }
+    };
     if let Err(e) =
         crate::db::set_user_totp(&state.db, &claims.sub, &encrypted_secret, &encrypted_hashes).await
     {
@@ -300,9 +329,9 @@ async fn verify_handler(
         })
         .into_response();
     }
-    let pending = match auth::pending_mfa_claims(&jar) {
-        Some(c) => c,
-        None => return (StatusCode::UNAUTHORIZED, "no pending mfa").into_response(),
+    let pending = match auth::pending_mfa_user(&jar, &state.db).await {
+        Ok(c) => c,
+        Err(error) => return error.into_response(),
     };
 
     // Brute-force defence: lock the per-login MFA throttle after
@@ -371,12 +400,19 @@ async fn verify_handler(
         if let Some(idx) = found_idx {
             hashes.remove(idx);
             let new_json = serde_json::to_string(&hashes).unwrap_or_else(|_| "[]".into());
-            let new_encrypted = crate::crypto::encrypt(&new_json);
-            if let Err(e) =
-                crate::db::update_user_recovery_hashes(&state.db, &pending.sub, &new_encrypted)
+            match crate::crypto::encrypt(&new_json) {
+                Ok(new_encrypted) => {
+                    if let Err(e) = crate::db::update_user_recovery_hashes(
+                        &state.db,
+                        &pending.sub,
+                        &new_encrypted,
+                    )
                     .await
-            {
-                tracing::warn!(error = %e, "failed to burn recovery code");
+                    {
+                        tracing::warn!(error = %e, "failed to burn recovery code");
+                    }
+                }
+                Err(error) => tracing::error!(%error, "failed to encrypt recovery hashes"),
             }
             used_recovery = true;
             true
@@ -458,6 +494,20 @@ async fn disable_handler(
     if row.totp_enabled == 0 {
         return (StatusCode::OK, "already disabled").into_response();
     }
+    let now = crate::now_unix();
+    if let crate::throttle::CheckResult::Locked { retry_after_secs } =
+        state.mfa_disable_throttle.check(&claims.sub, now)
+    {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            [(
+                axum::http::header::RETRY_AFTER,
+                retry_after_secs.to_string(),
+            )],
+            "too many failed attempts; try again later",
+        )
+            .into_response();
+    }
     // The stored `totp_secret` is AES-GCM ciphertext (`v1:...`) since
     // the at-rest encryption rolled in. Decrypt before handing to
     // `verify_totp`, which expects a base32 string. Without this the
@@ -469,8 +519,10 @@ async fn disable_handler(
         None => return (StatusCode::BAD_REQUEST, "totp not enabled").into_response(),
     };
     if !verify_totp(secret, &body.code) {
+        state.mfa_disable_throttle.record_failure(&claims.sub, now);
         return (StatusCode::UNAUTHORIZED, "invalid code").into_response();
     }
+    state.mfa_disable_throttle.record_success(&claims.sub);
     if let Err(e) = crate::db::clear_user_totp(&state.db, &claims.sub).await {
         tracing::error!(error = %e, "failed to disable totp");
         return (StatusCode::INTERNAL_SERVER_ERROR, "db error").into_response();
@@ -479,7 +531,6 @@ async fn disable_handler(
     // other sessions the user has open — defence-in-depth against the
     // case where one of them was leaked and the 2FA-removal is part
     // of an attacker's lock-down sequence.
-    let now = crate::now_unix();
     let _ = crate::db::bump_session_epoch(&state.db, &claims.sub, now).await;
     crate::db::record_audit(
         &state.db,

@@ -9,7 +9,7 @@ use axum_extra::extract::cookie::CookieJar;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-use crate::{AppState, auth::verify_token, db};
+use crate::{AppState, auth, db};
 
 #[derive(Serialize)]
 struct TokenRow {
@@ -42,16 +42,8 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/revoke", post(revoke_token))
 }
 
-fn require_auth(jar: &CookieJar) -> Option<String> {
-    if std::env::var("JWT_SECRET").unwrap_or_default() == "dev" {
-        return Some("dev".to_string());
-    }
-    let cookie = jar.get("auth_token")?;
-    if verify_token(cookie.value()) {
-        crate::auth::user_from_token(cookie.value())
-    } else {
-        None
-    }
+async fn require_auth(jar: &CookieJar, state: &AppState) -> Option<String> {
+    auth::current_user(jar, &state.db).await.ok().map(|claims| claims.sub)
 }
 
 fn preview(token: &str) -> String {
@@ -72,7 +64,7 @@ fn preview(token: &str) -> String {
 }
 
 async fn list_tokens(jar: CookieJar, State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    if require_auth(&jar).is_none() {
+    if require_auth(&jar, &state).await.is_none() {
         return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
     }
     let rows = match db::list_tokens(&state.db).await {
@@ -102,7 +94,7 @@ async fn revoke_token(
     State(state): State<Arc<AppState>>,
     Json(req): Json<RevokeRequest>,
 ) -> impl IntoResponse {
-    let Some(actor) = require_auth(&jar) else {
+    let Some(actor) = require_auth(&jar, &state).await else {
         return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
     };
     if req.token.is_none() && req.hostname.is_none() {

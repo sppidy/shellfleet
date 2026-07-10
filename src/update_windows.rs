@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use shared::Message;
 use std::{str::FromStr, sync::Arc};
 
-use crate::{AppState, auth::verify_token, db};
+use crate::{AppState, auth, db};
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
@@ -47,16 +47,8 @@ fn default_enabled() -> bool {
     true
 }
 
-fn require_auth(jar: &CookieJar) -> Option<String> {
-    if std::env::var("JWT_SECRET").unwrap_or_default() == "dev" {
-        return Some("dev".to_string());
-    }
-    let cookie = jar.get("auth_token")?;
-    if verify_token(cookie.value()) {
-        crate::auth::user_from_token(cookie.value())
-    } else {
-        None
-    }
+async fn require_auth(jar: &CookieJar, state: &AppState) -> Option<String> {
+    auth::current_user(jar, &state.db).await.ok().map(|claims| claims.sub)
 }
 
 fn next_run(cron_expr: &str) -> Option<i64> {
@@ -90,7 +82,7 @@ fn to_out(row: db::UpdateWindowRow) -> WindowOut {
 }
 
 async fn list_handler(jar: CookieJar, State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    if require_auth(&jar).is_none() {
+    if require_auth(&jar, &state).await.is_none() {
         return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
     }
     match db::list_update_windows(&state.db).await {
@@ -110,7 +102,7 @@ async fn upsert_handler(
     State(state): State<Arc<AppState>>,
     Json(body): Json<UpsertBody>,
 ) -> impl IntoResponse {
-    let Some(actor) = require_auth(&jar) else {
+    let Some(actor) = require_auth(&jar, &state).await else {
         return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
     };
     if let Err(e) = validate_cron(&body.cron_expr) {
@@ -150,7 +142,7 @@ async fn delete_handler(
     State(state): State<Arc<AppState>>,
     Path(agent_id): Path<String>,
 ) -> impl IntoResponse {
-    let Some(actor) = require_auth(&jar) else {
+    let Some(actor) = require_auth(&jar, &state).await else {
         return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
     };
     match db::delete_update_window(&state.db, &agent_id).await {
@@ -189,7 +181,7 @@ async fn run_now_handler(
     Path(agent_id): Path<String>,
     Query(q): Query<RunNowQuery>,
 ) -> impl IntoResponse {
-    let Some(actor) = require_auth(&jar) else {
+    let Some(actor) = require_auth(&jar, &state).await else {
         return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
     };
     let agents = state.agents.lock().await;

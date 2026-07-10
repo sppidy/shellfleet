@@ -4,7 +4,7 @@ use rand::{Rng, distributions::Alphanumeric};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-use crate::{AppState, auth::verify_token, db};
+use crate::{AppState, auth, db};
 
 /// Access-token lifetime. Short enough that a stolen access token
 /// is useless within an hour; long enough that a healthy agent
@@ -264,16 +264,9 @@ async fn approve_device(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<ApproveDeviceRequest>,
 ) -> impl IntoResponse {
-    let mut actor: Option<String> = None;
-    if std::env::var("JWT_SECRET").unwrap_or_default() == "dev" {
-        actor = Some("dev".to_string());
-    } else if let Some(cookie) = jar.get("auth_token") {
-        if verify_token(cookie.value()) {
-            actor = crate::auth::user_from_token(cookie.value());
-        }
-    }
-    let Some(actor) = actor else {
-        return (axum::http::StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+    let actor = match auth::current_user(&jar, &state.db).await {
+        Ok(claims) => claims.sub,
+        Err(err) => return err.into_response(),
     };
 
     let now = crate::now_unix();

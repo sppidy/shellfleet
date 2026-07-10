@@ -49,10 +49,11 @@ fn ee_ctx() -> Option<String> {
 /// `{ available: bool }` — whether the pending user has a registered passkey.
 /// Any negative (no EE, unlicensed, no creds, error) returns false so the UI
 /// simply doesn't advertise the option.
-async fn available_handler(jar: CookieJar) -> impl IntoResponse {
+async fn available_handler(jar: CookieJar, State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let deny = || Json(serde_json::json!({ "available": false }));
-    let Some(pending) = auth::pending_mfa_claims(&jar) else {
-        return deny().into_response();
+    let pending = match auth::pending_mfa_user(&jar, &state.db).await {
+        Ok(pending) => pending,
+        Err(_) => return deny().into_response(),
     };
     let Some(url) = ee_ctx() else {
         return deny().into_response();
@@ -82,9 +83,10 @@ async fn available_handler(jar: CookieJar) -> impl IntoResponse {
 /// Forward the assertion-begin to EE, carrying the pending login. Returns the
 /// EE JSON ({ state_id, options }) verbatim for the browser to feed to
 /// `navigator.credentials.get`.
-async fn begin_handler(jar: CookieJar) -> impl IntoResponse {
-    let Some(pending) = auth::pending_mfa_claims(&jar) else {
-        return (StatusCode::UNAUTHORIZED, "no pending mfa").into_response();
+async fn begin_handler(jar: CookieJar, State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let pending = match auth::pending_mfa_user(&jar, &state.db).await {
+        Ok(pending) => pending,
+        Err(error) => return error.into_response(),
     };
     let Some(url) = ee_ctx() else {
         return (StatusCode::SERVICE_UNAVAILABLE, "passkeys require EE").into_response();
@@ -124,8 +126,9 @@ async fn finish_handler(
     if auth::is_dev_mode() {
         return Json(serde_json::json!({ "ok": true })).into_response();
     }
-    let Some(pending) = auth::pending_mfa_claims(&jar) else {
-        return (StatusCode::UNAUTHORIZED, "no pending mfa").into_response();
+    let pending = match auth::pending_mfa_user(&jar, &state.db).await {
+        Ok(pending) => pending,
+        Err(error) => return error.into_response(),
     };
     let Some(url) = ee_ctx() else {
         return (StatusCode::SERVICE_UNAVAILABLE, "passkeys require EE").into_response();
@@ -166,10 +169,7 @@ async fn finish_handler(
 
     // EE cryptographically verified the assertion for the pending login.
     // Issue the same mfa-satisfied session TOTP produces (role from the DB).
-    let role = match crate::db::get_user(&state.db, &pending.sub).await {
-        Ok(Some(r)) => auth::Role::parse(&r.role),
-        _ => auth::Role::parse(&pending.role),
-    };
+    let role = auth::Role::parse(&pending.role);
     let token = match auth::issue_jwt(&pending.sub, role, true, 24 * 3600) {
         Ok(t) => t,
         Err(e) => {
@@ -269,6 +269,22 @@ async fn login_finish_handler(
         Some(c) if c.mfa => c,
         _ => return (StatusCode::BAD_GATEWAY, "invalid session token from EE").into_response(),
     };
+    let current = match crate::db::get_user(&state.db, &claims.sub).await {
+        Ok(Some(row)) if claims.iat >= row.session_epoch => row,
+        Ok(Some(_)) => {
+            return (StatusCode::UNAUTHORIZED, "session revoked — please sign in again")
+                .into_response();
+        }
+        Ok(None) => return (StatusCode::BAD_GATEWAY, "unknown session user from EE").into_response(),
+        Err(error) => {
+            tracing::error!(%error, login = %claims.sub, "passkey login session verification failed");
+            return (StatusCode::SERVICE_UNAVAILABLE, "session verification unavailable")
+                .into_response();
+        }
+    };
+    if auth::Role::parse(&claims.role) != auth::Role::parse(&current.role) {
+        return (StatusCode::BAD_GATEWAY, "stale session role from EE").into_response();
+    }
     crate::db::record_audit(
         &state.db,
         crate::now_unix(),

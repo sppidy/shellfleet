@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use shared::{HealthProbeKind, HealthProbeSpec, Message};
 use std::sync::Arc;
 
-use crate::{AppState, auth::verify_token, db};
+use crate::{AppState, auth, db};
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
@@ -97,16 +97,8 @@ fn default_true() -> bool {
     true
 }
 
-fn require_auth(jar: &CookieJar) -> Option<String> {
-    if std::env::var("JWT_SECRET").unwrap_or_default() == "dev" {
-        return Some("dev".to_string());
-    }
-    let cookie = jar.get("auth_token")?;
-    if verify_token(cookie.value()) {
-        crate::auth::user_from_token(cookie.value())
-    } else {
-        None
-    }
+async fn require_auth(jar: &CookieJar, state: &AppState) -> Option<String> {
+    auth::current_user(jar, &state.db).await.ok().map(|claims| claims.sub)
 }
 
 fn parse_kind(s: &str) -> Option<HealthProbeKind> {
@@ -155,7 +147,7 @@ pub async fn push_to_agent(state: &AppState, agent_id: &str) {
 }
 
 async fn list_handler(jar: CookieJar, State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    if require_auth(&jar).is_none() {
+    if require_auth(&jar, &state).await.is_none() {
         return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
     }
     match db::list_health_probes(&state.db).await {
@@ -175,7 +167,7 @@ async fn upsert_handler(
     State(state): State<Arc<AppState>>,
     Json(body): Json<UpsertBody>,
 ) -> impl IntoResponse {
-    let Some(actor) = require_auth(&jar) else {
+    let Some(actor) = require_auth(&jar, &state).await else {
         return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
     };
     if parse_kind(&body.kind).is_none() {
@@ -240,7 +232,7 @@ async fn delete_handler(
     State(state): State<Arc<AppState>>,
     Path(id): Path<i64>,
 ) -> impl IntoResponse {
-    let Some(actor) = require_auth(&jar) else {
+    let Some(actor) = require_auth(&jar, &state).await else {
         return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
     };
     let removed = match db::delete_health_probe(&state.db, id).await {
@@ -277,7 +269,7 @@ struct HostSnapshot {
 }
 
 async fn snapshot_handler(jar: CookieJar, State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    if require_auth(&jar).is_none() {
+    if require_auth(&jar, &state).await.is_none() {
         return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
     }
     let rows = match db::list_health_probes(&state.db).await {

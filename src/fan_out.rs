@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use shared::Message;
 use std::sync::Arc;
 
-use crate::{AppState, auth::verify_token, db};
+use crate::{AppState, auth, db};
 
 /// Fan-out kinds supported in v1.
 pub const KIND_APT_STATUS: &str = "apt-status";
@@ -27,16 +27,8 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/{id}", get(get_handler))
 }
 
-fn require_auth(jar: &CookieJar) -> Option<String> {
-    if std::env::var("JWT_SECRET").unwrap_or_default() == "dev" {
-        return Some("dev".to_string());
-    }
-    let cookie = jar.get("auth_token")?;
-    if verify_token(cookie.value()) {
-        crate::auth::user_from_token(cookie.value())
-    } else {
-        None
-    }
+async fn require_auth(jar: &CookieJar, state: &AppState) -> Option<String> {
+    auth::current_user(jar, &state.db).await.ok().map(|claims| claims.sub)
 }
 
 #[derive(Deserialize)]
@@ -74,7 +66,7 @@ fn message_for(kind: &str, package: Option<String>) -> Option<Message> {
 }
 
 async fn list_handler(jar: CookieJar, State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    if require_auth(&jar).is_none() {
+    if require_auth(&jar, &state).await.is_none() {
         return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
     }
     match db::list_fan_out_runs(&state.db, 50).await {
@@ -91,7 +83,7 @@ async fn get_handler(
     State(state): State<Arc<AppState>>,
     Path(id): Path<i64>,
 ) -> impl IntoResponse {
-    if require_auth(&jar).is_none() {
+    if require_auth(&jar, &state).await.is_none() {
         return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
     }
     let run = match db::get_fan_out_run(&state.db, id).await {
@@ -113,7 +105,7 @@ async fn create_handler(
     State(state): State<Arc<AppState>>,
     Json(body): Json<CreateBody>,
 ) -> impl IntoResponse {
-    let Some(actor) = require_auth(&jar) else {
+    let Some(actor) = require_auth(&jar, &state).await else {
         return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
     };
     let Some(message_template) = message_for(&body.kind, body.package.clone()) else {

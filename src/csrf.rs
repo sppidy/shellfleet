@@ -17,9 +17,15 @@ use axum::{
 };
 use rand::RngCore;
 
-const CSRF_COOKIE: &str = "csrf";
 const CSRF_HEADER: &str = "x-csrf";
-const AUTH_COOKIE: &str = "auth_token";
+
+fn csrf_cookie_name() -> &'static str {
+    if crate::auth::cookie_secure() {
+        "__Host-csrf"
+    } else {
+        "csrf"
+    }
+}
 
 fn random_token() -> String {
     let mut bytes = [0u8; 24];
@@ -55,7 +61,7 @@ fn set_csrf_cookie(resp: &mut Response<Body>, token: &str) {
     } else {
         ""
     };
-    let value = format!("{CSRF_COOKIE}={token}; Path=/; SameSite=Strict{secure_attr}");
+    let value = format!("{}={token}; Path=/; SameSite=Strict{secure_attr}", csrf_cookie_name());
     if let Ok(hv) = HeaderValue::from_str(&value) {
         resp.headers_mut()
             .append(axum::http::header::SET_COOKIE, hv);
@@ -73,8 +79,8 @@ fn tokens_match(header: &str, cookie: &str) -> bool {
 }
 
 pub async fn middleware(req: Request, next: Next) -> Response<Body> {
-    let auth_present = cookie_value(&req, AUTH_COOKIE).is_some();
-    let csrf_cookie = cookie_value(&req, CSRF_COOKIE).map(|s| s.to_string());
+    let auth_present = cookie_value(&req, crate::auth::session_cookie_name()).is_some();
+    let csrf_cookie = cookie_value(&req, csrf_cookie_name()).map(|s| s.to_string());
 
     if auth_present && is_mutating(req.method()) {
         let header_val = req

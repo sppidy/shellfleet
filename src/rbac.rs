@@ -91,41 +91,18 @@ pub async fn middleware(
         return next.run(req).await;
     }
 
-    let cookie = match jar.get("auth_token") {
-        Some(c) => c,
-        None => return unauthorized("Unauthorized"),
+    let claims = match auth::current_user(&jar, &state.db).await {
+        Ok(claims) => claims,
+        Err((status, reason)) if status == StatusCode::FORBIDDEN => return forbidden(reason),
+        Err((_, reason)) => return unauthorized(reason),
     };
-    let claims = match auth::claims_from_token(cookie.value()) {
-        Some(c) => c,
-        None => return unauthorized("Unauthorized"),
-    };
-    if !claims.mfa {
-        return forbidden("MFA required");
-    }
-
-    // Single DB lookup that handles both the session-epoch invalidation
-    // check and the role re-resolution. Avoids a second hit for the
-    // mutating-method branch.
-    let user_row = crate::db::get_user(&state.db, &claims.sub)
-        .await
-        .ok()
-        .flatten();
-    if let Some(ref row) = user_row {
-        if claims.iat < row.session_epoch {
-            return unauthorized("session revoked — please sign in again");
-        }
-    }
 
     // Per-user API key self-service: viewers may create/revoke/update their OWN
     // keys. EE scopes every mutation by the CE-injected login, so this only
     // lets a viewer manage their own keys — never escalation. All other guards
     // (auth, session-epoch, MFA above) still applied.
     if is_mutating(&method) && !is_api_keys_path(&path) {
-        let role_str = user_row
-            .as_ref()
-            .map(|r| r.role.clone())
-            .unwrap_or_else(|| claims.role.clone());
-        if auth::Role::parse(&role_str) != auth::Role::Admin {
+        if auth::Role::parse(&claims.role) != auth::Role::Admin {
             return forbidden("viewer role: read-only");
         }
     }

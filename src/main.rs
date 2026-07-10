@@ -155,6 +155,9 @@ pub struct AppState {
     /// against an attacker who has stolen a pending-MFA cookie and is
     /// brute-forcing the 6-digit TOTP space.
     pub mfa_throttle: throttle::Throttle,
+    /// Separate throttle for MFA removal attempts. A stolen verified
+    /// session must not get unlimited chances to disable the factor.
+    pub mfa_disable_throttle: throttle::Throttle,
     /// Per-IP throttle for /api/device/approve. The 8-char user_code
     /// has only ~10^9 entropy and could otherwise be brute-forced.
     pub device_approve_throttle: throttle::Throttle,
@@ -390,15 +393,24 @@ async fn me_handler(jar: CookieJar, State(state): State<Arc<AppState>>) -> impl 
         )
             .into_response();
     }
-    let Some(cookie) = jar.get("auth_token") else {
+    let Some(cookie) = jar.get(auth::session_cookie_name()) else {
         return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
     };
     let Some(claims) = auth::claims_from_token(cookie.value()) else {
         return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
     };
     let (role, mfa_enabled) = match db::get_user(&state.db, &claims.sub).await {
-        Ok(Some(row)) => (row.role, row.totp_enabled != 0),
-        _ => (claims.role.clone(), false),
+        Ok(Some(row)) if claims.iat >= row.session_epoch => (row.role, row.totp_enabled != 0),
+        Ok(Some(_)) => {
+            return (StatusCode::UNAUTHORIZED, "session revoked — please sign in again")
+                .into_response()
+        }
+        Ok(None) => return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response(),
+        Err(error) => {
+            tracing::error!(%error, login = %claims.sub, "session verification failed for /api/me");
+            return (StatusCode::SERVICE_UNAVAILABLE, "session verification unavailable")
+                .into_response();
+        }
     };
     (
         StatusCode::OK,
@@ -507,6 +519,7 @@ async fn main() {
         ui_id_counter: AtomicU64::new(0),
         db: pool,
         mfa_throttle: throttle::Throttle::new(),
+        mfa_disable_throttle: throttle::Throttle::new(),
         device_approve_throttle: throttle::Throttle::new(),
         anon_ip_limiter: throttle::IpBucketLimiter::new(),
         scheduled_apt_runs: Mutex::new(HashSet::new()),
@@ -750,7 +763,8 @@ async fn agent_ws_handler(
     let is_approved = db::token_exists(&state.db, &token).await;
 
     let legacy_token = std::env::var("AGENT_SECRET").unwrap_or_default();
-    let legacy_match = !legacy_token.is_empty() && token == legacy_token;
+    let legacy_match = !legacy_token.is_empty()
+        && subtle::ConstantTimeEq::ct_eq(token.as_bytes(), legacy_token.as_bytes()).into();
 
     if !legacy_match && !is_approved {
         tracing::warn!("unauthorized agent connection attempt");
@@ -796,7 +810,7 @@ async fn ui_ws_handler(
     axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<SocketAddr>,
     State(state): State<Arc<AppState>>,
 ) -> impl IntoResponse {
-    let dev_mode = std::env::var("JWT_SECRET").unwrap_or_default() == "dev";
+    let dev_mode = auth::is_dev_mode();
 
     // 1. Origin allow-list. Browsers always send Origin on a WS upgrade
     //    they initiated; absence of Origin from a browser is a strong
@@ -836,7 +850,7 @@ async fn ui_ws_handler(
     let (login, initial_role, token_iat) = if dev_mode {
         ("dev".to_string(), auth::Role::Admin, 0_i64)
     } else {
-        let Some(cookie) = jar.get("auth_token") else {
+        let Some(cookie) = jar.get(auth::session_cookie_name()) else {
             tracing::warn!("ui ws: no auth cookie");
             return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
         };
@@ -961,7 +975,12 @@ async fn handle_agent_socket(socket: WebSocket, state: Arc<AppState>, token: Str
                     // stream. The shared legacy AGENT_SECRET is exempt (it
                     // intentionally serves many hosts).
                     let legacy_token = std::env::var("AGENT_SECRET").unwrap_or_default();
-                    let is_legacy = !legacy_token.is_empty() && token == legacy_token;
+                    let is_legacy = !legacy_token.is_empty()
+                        && subtle::ConstantTimeEq::ct_eq(
+                            token.as_bytes(),
+                            legacy_token.as_bytes(),
+                        )
+                        .into();
                     if !is_legacy {
                         if let Ok(Some(bound)) = db::token_hostname(&state.db, &token).await {
                             if !bound.is_empty() && bound != hostname {
@@ -983,15 +1002,31 @@ async fn handle_agent_socket(socket: WebSocket, state: Arc<AppState>, token: Str
                             }
                         }
                     }
-                    // Protocol-version skew is advisory (legacy 0 is allowed);
-                    // surface it so an incompatible agent isn't silent.
+                    // Protocol version 0 predates explicit versioning and is
+                    // retained only for legacy agents. A declared mismatch
+                    // must not join because version-gated messages can be
+                    // interpreted differently on each side.
                     if protocol_version != 0 && protocol_version != shared::PROTOCOL_VERSION {
                         tracing::warn!(
                             %hostname,
                             got = protocol_version,
                             expected = shared::PROTOCOL_VERSION,
-                            "agent protocol-version skew"
+                            "agent protocol-version mismatch — rejecting"
                         );
+                        db::record_audit(
+                            &state.db,
+                            now_unix(),
+                            None,
+                            None,
+                            "agent.register",
+                            false,
+                            Some(&format!(
+                                "protocol_version={protocol_version}, expected={}",
+                                shared::PROTOCOL_VERSION
+                            )),
+                        )
+                        .await;
+                        break;
                     }
                     let id = format!("{}-id", hostname);
                     agent_id_opt = Some(id.clone());

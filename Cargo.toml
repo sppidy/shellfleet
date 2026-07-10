@@ -35,6 +35,7 @@ rustls-pemfile = "2"
 
 # TOTP (RFC 6238) + recovery-code hashing for the 2FA flow.
 hmac = "0.12"
+hkdf = "0.12"
 sha1 = "0.10"
 sha2 = "0.10"
 data-encoding = "2.11"

@@ -195,7 +195,12 @@ pub async fn require_key_action(
                     ));
                 }
                 "Allow" => allowed = true,
-                _ => {}
+                _ => {
+                    return Err((
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "unknown policy effect".into(),
+                    ));
+                }
             }
         }
     }

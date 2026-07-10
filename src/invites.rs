@@ -152,25 +152,21 @@ async fn accept_invite(
     }
 
     // If the user is already logged in, redeem immediately
-    if let Some(cookie) = jar.get("auth_token") {
-        if let Some(claims) = auth::claims_from_token(cookie.value()) {
-            if claims.mfa {
-                // Redeem the invite for this user
-                let _ = db::redeem_invite(&state.db, &code, &claims.sub).await;
-                db::record_audit(
-                    &state.db,
-                    now,
-                    Some(&claims.sub),
-                    None,
-                    "invite.redeemed",
-                    true,
-                    None,
-                )
-                .await;
-                let ui_url = std::env::var("UI_URL").unwrap_or_else(|_| "/".into());
-                return Redirect::temporary(&ui_url).into_response();
-            }
-        }
+    if let Ok(claims) = auth::current_user(&jar, &state.db).await {
+        // Redeem the invite for this user
+        let _ = db::redeem_invite(&state.db, &code, &claims.sub).await;
+        db::record_audit(
+            &state.db,
+            now,
+            Some(&claims.sub),
+            None,
+            "invite.redeemed",
+            true,
+            None,
+        )
+        .await;
+        let ui_url = std::env::var("UI_URL").unwrap_or_else(|_| "/".into());
+        return Redirect::temporary(&ui_url).into_response();
     }
 
     // Not logged in — redirect to login with invite code in a cookie/param

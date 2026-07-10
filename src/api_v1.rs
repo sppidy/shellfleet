@@ -413,7 +413,10 @@ async fn list_users(headers: HeaderMap, State(state): State<Arc<AppState>>) -> i
     }
     match db::list_users(&state.db).await {
         Ok(users) => axum::Json(users).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")).into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "api v1 list users failed");
+            (StatusCode::INTERNAL_SERVER_ERROR, "db error").into_response()
+        }
     }
 }
 
@@ -516,7 +519,10 @@ async fn export_audit(
     let limit = q.limit.unwrap_or(200).clamp(1, 10000);
     match db::recent_audit(&state.db, limit).await {
         Ok(rows) => axum::Json(rows).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")).into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "api v1 audit export failed");
+            (StatusCode::INTERNAL_SERVER_ERROR, "db error").into_response()
+        }
     }
 }
 

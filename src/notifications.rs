@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use std::sync::Arc;
 
-use crate::{AppState, auth::verify_token, db};
+use crate::{AppState, auth, db};
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
@@ -25,16 +25,8 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/{id}", delete(delete_handler))
 }
 
-fn require_auth(jar: &CookieJar) -> Option<String> {
-    if std::env::var("JWT_SECRET").unwrap_or_default() == "dev" {
-        return Some("dev".into());
-    }
-    let cookie = jar.get("auth_token")?;
-    if verify_token(cookie.value()) {
-        crate::auth::user_from_token(cookie.value())
-    } else {
-        None
-    }
+async fn require_auth(jar: &CookieJar, state: &AppState) -> Option<String> {
+    auth::current_user(jar, &state.db).await.ok().map(|claims| claims.sub)
 }
 
 #[derive(Deserialize)]
@@ -50,7 +42,7 @@ async fn list_handler(
     State(state): State<Arc<AppState>>,
     Query(q): Query<ListQuery>,
 ) -> impl IntoResponse {
-    if require_auth(&jar).is_none() {
+    if require_auth(&jar, &state).await.is_none() {
         return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
     }
     let limit = q.limit.unwrap_or(100).clamp(1, 500);
@@ -72,7 +64,7 @@ async fn unread_count_handler(
     jar: CookieJar,
     State(state): State<Arc<AppState>>,
 ) -> impl IntoResponse {
-    if require_auth(&jar).is_none() {
+    if require_auth(&jar, &state).await.is_none() {
         return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
     }
     match db::unread_notification_count(&state.db).await {
@@ -89,7 +81,7 @@ async fn mark_read_handler(
     State(state): State<Arc<AppState>>,
     Path(id): Path<i64>,
 ) -> impl IntoResponse {
-    if require_auth(&jar).is_none() {
+    if require_auth(&jar, &state).await.is_none() {
         return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
     }
     match db::mark_notification_read(&state.db, id, crate::now_unix()).await {
@@ -106,7 +98,7 @@ async fn mark_all_read_handler(
     jar: CookieJar,
     State(state): State<Arc<AppState>>,
 ) -> impl IntoResponse {
-    if require_auth(&jar).is_none() {
+    if require_auth(&jar, &state).await.is_none() {
         return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
     }
     match db::mark_all_notifications_read(&state.db, crate::now_unix()).await {
@@ -123,7 +115,7 @@ async fn delete_handler(
     State(state): State<Arc<AppState>>,
     Path(id): Path<i64>,
 ) -> impl IntoResponse {
-    if require_auth(&jar).is_none() {
+    if require_auth(&jar, &state).await.is_none() {
         return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
     }
     match db::delete_notification(&state.db, id).await {

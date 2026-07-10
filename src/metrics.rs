@@ -552,14 +552,15 @@ async fn query_handler(
                 .mfa_throttle
                 .record_failure(&format!("metrics:{}", claims.sub), now);
             tracing::warn!(error = %e, panel = %body.panel, "metrics: prom request failed");
-            return (StatusCode::BAD_GATEWAY, format!("prometheus: {e}")).into_response();
+            return (StatusCode::BAD_GATEWAY, "metrics upstream unavailable").into_response();
         }
     };
     let code = resp.status();
     let raw = match resp.text().await {
         Ok(t) => t,
         Err(e) => {
-            return (StatusCode::BAD_GATEWAY, format!("prometheus body: {e}")).into_response();
+            tracing::warn!(error = %e, panel = %body.panel, "metrics response read failed");
+            return (StatusCode::BAD_GATEWAY, "metrics upstream response failed").into_response();
         }
     };
     if !code.is_success() {
@@ -574,7 +575,8 @@ async fn query_handler(
     let parsed: serde_json::Value = match serde_json::from_str(&raw) {
         Ok(v) => v,
         Err(e) => {
-            return (StatusCode::BAD_GATEWAY, format!("prometheus json: {e}")).into_response();
+            tracing::warn!(error = %e, panel = %body.panel, "metrics response parse failed");
+            return (StatusCode::BAD_GATEWAY, "metrics upstream returned invalid data").into_response();
         }
     };
 

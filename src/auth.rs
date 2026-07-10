@@ -36,7 +36,10 @@ use std::sync::Arc;
 
 use crate::AppState;
 
-const OAUTH_STATE_COOKIE: &str = "oauth_state";
+const SESSION_COOKIE: &str = "__Host-auth_token";
+const SESSION_COOKIE_DEV: &str = "auth_token";
+const OAUTH_STATE_COOKIE: &str = "__Host-oauth_state";
+const OAUTH_STATE_COOKIE_DEV: &str = "oauth_state";
 /// Pending-MFA tokens are short-lived. Anything past 10 min and the
 /// user has to re-OAuth — minimal annoyance, large blast-radius
 /// reduction if a pending-MFA cookie ever leaks.
@@ -155,6 +158,25 @@ pub(crate) fn cookie_secure() -> bool {
     )
 }
 
+/// Cookie names use the `__Host-` prefix when their required `Secure` flag is
+/// enabled. Plain HTTP local development keeps the historical names because
+/// browsers correctly reject `__Host-` cookies without `Secure`.
+pub(crate) fn session_cookie_name() -> &'static str {
+    if cookie_secure() {
+        SESSION_COOKIE
+    } else {
+        SESSION_COOKIE_DEV
+    }
+}
+
+fn oauth_state_cookie_name() -> &'static str {
+    if cookie_secure() {
+        OAUTH_STATE_COOKIE
+    } else {
+        OAUTH_STATE_COOKIE_DEV
+    }
+}
+
 fn jwt_secret() -> String {
     // Production safety: any non-`dev` value is fine; an unset value
     // is fatal. `assert_jwt_secret_present` is called from `main`
@@ -239,7 +261,16 @@ fn random_oauth_state() -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-const INVITE_COOKIE: &str = "pending_invite";
+const INVITE_COOKIE: &str = "__Host-pending_invite";
+const INVITE_COOKIE_DEV: &str = "pending_invite";
+
+fn invite_cookie_name() -> &'static str {
+    if cookie_secure() {
+        INVITE_COOKIE
+    } else {
+        INVITE_COOKIE_DEV
+    }
+}
 
 #[derive(Deserialize)]
 struct LoginQuery {
@@ -250,7 +281,7 @@ struct LoginQuery {
 async fn login_handler(jar: CookieJar, Query(q): Query<LoginQuery>) -> impl IntoResponse {
     let mut jar = jar;
     if let Some(ref code) = q.invite {
-        let cookie = Cookie::build((INVITE_COOKIE, code.clone()))
+        let cookie = Cookie::build((invite_cookie_name(), code.clone()))
             .path("/")
             .http_only(true)
             .same_site(SameSite::Lax)
@@ -290,7 +321,7 @@ async fn login_handler(jar: CookieJar, Query(q): Query<LoginQuery>) -> impl Into
     // HttpOnly + SameSite=Lax + Secure so it travels back from GitHub
     // unmodified but isn't readable from JS.
     let state = random_oauth_state();
-    let cookie = Cookie::build((OAUTH_STATE_COOKIE, state.clone()))
+    let cookie = Cookie::build((oauth_state_cookie_name(), state.clone()))
         .path("/")
         .http_only(true)
         .same_site(SameSite::Lax)
@@ -311,12 +342,12 @@ async fn login_handler(jar: CookieJar, Query(q): Query<LoginQuery>) -> impl Into
 async fn logout_handler(jar: CookieJar, State(state): State<Arc<AppState>>) -> impl IntoResponse {
     // Best-effort: bump the session epoch so the JWT we just dropped
     // can't be replayed. Reads the cookie before clearing it.
-    if let Some(cookie) = jar.get("auth_token") {
+    if let Some(cookie) = jar.get(session_cookie_name()) {
         if let Some(claims) = claims_from_token_no_epoch_check(cookie.value()) {
             let _ = crate::db::bump_session_epoch(&state.db, &claims.sub, crate::now_unix()).await;
         }
     }
-    let mut cookie = Cookie::build(("auth_token", ""))
+    let mut cookie = Cookie::build((session_cookie_name(), ""))
         .path("/")
         .http_only(true)
         .same_site(SameSite::Lax)
@@ -333,7 +364,7 @@ async fn logout_handler(jar: CookieJar, State(state): State<Arc<AppState>>) -> i
 /// Build a session cookie for the given JWT. Centralized so the post-MFA
 /// reissue path uses the same flags as the OAuth callback.
 pub fn build_session_cookie(token: String) -> Cookie<'static> {
-    Cookie::build(("auth_token", token))
+    Cookie::build((session_cookie_name(), token))
         .path("/")
         .http_only(true)
         .same_site(SameSite::Lax)
@@ -384,9 +415,15 @@ async fn callback_handler(
     // `oauth_state` to a random 24-byte value; GitHub must echo it
     // back via the `state` query param. Any mismatch (or missing
     // cookie) is treated as a forgery attempt.
-    let cookie_state = jar.get(OAUTH_STATE_COOKIE).map(|c| c.value().to_string());
+    let cookie_state = jar
+        .get(oauth_state_cookie_name())
+        .map(|c| c.value().to_string());
     match &cookie_state {
-        Some(s) if s == &query.state => { /* ok */ }
+        Some(s)
+            if subtle::ConstantTimeEq::ct_eq(s.as_bytes(), query.state.as_bytes()).into() =>
+        {
+            /* ok */
+        }
         _ => {
             tracing::warn!(
                 got = %query.state,
@@ -511,7 +548,9 @@ async fn callback_handler(
     let user_count = crate::db::count_users(&state.db).await.unwrap_or(0);
 
     // Check for a pending invite — overrides the default role assignment
-    let invite_code = jar.get(INVITE_COOKIE).map(|c| c.value().to_string());
+    let invite_code = jar
+        .get(invite_cookie_name())
+        .map(|c| c.value().to_string());
     let invite_role = if let Some(ref code) = invite_code {
         match crate::db::get_invite(&state.db, code).await {
             Ok(Some(inv)) if inv.used_by.is_none() && now <= inv.expires_at => {
@@ -607,7 +646,7 @@ async fn callback_handler(
     let dest = format!("{ui_url}{redirect_path}");
 
     // Burn the OAuth state cookie now that we've consumed it.
-    let mut clear_state = Cookie::build((OAUTH_STATE_COOKIE, ""))
+    let mut clear_state = Cookie::build((oauth_state_cookie_name(), ""))
         .path("/")
         .http_only(true)
         .same_site(SameSite::Lax)
@@ -634,7 +673,7 @@ async fn callback_handler(
             )
             .await;
         }
-        let mut c = Cookie::build((INVITE_COOKIE, ""))
+        let mut c = Cookie::build((invite_cookie_name(), ""))
             .path("/")
             .http_only(true)
             .same_site(SameSite::Lax)
@@ -689,33 +728,6 @@ pub fn claims_from_token_no_epoch_check(token: &str) -> Option<Claims> {
     decode_claims(token).filter(|c| is_user_allowed(&c.sub))
 }
 
-/// Returns true if the token decodes, the subject is on the allowlist,
-/// AND the MFA challenge has been completed. Pending-MFA tokens are
-/// treated as unauthenticated for everything except the verify endpoint.
-///
-/// NB: this *does not* check the session_epoch — for a fast pre-DB
-/// path used by code that doesn't carry the pool. The DB-backed
-/// `current_user` / RBAC middleware path is the authoritative one and
-/// re-validates against `users.session_epoch`.
-pub fn verify_token(token: &str) -> bool {
-    decode_claims(token)
-        .map(|c| c.mfa && is_user_allowed(&c.sub))
-        .unwrap_or(false)
-}
-
-/// Returns the GitHub login from a fully-verified session cookie, or
-/// `None` if the token is missing, expired, not on the allowlist, or
-/// still pending MFA.
-pub fn user_from_token(token: &str) -> Option<String> {
-    decode_claims(token).and_then(|c| {
-        if c.mfa && is_user_allowed(&c.sub) {
-            Some(c.sub)
-        } else {
-            None
-        }
-    })
-}
-
 /// Returns the full Claims (role + mfa flag) regardless of MFA state.
 /// Callers that need to distinguish pending-vs-verified must inspect
 /// `claims.mfa`. **Does not** check session_epoch — most call sites
@@ -759,21 +771,29 @@ pub async fn current_user(
         return Ok(dev_claims());
     }
     let cookie = jar
-        .get("auth_token")
+        .get(session_cookie_name())
         .ok_or((StatusCode::UNAUTHORIZED, "Unauthorized"))?;
     let mut claims =
         claims_from_token(cookie.value()).ok_or((StatusCode::UNAUTHORIZED, "Unauthorized"))?;
     if !claims.mfa {
         return Err((StatusCode::FORBIDDEN, "MFA required"));
     }
-    if let Ok(Some(row)) = crate::db::get_user(db, &claims.sub).await {
-        if claims.iat < row.session_epoch {
+    match crate::db::get_user(db, &claims.sub).await {
+        Ok(Some(row)) if claims.iat >= row.session_epoch => claims.role = row.role,
+        Ok(Some(_)) => {
             return Err((
                 StatusCode::UNAUTHORIZED,
                 "session revoked — please sign in again",
             ));
         }
-        claims.role = row.role;
+        Ok(None) => return Err((StatusCode::UNAUTHORIZED, "Unauthorized")),
+        Err(error) => {
+            tracing::error!(%error, login = %claims.sub, "session verification failed");
+            return Err((
+                StatusCode::SERVICE_UNAVAILABLE,
+                "session verification unavailable",
+            ));
+        }
     }
     Ok(claims)
 }
@@ -792,14 +812,39 @@ pub async fn require_admin(
     }
 }
 
-/// CE: pending-MFA escape hatch — used by `/api/auth/mfa/verify` to
-/// look up the pre-MFA token without bouncing on the `mfa=false`
-/// state. Does NOT short-circuit dev mode (dev mode never has
-/// pending-MFA, so the caller checks `dev_mode()` itself).
-pub fn pending_mfa_claims(jar: &CookieJar) -> Option<Claims> {
-    let cookie = jar.get("auth_token")?;
-    let claims = claims_from_token(cookie.value())?;
-    if claims.mfa { None } else { Some(claims) }
+/// Resolve a pending-MFA token against the user row. Pending tokens need the
+/// same session-epoch protection as full sessions: otherwise a revoked token
+/// could still be exchanged for a fresh MFA-verified session.
+pub async fn pending_mfa_user(
+    jar: &CookieJar,
+    db: &sqlx::SqlitePool,
+) -> Result<Claims, (StatusCode, &'static str)> {
+    let cookie = jar
+        .get(session_cookie_name())
+        .ok_or((StatusCode::UNAUTHORIZED, "no pending mfa"))?;
+    let mut claims =
+        claims_from_token(cookie.value()).ok_or((StatusCode::UNAUTHORIZED, "no pending mfa"))?;
+    if claims.mfa {
+        return Err((StatusCode::UNAUTHORIZED, "no pending mfa"));
+    }
+    match crate::db::get_user(db, &claims.sub).await {
+        Ok(Some(row)) if claims.iat >= row.session_epoch => {
+            claims.role = row.role;
+            Ok(claims)
+        }
+        Ok(Some(_)) => Err((
+            StatusCode::UNAUTHORIZED,
+            "session revoked — please sign in again",
+        )),
+        Ok(None) => Err((StatusCode::UNAUTHORIZED, "Unauthorized")),
+        Err(error) => {
+            tracing::error!(%error, login = %claims.sub, "pending MFA session verification failed");
+            Err((
+                StatusCode::SERVICE_UNAVAILABLE,
+                "session verification unavailable",
+            ))
+        }
+    }
 }
 
 pub fn is_dev_mode() -> bool {

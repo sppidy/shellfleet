@@ -65,7 +65,10 @@ impl Throttle {
     /// Returns whether `key` is currently allowed to attempt the
     /// guarded action. Garbage-collects stale records on the way.
     pub fn check(&self, key: &str, now: i64) -> CheckResult {
-        let mut map = self.records.lock().unwrap();
+        let mut map = self.records.lock().unwrap_or_else(|poison| {
+            tracing::error!("throttle mutex poisoned; recovering state");
+            poison.into_inner()
+        });
         // Opportunistic GC. Cheap because `retain` is O(n) and n is
         // bounded by the number of distinct attackers in the last day.
         map.retain(|_, r| now - r.last_touched < RECORD_TTL_SECS);
@@ -79,7 +82,10 @@ impl Throttle {
     }
 
     pub fn record_failure(&self, key: &str, now: i64) {
-        let mut map = self.records.lock().unwrap();
+        let mut map = self.records.lock().unwrap_or_else(|poison| {
+            tracing::error!("throttle mutex poisoned; recovering state");
+            poison.into_inner()
+        });
         let r = map.entry(key.to_string()).or_default();
         r.fails = r.fails.saturating_add(1);
         r.last_touched = now;
@@ -89,7 +95,10 @@ impl Throttle {
     }
 
     pub fn record_success(&self, key: &str) {
-        let mut map = self.records.lock().unwrap();
+        let mut map = self.records.lock().unwrap_or_else(|poison| {
+            tracing::error!("throttle mutex poisoned; recovering state");
+            poison.into_inner()
+        });
         map.remove(key);
     }
 }
@@ -123,7 +132,10 @@ impl IpBucketLimiter {
 
     /// Spend one token. Returns true if the request is allowed.
     pub fn allow(&self, ip: &str, now: f64) -> bool {
-        let mut map = self.buckets.lock().unwrap();
+        let mut map = self.buckets.lock().unwrap_or_else(|poison| {
+            tracing::error!("IP limiter mutex poisoned; recovering state");
+            poison.into_inner()
+        });
         // Periodic GC: drop buckets idle for > RECORD_TTL_SECS.
         map.retain(|_, b| now - b.last_touched < RECORD_TTL_SECS as f64);
         let b = map.entry(ip.to_string()).or_insert_with(|| Bucket {
