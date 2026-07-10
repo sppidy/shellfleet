@@ -916,22 +916,22 @@ function ApplyView({ agentId }: { agentId: string }) {
   const [result, setResult] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
 
-  // Restore the operator's last-typed YAML across tab switches /
-  // reloads. Per-agent so cluster A's kustomize-output doesn't
-  // accidentally land in cluster B.
+  // Keep drafts only for the current browser session. Kubernetes manifests
+  // frequently contain Secrets, so they must not persist on disk across a
+  // logout or a later user of this browser profile.
   const draftKey = `${APPLY_DRAFT_KEY}.${agentId}`;
   useEffect(() => {
     try {
-      const saved = window.localStorage.getItem(draftKey);
+      const saved = window.sessionStorage.getItem(draftKey);
       if (saved) setYaml(saved);
     } catch {
-      /* ignore — sessionStorage / localStorage may be disabled */
+      /* ignore — sessionStorage may be disabled */
     }
      
   }, [draftKey]);
   useEffect(() => {
     try {
-      window.localStorage.setItem(draftKey, yaml);
+      window.sessionStorage.setItem(draftKey, yaml);
     } catch {
       /* ignore */
     }

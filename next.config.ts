@@ -6,6 +6,23 @@ const nextConfig: NextConfig = {
   // (1+ GB). The build copies node_modules into .next/standalone
   // automatically; the runner stage only needs that + .next/static + public.
   output: "standalone",
+  async headers() {
+    return [
+      {
+        source: "/(.*)",
+        headers: [
+          {
+            key: "Content-Security-Policy",
+            // Next's production bootstrap uses small inline scripts/styles;
+            // keep those while constraining every fetch, frame, object, and
+            // navigation target to the dashboard's intended boundaries.
+            value:
+              "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' https: wss:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self' https://github.com",
+          },
+        ],
+      },
+    ];
+  },
 };
 
 export default nextConfig;
