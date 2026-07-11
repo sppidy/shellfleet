@@ -31,10 +31,10 @@ grep -Fqx -- '  /usr/lib/docker/cli-plugins/ r,' "$root/agent/debian/apparmor/sh
 grep -Fqx -- '  /usr/lib/docker/cli-plugins/** r,' "$root/agent/debian/apparmor/shellfleet-agent"
 grep -Fqx -- '  /usr/libexec/docker/cli-plugins/ r,' "$root/agent/debian/apparmor/shellfleet-agent"
 grep -Fqx -- '  /usr/libexec/docker/cli-plugins/** r,' "$root/agent/debian/apparmor/shellfleet-agent"
-grep -Fqx -- '  /usr/lib/docker/cli-plugins/docker-compose ix,' "$root/agent/debian/apparmor/shellfleet-agent"
-grep -Fqx -- '  /usr/lib/docker/cli-plugins/docker-buildx ix,' "$root/agent/debian/apparmor/shellfleet-agent"
-grep -Fqx -- '  /usr/libexec/docker/cli-plugins/docker-compose ix,' "$root/agent/debian/apparmor/shellfleet-agent"
-grep -Fqx -- '  /usr/libexec/docker/cli-plugins/docker-buildx ix,' "$root/agent/debian/apparmor/shellfleet-agent"
+grep -Fqx -- '  /usr/lib/docker/cli-plugins/docker-compose rix,' "$root/agent/debian/apparmor/shellfleet-agent"
+grep -Fqx -- '  /usr/lib/docker/cli-plugins/docker-buildx rix,' "$root/agent/debian/apparmor/shellfleet-agent"
+grep -Fqx -- '  /usr/libexec/docker/cli-plugins/docker-compose rix,' "$root/agent/debian/apparmor/shellfleet-agent"
+grep -Fqx -- '  /usr/libexec/docker/cli-plugins/docker-buildx rix,' "$root/agent/debian/apparmor/shellfleet-agent"
 grep -q 'dbus (send, receive)' "$root/agent/debian/apparmor/shellfleet-agent"
 
 # The proxy stays root-owned and is reachable only via a socket owned by the
