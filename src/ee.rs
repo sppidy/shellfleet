@@ -240,18 +240,24 @@ async fn auth_resolve_handler(
 
     let now = crate::now_unix();
     let seat_limit = db::seat_limit(&state.db).await;
-    match db::upsert_login_with_seat_check(&state.db, &body.login, role, now, seat_limit).await {
-        Ok(db::SeatedUpsert::SeatCapReached) => {
-            return (StatusCode::FORBIDDEN, "seat cap reached").into_response();
-        }
-        Err(e) => {
-            tracing::error!(error = %e, "internal auth resolve: db error");
-            return (StatusCode::INTERNAL_SERVER_ERROR, "db error").into_response();
-        }
-        Ok(_) => {}
-    }
+    let user_row =
+        match db::upsert_login_with_seat_check(&state.db, &body.login, role, now, seat_limit).await
+        {
+            Ok(db::SeatedUpsert::SeatCapReached) => {
+                return (StatusCode::FORBIDDEN, "seat cap reached").into_response();
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "internal auth resolve: db error");
+                return (StatusCode::INTERNAL_SERVER_ERROR, "db error").into_response();
+            }
+            Ok(db::SeatedUpsert::Existing(row) | db::SeatedUpsert::Created(row)) => row,
+        };
 
-    let token = auth::issue_internal_jwt(&body.login, role, body.mfa);
+    // Existing CE users keep their persisted role. EE's SSO/passkey role is
+    // only a default for a newly-created row; minting a token from it would
+    // make a real admin look like a viewer and cause the passkey flow to fail
+    // its role-consistency check.
+    let token = auth::issue_internal_jwt(&user_row.login, &user_row.role, body.mfa);
     (StatusCode::OK, axum::Json(AuthResolveResponse { token })).into_response()
 }
 
