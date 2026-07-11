@@ -18,6 +18,13 @@ profile shellfleet-agent /usr/bin/shellfleet-agent flags=(attach_disconnected,me
   /dev/ptmx rw,
   /dev/pts/** rw,
   /run/dbus/system_bus_socket rw,
+  # Service discovery/control uses systemd's manager interface. systemd's
+  # native D-Bus authorization remains the privilege boundary for each call.
+  dbus (send, receive)
+      bus=system
+      path=/org/freedesktop/systemd1
+      interface=org.freedesktop.systemd1.Manager
+      peer=(name=org.freedesktop.systemd1),
   /run/shellfleet/approval-gate.sock rw,
   /proc/** r,
   /sys/** r,
