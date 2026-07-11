@@ -436,6 +436,12 @@ fn init_tracing() {
 
 #[tokio::main]
 async fn main() {
+    // rustls 0.23 needs an explicit process-wide CryptoProvider whenever
+    // more than one provider is compiled into the dependency graph. The
+    // agent installs `ring` before it constructs its mTLS client; do the
+    // same here before building the server-side mTLS listener.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     init_tracing();
 
     // Refuse to start with an obviously-bad JWT_SECRET. Catches the
