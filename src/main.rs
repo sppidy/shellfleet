@@ -420,10 +420,14 @@ async fn main() {
     let api_url = std::env::var("SERVER_API_URL")
         .unwrap_or_else(|_| "https://dashboard.example.com".to_string());
 
-    let mut token = if let Some(t) = read_token() {
-        t
-    } else if is_pair {
+    // An explicit pairing request must supersede any old token on disk. This
+    // is how an operator recovers from revoked credentials; preferring the
+    // stale token here would silently start the normal connection path and
+    // make `--pair` ineffective.
+    let mut token = if is_pair {
         pair(&api_url).await
+    } else if let Some(t) = read_token() {
+        t
     } else {
         eprintln!("No agent token found. Run `shellfleet-agent --pair` to pair this host.");
         std::process::exit(1);
