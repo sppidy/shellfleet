@@ -35,7 +35,9 @@ ProtectControlGroups=true
 ProtectClock=true
 ProtectHostname=true
 ProtectProc=invisible
-ProcSubset=pid
+# ProcSubset=pid hides /proc/meminfo, loadavg, uptime, and cpuinfo, which
+# are the agent's own host telemetry inputs. ProtectProc still hides other
+# users' processes.
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 RestrictNamespaces=true
 RestrictRealtime=true

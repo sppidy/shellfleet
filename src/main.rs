@@ -441,7 +441,7 @@ async fn main() {
     // reactive retry before giving up.
     if let Some(refresh) = read_refresh_token() {
         let expiry = read_token_expiry();
-        let stale = expiry.map_or(true, |e| e - now_unix() < REFRESH_PROACTIVE_SECS);
+        let stale = expiry.is_none_or(|e| e - now_unix() < REFRESH_PROACTIVE_SECS);
         if stale {
             println!("Access token near expiry, refreshing before connect...");
             if let Some(new_token) = refresh_token_pair(&api_url, &refresh).await {
