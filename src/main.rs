@@ -1,5 +1,6 @@
 mod app;
 mod client;
+mod credentials;
 mod identity;
 mod session;
 mod ui;
@@ -33,7 +34,7 @@ async fn run() -> Result<(), String> {
         Some("--help" | "-h" | "help")
     ) {
         println!(
-            "ShellFleet Operator Cockpit\n\nUSAGE:\n  shellfleet                 Open the trusted fleet TUI\n  shellfleet keygen [PATH]   Create an encrypted Ed25519 approver key\n\nENVIRONMENT:\n  SHELLFLEET_WS_URL           Dashboard /ui/ws URL\n  SHELLFLEET_AUTH_TOKEN       Current dashboard session JWT\n  SHELLFLEET_KEY_PASSPHRASE   Optional non-interactive key passphrase"
+            "ShellFleet Operator Cockpit\n\nUSAGE:\n  shellfleet                              Open the trusted fleet TUI\n  shellfleet login <dashboard-url>        Approve a browser-free CLI session\n  shellfleet logout                       Remove the local CLI session\n  shellfleet keygen [PATH]                Create an encrypted Ed25519 approver key\n\nENVIRONMENT:\n  SHELLFLEET_URL              Dashboard URL used by `login` when no argument is given\n  SHELLFLEET_WS_URL           Override the saved Dashboard /ui/ws URL\n  SHELLFLEET_AUTH_TOKEN       Override the saved CLI session (automation only)\n  SHELLFLEET_KEY_PASSPHRASE   Optional non-interactive key passphrase"
         );
         return Ok(());
     }
@@ -53,15 +54,18 @@ async fn run() -> Result<(), String> {
         println!("  shellfleet-approval-gate --enroll-approver operator {public}");
         return Ok(());
     }
+    if args.get(1).map(String::as_str) == Some("login") {
+        return credentials::login(args.get(2)).await;
+    }
+    if args.get(1).map(String::as_str) == Some("logout") {
+        return credentials::logout();
+    }
 
     let key_path = identity::default_key_path()?;
     let signer = identity::load(&key_path, &key_passphrase("Approver key passphrase: ")?)?;
     let home = std::env::var("HOME").map_err(|_| "HOME is not set")?;
     let pins = PathBuf::from(home).join(".config/shellfleet/host-pins.json");
-    let url = std::env::var("SHELLFLEET_WS_URL")
-        .unwrap_or_else(|_| "wss://dashboard.example.com/ui/ws".into());
-    let token = std::env::var("SHELLFLEET_AUTH_TOKEN")
-        .map_err(|_| "SHELLFLEET_AUTH_TOKEN must contain a current dashboard session JWT")?;
+    let (url, token) = credentials::connection()?;
     let (outgoing, mut incoming) = client::connect(&url, &token).await?;
     let mut app = App::new(signer, pins);
     let _ = outgoing.send(UiMessage::ListAgentsRequest);

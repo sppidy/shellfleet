@@ -37,13 +37,19 @@ sudo shellfleet-approval-gate --print-host-fingerprint
 sudo shellfleet-approval-gate --enroll-approver operator <BASE64_PUBLIC_KEY>
 ```
 
-Launch the cockpit with a current ShellFleet session JWT:
+Authorize the cockpit without copying a browser session token:
 
 ```bash
-export SHELLFLEET_WS_URL=wss://dashboard.example.com/ui/ws
-export SHELLFLEET_AUTH_TOKEN='<session-jwt>'
+shellfleet login https://dashboard.example.com
 shellfleet
 ```
+
+`login` displays an eight-character code. Open the displayed `/device?cli=1`
+page in an already-authenticated dashboard, approve the code, and the CLI saves
+an 8-hour session in `~/.config/shellfleet/cli-session.json` with mode `0600`.
+That token is accepted only by the operator WebSocket, not by browser or API
+routes. `shellfleet logout` removes it locally. Environment overrides remain
+available for non-interactive automation.
 
 The browser, CE server, EE sidecar, and network agent never receive the
 approver private key or root-session plaintext key.

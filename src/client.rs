@@ -20,10 +20,14 @@ pub async fn connect(
         .into_client_request()
         .map_err(|error| format!("invalid WebSocket URL: {error}"))?;
     request.headers_mut().insert(
-        "cookie",
-        format!("auth_token={auth_token}")
+        "authorization",
+        format!("Bearer {auth_token}")
             .parse()
             .map_err(|_| "invalid authentication token")?,
+    );
+    request.headers_mut().insert(
+        "x-shellfleet-cli",
+        "1".parse().map_err(|_| "invalid CLI marker")?,
     );
     let (stream, _) = connect_async(request)
         .await
