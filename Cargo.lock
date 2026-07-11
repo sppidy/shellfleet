@@ -3898,6 +3898,7 @@ dependencies = [
  "hkdf",
  "rand 0.8.6",
  "ratatui",
+ "reqwest",
  "rpassword",
  "serde",
  "serde_json",
