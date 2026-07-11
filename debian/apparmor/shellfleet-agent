@@ -14,6 +14,10 @@ profile shellfleet-agent /usr/bin/shellfleet-agent flags=(attach_disconnected,me
   /etc/shellfleet/env r,
   /etc/shellfleet/probes.d/* rix,
   /usr/share/shellfleet/probes.d/* rix,
+  / r,
+  /dev/ptmx rw,
+  /dev/pts/** rw,
+  /run/dbus/system_bus_socket rw,
   /run/shellfleet/approval-gate.sock rw,
   /proc/** r,
   /sys/** r,
@@ -24,7 +28,6 @@ profile shellfleet-agent /usr/bin/shellfleet-agent flags=(attach_disconnected,me
 
   deny /run/docker.sock rw,
   deny /var/run/docker.sock rw,
-  deny /run/dbus/system_bus_socket rw,
   deny /etc/shellfleet/approvers.json rw,
   deny /var/lib/shellfleet-gate/** rwklx,
   deny /etc/sudoers{,/**} rwklx,

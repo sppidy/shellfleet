@@ -24,6 +24,8 @@ CapabilityBoundingSet=
 AmbientCapabilities=
 PrivateTmp=true
 PrivateDevices=true
+# Interactive sessions need a pseudoterminal, but no other host device nodes.
+BindPaths=/dev/pts
 ProtectSystem=strict
 ProtectHome=yes
 ProtectKernelTunables=true
