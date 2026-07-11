@@ -27,6 +27,8 @@ test -f "$root/agent/debian/apparmor/shellfleet-approval-gate"
 test -f "$root/agent/debian/apparmor/shellfleet-docker-proxy"
 grep -q 'deny /run/docker.sock' "$root/agent/debian/apparmor/shellfleet-agent"
 grep -q '/run/shellfleet/docker.sock rw,' "$root/agent/debian/apparmor/shellfleet-agent"
+grep -Fqx -- '  /usr/lib/docker/cli-plugins/** r,' "$root/agent/debian/apparmor/shellfleet-agent"
+grep -Fqx -- '  /usr/libexec/docker/cli-plugins/** r,' "$root/agent/debian/apparmor/shellfleet-agent"
 grep -q 'dbus (send, receive)' "$root/agent/debian/apparmor/shellfleet-agent"
 
 # The proxy stays root-owned and is reachable only via a socket owned by the

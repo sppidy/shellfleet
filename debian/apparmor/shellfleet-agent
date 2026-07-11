@@ -35,6 +35,11 @@ profile shellfleet-agent /usr/bin/shellfleet-agent flags=(attach_disconnected,me
   /etc/os-release r,
   /usr/bin/** rix,
   /bin/** rix,
+  # Docker CLI probes these directories for optional client plugins before
+  # every invocation. Read-only discovery keeps normal Docker commands quiet
+  # without granting execution of plugin code.
+  /usr/lib/docker/cli-plugins/** r,
+  /usr/libexec/docker/cli-plugins/** r,
 
   deny /run/docker.sock rw,
   deny /var/run/docker.sock rw,
