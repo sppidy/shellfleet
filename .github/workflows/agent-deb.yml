@@ -86,6 +86,10 @@ jobs:
           resolver = "2"
           EOF
 
+      - name: Check package privilege boundary
+        shell: bash
+        run: agent/tests/package_security.sh
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
