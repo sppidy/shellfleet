@@ -26,6 +26,9 @@ profile shellfleet-agent /usr/bin/shellfleet-agent flags=(attach_disconnected,me
       interface=org.freedesktop.systemd1.Manager
       peer=(name=org.freedesktop.systemd1),
   /run/shellfleet/approval-gate.sock rw,
+  # The optional root-owned proxy exposes this socket only after an operator
+  # explicitly enables it with `shellfleet-docker-proxy enable`.
+  /run/shellfleet/docker.sock rw,
   /proc/** r,
   /sys/** r,
   /etc/hostname r,

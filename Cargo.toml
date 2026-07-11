@@ -110,8 +110,12 @@ assets = [
     ["target/release/shellfleet-agent", "usr/bin/shellfleet-agent", "755"],
     ["target/release/shellfleet-approval-gate", "usr/bin/shellfleet-approval-gate", "755"],
     ["debian/shellfleet-approval-gate.service", "lib/systemd/system/shellfleet-approval-gate.service", "644"],
+    ["debian/shellfleet-docker-proxy.service", "lib/systemd/system/shellfleet-docker-proxy.service", "644"],
+    ["debian/shellfleet-docker-proxy.socket", "lib/systemd/system/shellfleet-docker-proxy.socket", "644"],
+    ["debian/shellfleet-docker-proxy", "usr/sbin/shellfleet-docker-proxy", "755"],
     ["debian/apparmor/shellfleet-agent", "etc/apparmor.d/shellfleet-agent", "644"],
     ["debian/apparmor/shellfleet-approval-gate", "etc/apparmor.d/shellfleet-approval-gate", "644"],
+    ["debian/apparmor/shellfleet-docker-proxy", "etc/apparmor.d/shellfleet-docker-proxy", "644"],
     ["debian/env.example", "etc/shellfleet/env.example", "644"],
     # Stock probe library. Ships under /usr/share so apt owns the
     # files; postinst symlinks them into /etc/shellfleet/probes.d/

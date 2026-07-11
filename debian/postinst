@@ -90,6 +90,7 @@ case "$1" in
         if command -v apparmor_parser >/dev/null 2>&1; then
             apparmor_parser -r /etc/apparmor.d/shellfleet-agent || true
             apparmor_parser -r /etc/apparmor.d/shellfleet-approval-gate || true
+            apparmor_parser -r /etc/apparmor.d/shellfleet-docker-proxy || true
         fi
         systemctl daemon-reload >/dev/null 2>&1 || true
         systemctl enable shellfleet-approval-gate.service >/dev/null 2>&1 || true

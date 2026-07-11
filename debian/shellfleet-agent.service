@@ -15,6 +15,9 @@ ExecStart=/usr/bin/shellfleet-agent
 # go in /etc/shellfleet/env. A bind mount of /etc lets the config editor see
 # host configs even on systems with strict ProtectHome/ProtectSystem defaults.
 EnvironmentFile=-/etc/shellfleet/env
+# Created only by `shellfleet-docker-proxy enable`. Keeping this separate from
+# the operator's general configuration makes Docker access an explicit opt-in.
+EnvironmentFile=-/etc/shellfleet/docker-proxy.env
 
 Restart=on-failure
 RestartSec=5s

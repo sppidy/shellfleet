@@ -8,7 +8,8 @@ case "$1" in
     purge)
         # On purge, remove the cached pairing token. The operator-edited
         # env file is also cleared so a future install starts fresh.
-        rm -f "$TOKEN_FILE" "$CONF_DIR/env" "$CONF_DIR/env.example"
+        rm -f "$TOKEN_FILE" "$CONF_DIR/env" "$CONF_DIR/env.example" \
+            "$CONF_DIR/docker-proxy.env"
         # Best-effort directory removal; ignore failure if non-empty.
         rmdir "$CONF_DIR" 2>/dev/null || true
         ;;

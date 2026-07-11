@@ -1,0 +1,17 @@
+[Unit]
+Description=ShellFleet local Docker API proxy socket
+Documentation=https://github.com/sppidy/shellfleet#docker-and-swarm-explicit-opt-in
+Requires=docker.socket
+After=docker.socket
+
+[Socket]
+ListenStream=/run/shellfleet/docker.sock
+SocketUser=shellfleet
+SocketGroup=shellfleet
+SocketMode=0660
+DirectoryMode=0750
+RemoveOnStop=true
+Service=shellfleet-docker-proxy.service
+
+[Install]
+WantedBy=sockets.target

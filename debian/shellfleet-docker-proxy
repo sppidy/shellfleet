@@ -1,0 +1,83 @@
+#!/bin/sh
+# Enable or disable the explicitly opt-in local Docker proxy for ShellFleet.
+set -eu
+
+CONF_DIR=/etc/shellfleet
+CONF_FILE="$CONF_DIR/docker-proxy.env"
+SOCKET_UNIT=shellfleet-docker-proxy.socket
+AGENT_UNIT=shellfleet-agent.service
+
+die() {
+    printf '%s\n' "shellfleet-docker-proxy: $*" >&2
+    exit 1
+}
+
+require_root() {
+    [ "$(id -u)" -eq 0 ] || die 'run this command as root'
+}
+
+enable_proxy() {
+    require_root
+    [ -S /run/docker.sock ] || die 'Docker is not running or /run/docker.sock is unavailable'
+
+    install -d -o root -g shellfleet -m 0750 "$CONF_DIR"
+    tmp=$(mktemp "$CONF_FILE.XXXXXX")
+    trap 'rm -f "$tmp"' EXIT HUP INT TERM
+    printf '%s\n' \
+        '# Managed by shellfleet-docker-proxy. Do not grant the agent Docker access another way.' \
+        'DOCKER_HOST=unix:///run/shellfleet/docker.sock' > "$tmp"
+    chown root:shellfleet "$tmp"
+    chmod 0640 "$tmp"
+    mv -f "$tmp" "$CONF_FILE"
+    trap - EXIT HUP INT TERM
+
+    systemctl daemon-reload
+    systemctl enable --now "$SOCKET_UNIT"
+    systemctl try-restart "$AGENT_UNIT"
+    printf '%s\n' 'ShellFleet Docker proxy enabled.'
+}
+
+disable_proxy() {
+    require_root
+    systemctl disable --now "$SOCKET_UNIT"
+    rm -f "$CONF_FILE"
+    systemctl try-restart "$AGENT_UNIT"
+    printf '%s\n' 'ShellFleet Docker proxy disabled.'
+}
+
+status_proxy() {
+    if systemctl is-enabled --quiet "$SOCKET_UNIT"; then
+        enabled=yes
+    else
+        enabled=no
+    fi
+    if systemctl is-active --quiet "$SOCKET_UNIT"; then
+        active=yes
+    else
+        active=no
+    fi
+    if [ -f "$CONF_FILE" ]; then
+        configured=yes
+    else
+        configured=no
+    fi
+    printf 'enabled=%s active=%s configured=%s\n' "$enabled" "$active" "$configured"
+}
+
+case "${1:-}" in
+    enable)
+        [ "$#" -eq 1 ] || die 'usage: shellfleet-docker-proxy {enable|disable|status}'
+        enable_proxy
+        ;;
+    disable)
+        [ "$#" -eq 1 ] || die 'usage: shellfleet-docker-proxy {enable|disable|status}'
+        disable_proxy
+        ;;
+    status)
+        [ "$#" -eq 1 ] || die 'usage: shellfleet-docker-proxy {enable|disable|status}'
+        status_proxy
+        ;;
+    *)
+        die 'usage: shellfleet-docker-proxy {enable|disable|status}'
+        ;;
+esac
