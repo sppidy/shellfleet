@@ -35,13 +35,17 @@ profile shellfleet-agent /usr/bin/shellfleet-agent flags=(attach_disconnected,me
   /etc/os-release r,
   /usr/bin/** rix,
   /bin/** rix,
-  # Docker CLI probes these directories for optional client plugins before
-  # every invocation. Read-only discovery keeps normal Docker commands quiet
-  # without granting execution of plugin code.
+  # Docker invokes these two distro-owned plugins to read their metadata before
+  # normal commands. Keep arbitrary plugin code denied; only the conventional
+  # root-owned Compose and Buildx binaries may inherit this confined profile.
   /usr/lib/docker/cli-plugins/ r,
   /usr/lib/docker/cli-plugins/** r,
   /usr/libexec/docker/cli-plugins/ r,
   /usr/libexec/docker/cli-plugins/** r,
+  /usr/lib/docker/cli-plugins/docker-compose ix,
+  /usr/lib/docker/cli-plugins/docker-buildx ix,
+  /usr/libexec/docker/cli-plugins/docker-compose ix,
+  /usr/libexec/docker/cli-plugins/docker-buildx ix,
 
   deny /run/docker.sock rw,
   deny /var/run/docker.sock rw,
