@@ -34,6 +34,22 @@ no background polling and sits around 4 MB of RAM when idle.
 3. Sign in with GitHub, open `/device`, and paste the pairing code to approve
    the agent.
 
+### Docker and Swarm (explicit opt-in)
+
+Docker is disabled for a newly installed agent. On a Docker host, an
+administrator can enable ShellFleet's local proxy with:
+
+```bash
+sudo shellfleet-docker-proxy enable
+```
+
+This keeps the agent out of the `docker` group and preserves its direct Docker
+socket deny rule. The enabled proxy is root-owned, accepts only the local
+`shellfleet` service account, and is confined to forwarding the local Docker
+socket. Docker API access is root-equivalent on typical hosts, so enable it
+only for a ShellFleet server and administrators you trust. Disable it with
+`sudo shellfleet-docker-proxy disable`.
+
 ## Repository layout
 
 This superproject pins four submodules, each its own GitHub repo:
