@@ -28,6 +28,8 @@ pub struct PendingDeviceRow {
     pub user_code: String,
     pub expires_at: i64,
     pub approved: i64,
+    pub purpose: String,
+    pub approved_by: Option<String>,
 }
 
 pub fn db_path_str() -> String {
@@ -106,12 +108,25 @@ pub async fn init() -> Result<SqlitePool, sqlx::Error> {
             device_code TEXT PRIMARY KEY,
             user_code TEXT NOT NULL UNIQUE,
             expires_at INTEGER NOT NULL,
-            approved INTEGER NOT NULL DEFAULT 0
+            approved INTEGER NOT NULL DEFAULT 0,
+            purpose TEXT NOT NULL DEFAULT 'agent',
+            approved_by TEXT
         );
         "#,
     )
     .execute(&pool)
     .await?;
+
+    // CLI device authorization reuses the operator approval page, but must
+    // retain both the requested purpose and the approving identity. Existing
+    // agent-pairing rows safely default to the historical `agent` purpose.
+    let _ =
+        sqlx::query("ALTER TABLE pending_devices ADD COLUMN purpose TEXT NOT NULL DEFAULT 'agent'")
+            .execute(&pool)
+            .await;
+    let _ = sqlx::query("ALTER TABLE pending_devices ADD COLUMN approved_by TEXT")
+        .execute(&pool)
+        .await;
 
     sqlx::query(
         r#"
@@ -581,15 +596,26 @@ pub async fn insert_pending_device(
     user_code: &str,
     expires_at: i64,
 ) -> Result<(), sqlx::Error> {
+    insert_pending_device_for_purpose(pool, device_code, user_code, expires_at, "agent").await
+}
+
+pub async fn insert_pending_device_for_purpose(
+    pool: &SqlitePool,
+    device_code: &str,
+    user_code: &str,
+    expires_at: i64,
+    purpose: &str,
+) -> Result<(), sqlx::Error> {
     sqlx::query(
         r#"
-        INSERT INTO pending_devices (device_code, user_code, expires_at, approved)
-        VALUES (?1, ?2, ?3, 0)
+        INSERT INTO pending_devices (device_code, user_code, expires_at, approved, purpose)
+        VALUES (?1, ?2, ?3, 0, ?4)
         "#,
     )
     .bind(device_code)
     .bind(user_code)
     .bind(expires_at)
+    .bind(purpose)
     .execute(pool)
     .await?;
     Ok(())
@@ -600,7 +626,7 @@ pub async fn pending_device(
     device_code: &str,
 ) -> Result<Option<PendingDeviceRow>, sqlx::Error> {
     sqlx::query_as::<_, PendingDeviceRow>(
-        "SELECT device_code, user_code, expires_at, approved FROM pending_devices WHERE device_code = ?",
+        "SELECT device_code, user_code, expires_at, approved, purpose, approved_by FROM pending_devices WHERE device_code = ?",
     )
     .bind(device_code)
     .fetch_optional(pool)
@@ -610,11 +636,13 @@ pub async fn pending_device(
 pub async fn approve_user_code(
     pool: &SqlitePool,
     user_code: &str,
+    actor: &str,
     now: i64,
 ) -> Result<bool, sqlx::Error> {
     let res = sqlx::query(
-        "UPDATE pending_devices SET approved = 1 WHERE user_code = ? AND expires_at >= ?",
+        "UPDATE pending_devices SET approved = 1, approved_by = ? WHERE user_code = ? AND expires_at >= ? AND approved = 0",
     )
+    .bind(actor)
     .bind(user_code)
     .bind(now)
     .execute(pool)
@@ -631,6 +659,29 @@ pub async fn delete_pending_device(
         .execute(pool)
         .await?;
     Ok(())
+}
+
+/// Consume an approved CLI request exactly once. The approval lookup and
+/// consumption are intentionally separate so the caller can resolve the
+/// approver's current role, but this conditional delete ensures concurrent
+/// pollers cannot mint more than one session for the same device code.
+pub async fn consume_pending_cli_device(
+    pool: &SqlitePool,
+    device_code: &str,
+    approved_by: &str,
+    now: i64,
+) -> Result<bool, sqlx::Error> {
+    let result = sqlx::query(
+        "DELETE FROM pending_devices \
+         WHERE device_code = ? AND purpose = 'cli' AND approved = 1 \
+           AND approved_by = ? AND expires_at >= ?",
+    )
+    .bind(device_code)
+    .bind(approved_by)
+    .bind(now)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected() == 1)
 }
 
 pub async fn purge_expired_devices(pool: &SqlitePool, now: i64) -> Result<u64, sqlx::Error> {

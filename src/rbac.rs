@@ -60,6 +60,17 @@ pub async fn middleware(
     let path = req.uri().path().to_string();
     let method = req.method().clone();
 
+    // A CLI device token is purpose-bound to `/ui/ws`. Reject it even if a
+    // local user manually places it in the browser session-cookie slot; this
+    // protects the routes whitelisted below as well as normal API handlers.
+    if jar
+        .get(auth::session_cookie_name())
+        .and_then(|cookie| auth::claims_from_token(cookie.value()))
+        .is_some_and(|claims| claims.cli)
+    {
+        return forbidden("CLI session is only valid for the operator WebSocket");
+    }
+
     // This middleware is mounted *inside* the `/api` nest, so axum
     // strips the prefix before the request reaches us — `path` is
     // `/me`, `/auth/mfa/verify`, `/device/request`, etc., NOT
@@ -87,6 +98,8 @@ pub async fn middleware(
         || path == "/device/request"
         || path == "/device/token"
         || path == "/device/refresh"
+        || path == "/cli-auth/request"
+        || path == "/cli-auth/token"
     {
         return next.run(req).await;
     }

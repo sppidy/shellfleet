@@ -290,7 +290,7 @@ async fn approve_device(
     }
 
     let user_code = payload.user_code.to_uppercase();
-    let approved = match db::approve_user_code(&state.db, &user_code, now).await {
+    let approved = match db::approve_user_code(&state.db, &user_code, &actor, now).await {
         Ok(b) => b,
         Err(e) => {
             tracing::error!(error = %e, "approve_user_code failed");

@@ -19,6 +19,7 @@ mod api_auth;
 mod api_v1;
 mod auth;
 mod backups;
+mod cli_auth;
 mod crypto;
 mod csrf;
 mod db;
@@ -548,6 +549,7 @@ async fn main() {
 
     let mut api_routes = Router::new()
         .nest("/device", device_auth::routes())
+        .nest("/cli-auth", cli_auth::routes())
         .nest("/tokens", tokens::routes())
         .nest("/update-windows", update_windows::routes())
         .nest("/health-probes", health::routes())
@@ -818,28 +820,27 @@ async fn ui_ws_handler(
 ) -> impl IntoResponse {
     let dev_mode = auth::is_dev_mode();
 
-    // 1. Origin allow-list. Browsers always send Origin on a WS upgrade
-    //    they initiated; absence of Origin from a browser is a strong
-    //    indicator of a non-browser client and we reject it. Skip the
-    //    check entirely in dev mode so local tooling still works.
-    if !dev_mode {
-        let allowed = ws_allowed_origins();
-        let origin = headers
-            .get("origin")
-            .and_then(|h| h.to_str().ok())
-            .map(|s| s.to_string());
-        let ok = match &origin {
-            Some(o) => allowed.iter().any(|a| a.eq_ignore_ascii_case(o)),
-            None => false,
-        };
-        if !ok {
-            tracing::warn!(
-                origin = ?origin,
-                allowed = ?allowed,
-                "ui ws upgrade rejected: origin not allowed"
-            );
-            return (StatusCode::FORBIDDEN, "origin").into_response();
-        }
+    // Browser sessions require an allow-listed Origin. A native CLI cannot
+    // supply one, so it presents an explicit marker and is allowed through to
+    // the claim check below; only a purpose-restricted CLI token can use that
+    // no-Origin path.
+    let origin = headers
+        .get("origin")
+        .and_then(|h| h.to_str().ok())
+        .map(|s| s.to_string());
+    let cli_marker = headers
+        .get("x-shellfleet-cli")
+        .and_then(|h| h.to_str().ok())
+        == Some("1");
+    let origin_allowed = dev_mode
+        || origin.as_ref().is_some_and(|value| {
+            ws_allowed_origins()
+                .iter()
+                .any(|allowed| allowed.eq_ignore_ascii_case(value))
+        });
+    if !origin_allowed && !cli_marker {
+        tracing::warn!(origin = ?origin, "ui ws upgrade rejected: origin not allowed");
+        return (StatusCode::FORBIDDEN, "origin").into_response();
     }
 
     // 2. Cookie auth + role capture. We pin the user's role at connect
@@ -856,17 +857,34 @@ async fn ui_ws_handler(
     let (login, initial_role, token_iat) = if dev_mode {
         ("dev".to_string(), auth::Role::Admin, 0_i64)
     } else {
-        let Some(cookie) = jar.get(auth::session_cookie_name()) else {
-            tracing::warn!("ui ws: no auth cookie");
+        let token = if cli_marker {
+            headers
+                .get(axum::http::header::AUTHORIZATION)
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| value.strip_prefix("Bearer "))
+        } else {
+            jar.get(auth::session_cookie_name())
+                .map(|cookie| cookie.value())
+        };
+        let Some(token) = token else {
+            tracing::warn!(cli_marker, "ui ws: no authentication token");
             return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
         };
-        let Some(claims) = auth::claims_from_token(cookie.value()) else {
+        let Some(claims) = auth::claims_from_token(token) else {
             tracing::warn!("ui ws: invalid jwt");
             return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
         };
         if !claims.mfa {
             tracing::warn!(login = %claims.sub, "ui ws: pending-mfa cookie rejected");
             return (StatusCode::FORBIDDEN, "MFA required").into_response();
+        }
+        if cli_marker != claims.cli {
+            tracing::warn!(login = %claims.sub, cli_marker, cli_claim = claims.cli, "ui ws: session kind mismatch");
+            return (StatusCode::FORBIDDEN, "session kind").into_response();
+        }
+        if !origin_allowed && !claims.cli {
+            tracing::warn!(login = %claims.sub, origin = ?origin, "ui ws: non-CLI token without allowed origin");
+            return (StatusCode::FORBIDDEN, "origin").into_response();
         }
         // Reject tokens whose `iat` predates the user's session_epoch —
         // a revoked session must not be able to open a new WebSocket.

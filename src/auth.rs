@@ -95,6 +95,10 @@ pub struct Claims {
     /// session. Endpoints that mutate state require `true`.
     #[serde(default = "default_mfa")]
     pub mfa: bool,
+    /// CLI-issued sessions are accepted only by the native operator
+    /// WebSocket. They never authorize browser/API routes.
+    #[serde(default)]
+    pub cli: bool,
 }
 
 fn default_role() -> String {
@@ -376,6 +380,23 @@ pub fn build_session_cookie(token: String) -> Cookie<'static> {
 /// controls the cookie lifetime; pending-MFA tokens use a much shorter
 /// TTL than fully-verified ones.
 pub fn issue_jwt(sub: &str, role: Role, mfa: bool, ttl_secs: i64) -> Result<String, String> {
+    issue_jwt_with_kind(sub, role, mfa, ttl_secs, false)
+}
+
+/// Issue a short-lived token that is valid only for the native operator
+/// cockpit WebSocket. `current_user` rejects this claim on every HTTP API
+/// route, so a locally stored CLI token cannot become a browser session.
+pub fn issue_cli_jwt(sub: &str, role: Role, ttl_secs: i64) -> Result<String, String> {
+    issue_jwt_with_kind(sub, role, true, ttl_secs, true)
+}
+
+fn issue_jwt_with_kind(
+    sub: &str,
+    role: Role,
+    mfa: bool,
+    ttl_secs: i64,
+    cli: bool,
+) -> Result<String, String> {
     let now_secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
@@ -388,6 +409,7 @@ pub fn issue_jwt(sub: &str, role: Role, mfa: bool, ttl_secs: i64) -> Result<Stri
         iat: now_secs,
         role: role.as_str().to_string(),
         mfa,
+        cli,
     };
 
     let secret = jwt_secret();
@@ -750,6 +772,7 @@ fn dev_claims() -> Claims {
         iat: now,
         role: "admin".to_string(),
         mfa: true,
+        cli: false,
     }
 }
 
@@ -777,6 +800,12 @@ pub async fn current_user(
         claims_from_token(cookie.value()).ok_or((StatusCode::UNAUTHORIZED, "Unauthorized"))?;
     if !claims.mfa {
         return Err((StatusCode::FORBIDDEN, "MFA required"));
+    }
+    if claims.cli {
+        return Err((
+            StatusCode::FORBIDDEN,
+            "CLI session is only valid for the operator WebSocket",
+        ));
     }
     match crate::db::get_user(db, &claims.sub).await {
         Ok(Some(row)) if claims.iat >= row.session_epoch => claims.role = row.role,
@@ -869,5 +898,13 @@ mod tests {
     fn role_as_str_roundtrips_through_parse() {
         assert_eq!(Role::parse(Role::Admin.as_str()), Role::Admin);
         assert_eq!(Role::parse(Role::Viewer.as_str()), Role::Viewer);
+    }
+
+    #[test]
+    fn historical_claims_default_to_browser_sessions() {
+        let claims: Claims =
+            serde_json::from_str(r#"{"sub":"operator","exp":1,"iat":1,"role":"admin","mfa":true}"#)
+                .unwrap();
+        assert!(!claims.cli);
     }
 }

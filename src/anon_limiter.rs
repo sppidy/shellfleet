@@ -43,6 +43,7 @@ fn is_limited_path(path: &str) -> bool {
         // same Docker gateway IP would exhaust the bucket.
         || path == "/api/device/request"
         || path == "/api/device/approve"
+        || path == "/api/cli-auth/request"
         // Public API-key surface: `/api/v1/*` is authenticated by a
         // bearer API key, not a session cookie. Without per-IP throttling
         // here an attacker can brute-force API keys unbounded — each
