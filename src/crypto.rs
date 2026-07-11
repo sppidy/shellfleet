@@ -78,10 +78,8 @@ pub fn encrypt(plaintext: &str) -> Result<String, String> {
 pub fn decrypt(ciphertext: &str) -> Option<String> {
     let (prefix, rest) = if let Some(rest) = ciphertext.strip_prefix(PREFIX_V2) {
         (PREFIX_V2, rest)
-    } else if let Some(rest) = ciphertext.strip_prefix(PREFIX_V1) {
-        (PREFIX_V1, rest)
     } else {
-        return None;
+        (PREFIX_V1, ciphertext.strip_prefix(PREFIX_V1)?)
     };
     let (nonce_b64, ct_b64) = rest.split_once('.')?;
     let nonce_bytes = BASE64URL_NOPAD.decode(nonce_b64.as_bytes()).ok()?;
