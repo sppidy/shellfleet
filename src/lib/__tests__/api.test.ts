@@ -8,7 +8,7 @@ beforeEach(() => {
   for (const c of document.cookie.split(';')) {
     const name = c.split('=')[0]?.trim();
     if (name) {
-      document.cookie = `${name}=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/`;
+      document.cookie = `${name}=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/; Secure`;
     }
   }
   lastInit = undefined;
@@ -23,6 +23,12 @@ function csrfHeader(): string | null {
 }
 
 describe('apiFetch CSRF / cookie handling', () => {
+  it('prefers the production __Host-csrf cookie on mutating methods', async () => {
+    document.cookie = '__Host-csrf=production-token; Secure';
+    await apiFetch('/api/auth/mfa/verify', { method: 'POST' });
+    expect(csrfHeader()).toBe('production-token');
+  });
+
   it('attaches X-CSRF on mutating methods, reading a value that contains "="', async () => {
     document.cookie = 'csrf=abc=123';
     await apiFetch('/api/x', { method: 'POST' });

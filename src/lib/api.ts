@@ -25,7 +25,9 @@ export async function apiFetch(
   const method = (init.method ?? 'GET').toUpperCase();
   const headers = new Headers(init.headers);
   if (MUTATING.has(method)) {
-    const token = readCookie('csrf');
+    // Production uses the host-only cookie name required by the Secure
+    // deployment; local HTTP development retains the historical name.
+    const token = readCookie('__Host-csrf') ?? readCookie('csrf');
     if (token) headers.set('X-CSRF', token);
   }
   return fetch(input, {
