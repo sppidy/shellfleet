@@ -9,6 +9,7 @@ design-handoff/
 .graphify_python
 graphify-out/
 .superpowers/
+.worktrees/
 
 # Operator secrets — JWT_SECRET, GITHUB_CLIENT_SECRET, AGENT_SECRET,
 # OAuth IDs, etc. Use .env.example to share variable shapes; never
