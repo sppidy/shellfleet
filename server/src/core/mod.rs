@@ -1,5 +1,7 @@
+pub mod collector;
 pub mod events;
 pub mod http;
+pub mod ingest;
 pub mod model;
 pub mod repository;
 

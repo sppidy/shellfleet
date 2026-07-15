@@ -469,6 +469,11 @@ async fn main() {
         }
     };
 
+    if let Err(error) = core::repository::mark_all_disconnected(&pool, now_unix()).await {
+        tracing::error!(%error, "failed to fence restored fleet connections");
+        std::process::exit(1);
+    }
+
     // GC expired pending device-auth requests every minute so we don't
     // accumulate stale rows.
     {
@@ -543,6 +548,7 @@ async fn main() {
         core_events: core::CoreEventBus::new(256),
     });
 
+    core::collector::spawn(state.clone());
     update_windows::spawn_scheduler(state.clone());
     telemetry::spawn_reporter(state.clone());
     spawn_stale_agent_alerter(state.clone());
@@ -960,10 +966,10 @@ async fn handle_agent_socket(socket: WebSocket, state: Arc<AppState>, token: Str
     });
 
     // Read timeout — if neither a real message nor a Pong reply arrives in
-    // 75s the TCP connection is dead and we should reap the agent. Without
+    // 45s the TCP connection is dead and we should reap the agent. Without
     // this the receiver loop can hang forever when Cloudflare/the kernel
     // drops the socket without delivering an error.
-    let read_timeout = std::time::Duration::from_secs(75);
+    let read_timeout = std::time::Duration::from_secs(45);
     loop {
         let next = tokio::time::timeout(read_timeout, receiver.next()).await;
         let frame = match next {
@@ -1060,6 +1066,37 @@ async fn handle_agent_socket(socket: WebSocket, state: Arc<AppState>, token: Str
                         break;
                     }
                     let id = format!("{}-id", hostname);
+
+                    let observed_at = now_unix();
+                    if let Err(error) = core::ingest::connected(
+                        &state.db,
+                        &state.core_events,
+                        &id,
+                        &hostname,
+                        protocol_version,
+                        &capabilities,
+                        &metadata,
+                        observed_at,
+                    )
+                    .await
+                    {
+                        tracing::error!(
+                            %error,
+                            agent_id = %id,
+                            "failed to persist agent registration"
+                        );
+                        db::record_audit(
+                            &state.db,
+                            observed_at,
+                            None,
+                            Some(&id),
+                            "agent.register",
+                            false,
+                            Some("durable fleet repository unavailable"),
+                        )
+                        .await;
+                        break;
+                    }
                     agent_id_opt = Some(id.clone());
 
                     state.agents.lock().await.insert(
@@ -1164,18 +1201,71 @@ async fn handle_agent_socket(socket: WebSocket, state: Arc<AppState>, token: Str
                 }
                 Message::CapabilitiesUpdate { capabilities } => {
                     if let Some(id) = &agent_id_opt {
-                        let mut map = state.agents.lock().await;
-                        if let Some(entry) = map.get_mut(id) {
-                            if entry.capabilities != capabilities {
-                                tracing::info!(
+                        let changed = state
+                            .agents
+                            .lock()
+                            .await
+                            .get(id)
+                            .is_some_and(|entry| {
+                                entry.tx.same_channel(&tx)
+                                    && entry.capabilities != capabilities
+                            });
+                        if changed {
+                            let observed_at = now_unix();
+                            if let Err(error) = core::ingest::capabilities_updated(
+                                &state.db,
+                                &state.core_events,
+                                id,
+                                &capabilities,
+                                observed_at,
+                            )
+                            .await
+                            {
+                                tracing::error!(
+                                    %error,
                                     agent_id = %id,
-                                    capabilities = ?capabilities,
-                                    "agent capabilities updated"
+                                    "failed to persist agent capability update"
                                 );
-                                entry.capabilities = capabilities;
-                                drop(map);
-                                broadcast_agent_list(&state).await;
+                                continue;
                             }
+                            let (updated, replacement_capabilities) = {
+                                let mut agents = state.agents.lock().await;
+                                match agents.get_mut(id) {
+                                    Some(entry) if entry.tx.same_channel(&tx) => {
+                                        entry.capabilities = capabilities.clone();
+                                        (true, None)
+                                    }
+                                    Some(entry) => (false, Some(entry.capabilities.clone())),
+                                    None => (false, None),
+                                }
+                            };
+                            if let Some(replacement_capabilities) = replacement_capabilities {
+                                if let Err(error) = core::ingest::capabilities_updated(
+                                    &state.db,
+                                    &state.core_events,
+                                    id,
+                                    &replacement_capabilities,
+                                    now_unix(),
+                                )
+                                .await
+                                {
+                                    tracing::error!(
+                                        %error,
+                                        agent_id = %id,
+                                        "failed to restore replacement agent capabilities"
+                                    );
+                                }
+                                continue;
+                            }
+                            if !updated {
+                                continue;
+                            }
+                            tracing::info!(
+                                agent_id = %id,
+                                capabilities = ?capabilities,
+                                "agent capabilities updated"
+                            );
+                            broadcast_agent_list(&state).await;
                         }
                     }
                 }
@@ -1186,10 +1276,41 @@ async fn handle_agent_socket(socket: WebSocket, state: Arc<AppState>, token: Str
                 // its own control frames. Receiving the `Ping` here also resets the
                 // server's read timeout, so the symmetric reap can't misfire.
                 Message::Ping => {
+                    if let Some(agent_id) = &agent_id_opt {
+                        if let Err(error) = core::ingest::touch(
+                            &state.db,
+                            &state.core_events,
+                            agent_id,
+                            now_unix(),
+                        )
+                        .await
+                        {
+                            tracing::error!(
+                                %error,
+                                %agent_id,
+                                "failed to persist agent heartbeat"
+                            );
+                        }
+                    }
                     let _ = tx.send(Message::Pong);
                 }
                 other => {
                     if let Some(agent_id) = &agent_id_opt {
+                        if let Err(error) = core::ingest::message(
+                            &state.db,
+                            &state.core_events,
+                            agent_id,
+                            &other,
+                            now_unix(),
+                        )
+                        .await
+                        {
+                            tracing::error!(
+                                %error,
+                                %agent_id,
+                                "failed to persist agent message"
+                            );
+                        }
                         // Health probe reports — persist last_* fields
                         // and audit on green→red / red→green transitions.
                         if let Message::HealthProbeReport { results } = &other {
@@ -1582,6 +1703,16 @@ async fn handle_agent_socket(socket: WebSocket, state: Arc<AppState>, token: Str
             pe.retain(|_, (expected, _)| expected != &id);
         }
         state.operation_owners.lock().await.release_agent(&id);
+        if let Err(error) = core::ingest::disconnected(
+            &state.db,
+            &state.core_events,
+            &id,
+            now_unix(),
+        )
+        .await
+        {
+            tracing::error!(%error, agent_id = %id, "failed to persist agent disconnect");
+        }
         tracing::info!(agent_id = %id, "agent ws closed; debouncing disconnect webhook");
         broadcast_agent_list(&state).await;
 
@@ -1589,9 +1720,9 @@ async fn handle_agent_socket(socket: WebSocket, state: Arc<AppState>, token: Str
         // from `state.agents`, but transient WS blips (Cloudflare
         // idle drop, kernel TCP reset, agent restart from systemd
         // / kubelet) often resolve under the architectural
-        // 75s+25s window. Spawn a task that fires the webhook
+        // 45s read-timeout / 50s grace window. Spawn a task that fires the webhook
         // only if the agent is still gone after `DISCONNECT_GRACE`
-        // (100s, see the const). On a re-register within that
+        // (50s, see the const). On a re-register within that
         // window the register handler aborts this task and
         // suppresses both webhooks. After the window elapses we
         // transition to Confirmed; the next register on a
