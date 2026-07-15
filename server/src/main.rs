@@ -192,6 +192,10 @@ pub struct AppState {
     /// 30s. Empty / all-disabled = no restriction. Enforced on dashboard paths
     /// by `ip_allowlist::middleware`.
     pub ip_allowlist: Mutex<Vec<(String, bool)>>,
+    /// In-process invalidation stream for durable Fleet REST consumers.
+    /// Events never carry authoritative state; clients refetch SQLite-backed
+    /// resources after receiving one.
+    pub core_events: core::CoreEventBus,
 }
 
 /// Grace window between an agent's WS read-loop exiting and the
@@ -536,6 +540,7 @@ async fn main() {
         pending_exec: Mutex::new(HashMap::new()),
         recorder: ee_recording::Recorder::new(),
         ip_allowlist: Mutex::new(Vec::new()),
+        core_events: core::CoreEventBus::new(256),
     });
 
     update_windows::spawn_scheduler(state.clone());
@@ -568,6 +573,7 @@ async fn main() {
         .nest("/invites", invites::routes())
         .nest("/metrics", metrics::routes())
         .nest("/telemetry", telemetry::routes())
+        .nest("/core/v1", core::routes())
         .route("/me", get(me_handler))
         .route("/healthz", get(healthz))
         .route("/audit", get(audit_handler))
