@@ -22,6 +22,7 @@ mod backups;
 mod cli_auth;
 mod crypto;
 mod csrf;
+pub mod core;
 mod db;
 mod device_auth;
 mod ee;
