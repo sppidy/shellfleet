@@ -3,14 +3,15 @@
 import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import FleetOverview from '@/components/FleetOverview';
+import { useCoreFleet } from '@/components/providers/CoreFleetProvider';
 import { useSession } from '@/components/providers/SessionProvider';
-import { useWebSocket } from '@/components/providers/WebSocketProvider';
 import { Loader2Icon } from 'lucide-react';
 
 export default function OverviewPage() {
   const router = useRouter();
-  const { isConnected } = useWebSocket();
+  const { liveStatus } = useCoreFleet();
   const { status } = useSession();
+  const liveLabel = liveStatus === 'live' ? 'LIVE' : liveStatus === 'connecting' ? 'SYNCING' : 'STALE';
 
   useEffect(() => {
     if (status === 'guest') router.replace('/login');
@@ -42,9 +43,9 @@ export default function OverviewPage() {
             <span className="here">fleet/overview</span>
           </div>
           <div className="topbar-actions">
-            <span className={`pill ${isConnected ? 'live' : 'err'}`}>
-              <span className={`dot ${isConnected ? 'pulse' : ''}`} />
-              {isConnected ? 'LIVE' : 'OFFLINE'}
+            <span className={`pill ${liveStatus === 'live' ? 'live' : liveStatus === 'degraded' ? 'err' : ''}`}>
+              <span className={`dot ${liveStatus === 'live' ? 'pulse' : ''}`} />
+              {liveLabel}
             </span>
           </div>
         </div>

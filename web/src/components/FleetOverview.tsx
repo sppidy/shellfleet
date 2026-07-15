@@ -1,8 +1,8 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { useWebSocket } from './providers/WebSocketProvider';
-import { useFleetSnapshots, AgentSnapshot } from './providers/FleetSnapshotsProvider';
+import { useCoreFleet } from './providers/CoreFleetProvider';
+import type { CoreAgentSnapshot, FleetHost } from '@/lib/coreFleet';
 import type { HealthSnapshotRow } from '@/lib/types';
 
 function formatBytes(kib: number): string {
@@ -25,6 +25,14 @@ function formatUptime(secs: number): string {
   if (d > 0) return `${d}d ${h}h`;
   if (h > 0) return `${h}h ${m}m`;
   return `${m}m`;
+}
+
+function formatRelativeTime(unixSeconds: number, nowSeconds: number): string {
+  const elapsed = Math.max(0, nowSeconds - unixSeconds);
+  if (elapsed < 60) return `${elapsed}s ago`;
+  if (elapsed < 3600) return `${Math.floor(elapsed / 60)}m ago`;
+  if (elapsed < 86_400) return `${Math.floor(elapsed / 3600)}h ago`;
+  return `${Math.floor(elapsed / 86_400)}d ago`;
 }
 
 function bar(pct: number) {
@@ -51,11 +59,16 @@ export default function FleetOverview({
 }: {
   onSelectAgent?: (agentId: string) => void;
 }) {
-  const { agents } = useWebSocket();
-  const { snapshots, refresh } = useFleetSnapshots();
+  const { hosts, snapshots, liveStatus, loading, error, refresh } = useCoreFleet();
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<'all' | 'mgr' | 'wrk' | 'warn'>('all');
   const [healthByAgent, setHealthByAgent] = useState<Record<string, HealthSnapshotRow>>({});
+  const [nowSeconds, setNowSeconds] = useState(() => Math.floor(Date.now() / 1000));
+
+  const onlineCount = useMemo(
+    () => hosts.filter((host) => host.status === 'online').length,
+    [hosts],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -80,6 +93,11 @@ export default function FleetOverview({
     };
   }, []);
 
+  useEffect(() => {
+    const timer = setInterval(() => setNowSeconds(Math.floor(Date.now() / 1000)), 30_000);
+    return () => clearInterval(timer);
+  }, []);
+
   const totals = useMemo(() => {
     let cpu = 0;
     let memTotal = 0;
@@ -93,6 +111,7 @@ export default function FleetOverview({
     let load1 = 0;
     let agentsWithStats = 0;
     for (const s of Object.values(snapshots)) {
+      if (s.status !== 'online') continue;
       if (s.stats) {
         cpu += s.stats.cpu_count;
         memTotal += s.stats.mem_total_kb;
@@ -182,9 +201,9 @@ export default function FleetOverview({
     return out;
   }, [snapshots, search]);
 
-  const filteredAgents = useMemo(() => {
-    return agents.filter((a) => {
-      const snap = snapshots[a];
+  const filteredHosts = useMemo(() => {
+    return hosts.filter((host) => {
+      const snap = snapshots[host.agent_id];
       const role = snap?.docker?.swarm_role;
       const failed = snap?.services?.filter((s) => s.active_state === 'failed').length ?? 0;
       if (filter === 'mgr') return role === 'manager';
@@ -192,10 +211,36 @@ export default function FleetOverview({
       if (filter === 'warn') return failed > 0;
       return true;
     });
-  }, [agents, snapshots, filter]);
+  }, [filter, hosts, snapshots]);
+
+  if (error && hosts.length === 0 && !loading) {
+    return (
+      <div className="pane">
+        <div className="panel">
+          <div className="empty" role="alert">
+            <div>Fleet data is unavailable ({error}).</div>
+            <button className="btn" onClick={refresh} style={{ marginTop: 12 }}>
+              Retry
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="pane">
+      {(liveStatus === 'degraded' || (error && hosts.length > 0)) && (
+        <div
+          role="status"
+          className="panel"
+          style={{ padding: '10px 14px', color: 'var(--warn)', marginBottom: 12 }}
+        >
+          {liveStatus === 'degraded'
+            ? 'Live updates disconnected. Showing durable state from the server; refresh remains available.'
+            : `Fleet refresh failed (${error}). Showing the last durable state.`}
+        </div>
+      )}
       <div className="stat-grid">
         <div className="stat">
           <div className="stat-label">
@@ -208,7 +253,7 @@ export default function FleetOverview({
           </div>
           <div className="stat-sub">
             <span>{totals.agentsWithStats} reporting</span>
-            <span>{agents.length} total</span>
+            <span>{hosts.length} total</span>
           </div>
         </div>
 
@@ -262,7 +307,7 @@ export default function FleetOverview({
               {totals.svcFailed} failed
             </span>
             <span className="ok">
-              {agents.length}/{agents.length} agents
+              {onlineCount}/{hosts.length} agents
             </span>
           </div>
         </div>
@@ -273,7 +318,7 @@ export default function FleetOverview({
           <div className="panel-title">
             <span className="ico">▤</span> HOSTS
             <span className="meta">
-              {agents.length} agents · {agents.length} online
+              {hosts.length} agents · {onlineCount} online
             </span>
           </div>
           <div className="panel-actions">
@@ -299,8 +344,8 @@ export default function FleetOverview({
                 WARN
               </button>
             </div>
-            <button className="btn" onClick={refresh} title="Refresh">
-              ↻
+            <button className="btn" onClick={refresh} title="Refresh" disabled={loading}>
+              {loading ? '…' : '↻'}
             </button>
           </div>
         </div>
@@ -324,24 +369,28 @@ export default function FleetOverview({
                 </tr>
               </thead>
               <tbody>
-                {filteredAgents.length === 0 ? (
+                {filteredHosts.length === 0 ? (
                   <tr>
                     <td colSpan={8} className="muted" style={{ padding: 32, textAlign: 'center' }}>
                       No hosts match the current filter.
                     </td>
                   </tr>
                 ) : (
-                  filteredAgents.map((agentId) => (
+                  filteredHosts.map((host) => (
                     <HostRow
-                      key={agentId}
+                      key={host.agent_id}
+                      host={host}
                       snapshot={
-                        snapshots[agentId] ?? {
-                          agentId,
-                          hostname: agentId.replace(/-id$/, ''),
+                        snapshots[host.agent_id] ?? {
+                          agentId: host.agent_id,
+                          hostname: host.hostname,
+                          status: host.status,
+                          lastSeenAt: host.last_seen_at,
                         }
                       }
-                      health={healthByAgent[agentId]}
-                      onClick={() => onSelectAgent?.(agentId)}
+                      health={healthByAgent[host.agent_id]}
+                      nowSeconds={nowSeconds}
+                      onClick={() => onSelectAgent?.(host.agent_id)}
                     />
                   ))
                 )}
@@ -355,12 +404,16 @@ export default function FleetOverview({
 }
 
 function HostRow({
+  host,
   snapshot,
   health,
+  nowSeconds,
   onClick,
 }: {
-  snapshot: AgentSnapshot;
+  host: FleetHost;
+  snapshot: CoreAgentSnapshot;
   health?: HealthSnapshotRow;
+  nowSeconds: number;
   onClick: () => void;
 }) {
   const stats = snapshot.stats;
@@ -394,16 +447,32 @@ function HostRow({
       : '—'
     : '—';
 
+  const snapshotTimes = [host.system, host.services, host.docker, host.swarm]
+    .filter((value) => value !== null)
+    .map((value) => value.observed_at);
+  const newestSnapshotAt = snapshotTimes.length > 0 ? Math.max(...snapshotTimes) : null;
+  const online = host.status === 'online';
+
   return (
-    <tr onClick={onClick} style={{ cursor: 'pointer' }}>
+    <tr onClick={onClick} style={{ cursor: 'pointer', opacity: online ? 1 : 0.62 }}>
       <td>
-        <span className="status ok">
+        <span className={`status ${online ? 'ok' : 'muted'}`}>
           <span className="dot" />
-          online
+          {host.status}
         </span>
+        {!online && (
+          <div className="muted" style={{ fontSize: 9, marginTop: 3 }}>
+            last seen {formatRelativeTime(host.last_seen_at, nowSeconds)}
+          </div>
+        )}
       </td>
       <td className="mono">
         {snapshot.hostname} {roleChip}
+        {newestSnapshotAt !== null && (
+          <div className="muted" style={{ fontSize: 9, marginTop: 3 }}>
+            data {formatRelativeTime(newestSnapshotAt, nowSeconds)}
+          </div>
+        )}
       </td>
       <td className="right mono">{stats ? stats.load_1.toFixed(2) : '—'}</td>
       <td>{stats ? progPct('mem', memPct) : <span className="muted">—</span>}</td>
