@@ -317,17 +317,35 @@ mod tests {
             (Message::SystemStatsRequest, None, Read),
             (Message::DockerListRequest, Some("container:List"), Read),
             (Message::SwarmListRequest, Some("swarm:List"), Read),
-            (Message::DockerImageListRequest, Some("docker:ImageList"), Read),
-            (Message::DockerNetworkListRequest, Some("network:List"), Read),
+            (
+                Message::DockerImageListRequest,
+                Some("docker:ImageList"),
+                Read,
+            ),
+            (
+                Message::DockerNetworkListRequest,
+                Some("network:List"),
+                Read,
+            ),
             (Message::DockerVolumeListRequest, Some("volume:List"), Read),
-            (Message::DockerVolumePruneRequest, Some("docker:Prune"), Mutation),
+            (
+                Message::DockerVolumePruneRequest,
+                Some("docker:Prune"),
+                Mutation,
+            ),
             (Message::SwarmStackListRequest, Some("swarm:List"), Read),
             (Message::DockerStatsRequest, Some("container:List"), Read),
-            (Message::DockerExecStopRequest, Some("container:Exec"), UiRequestClass::Interactive),
+            (
+                Message::DockerExecStopRequest,
+                Some("container:Exec"),
+                UiRequestClass::Interactive,
+            ),
         ];
 
         for (message, action, class) in cases {
-            let security = message.ui_request_security().expect("UI request must classify");
+            let security = message
+                .ui_request_security()
+                .expect("UI request must classify");
             assert_eq!(security.action, action);
             assert_eq!(security.class, class);
             assert_eq!(security.class.requires_approval(), class == Mutation);

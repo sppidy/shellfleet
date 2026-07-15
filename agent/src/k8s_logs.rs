@@ -8,10 +8,10 @@
 //! away (server detects the WS close, tx is dropped, send returns
 //! Err and the loop exits).
 
+use agent::Outgoing;
 use futures_util::{AsyncBufReadExt, StreamExt};
 use k8s_openapi::api::core::v1::Pod;
 use kube::{Api, Client, api::LogParams};
-use agent::Outgoing;
 use shared::Message;
 use std::collections::HashMap;
 use std::sync::Arc;

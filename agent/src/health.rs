@@ -46,11 +46,7 @@ struct Inner {
 impl HealthProbes {
     /// Apply a new probe set. Spawns/aborts tasks so the running set
     /// matches `probes`.
-    pub async fn sync(
-        &self,
-        probes: Vec<HealthProbeSpec>,
-        tx: Outgoing,
-    ) {
+    pub async fn sync(&self, probes: Vec<HealthProbeSpec>, tx: Outgoing) {
         let mut inner = self.inner.lock().await;
         let mut keep: HashMap<String, ()> = HashMap::with_capacity(probes.len());
         for p in probes {
@@ -235,9 +231,7 @@ async fn probe_exec(spec: &HealthProbeSpec, timeout: Duration) -> (HealthProbeSt
             if is_safe_probe_env_key(k) {
                 cmd.env(k, v);
             } else {
-                eprintln!(
-                    "health probe {target:?}: ignored unsafe environment variable {k:?}"
-                );
+                eprintln!("health probe {target:?}: ignored unsafe environment variable {k:?}");
             }
         }
     }

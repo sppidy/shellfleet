@@ -92,9 +92,10 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio_tungstenite::{
-    connect_async_tls_with_config, connect_async_with_config, Connector,
+    Connector, connect_async_tls_with_config, connect_async_with_config,
     tungstenite::{
-        client::IntoClientRequest, http::header::AUTHORIZATION,
+        client::IntoClientRequest,
+        http::header::AUTHORIZATION,
         protocol::{Message as WsMessage, WebSocketConfig},
     },
 };
@@ -119,7 +120,9 @@ enum DeviceTokenResponse {
         #[serde(default)]
         expires_in: Option<i64>,
     },
-    Error { error: String },
+    Error {
+        error: String,
+    },
 }
 
 const TOKEN_PATH: &str = "/var/lib/shellfleet-agent/agent-token.txt";
@@ -147,7 +150,9 @@ fn read_secret_file(path: &str) -> std::io::Result<String> {
         .custom_flags(libc::O_NOFOLLOW)
         .open(path)?;
     if !file.metadata()?.file_type().is_file() {
-        return Err(std::io::Error::other("credential path is not a regular file"));
+        return Err(std::io::Error::other(
+            "credential path is not a regular file",
+        ));
     }
     let mut value = String::new();
     file.take(16 * 1024).read_to_string(&mut value)?;
@@ -187,9 +192,7 @@ fn now_unix() -> i64 {
 }
 
 /// Load all PEM-encoded certificates from `path`.
-fn load_pem_certs(
-    path: &str,
-) -> std::io::Result<Vec<rustls::pki_types::CertificateDer<'static>>> {
+fn load_pem_certs(path: &str) -> std::io::Result<Vec<rustls::pki_types::CertificateDer<'static>>> {
     let pem = std::fs::read_to_string(path)?;
     let mut reader = std::io::Cursor::new(pem.as_bytes());
     rustls_pemfile::certs(&mut reader).collect()
@@ -210,9 +213,15 @@ fn load_pem_key(path: &str) -> std::io::Result<rustls::pki_types::PrivateKeyDer<
 /// (dev/local with a plain `ws://` URL) so the caller falls back to
 /// `connect_async`.
 fn build_agent_tls_client_config() -> Option<Arc<rustls::ClientConfig>> {
-    let cert_path = std::env::var("AGENT_MTLS_CERT_PATH").ok().filter(|s| !s.is_empty())?;
-    let key_path = std::env::var("AGENT_MTLS_KEY_PATH").ok().filter(|s| !s.is_empty())?;
-    let ca_path = std::env::var("SERVER_TLS_CA_PATH").ok().filter(|s| !s.is_empty())?;
+    let cert_path = std::env::var("AGENT_MTLS_CERT_PATH")
+        .ok()
+        .filter(|s| !s.is_empty())?;
+    let key_path = std::env::var("AGENT_MTLS_KEY_PATH")
+        .ok()
+        .filter(|s| !s.is_empty())?;
+    let ca_path = std::env::var("SERVER_TLS_CA_PATH")
+        .ok()
+        .filter(|s| !s.is_empty())?;
 
     let cert = load_pem_certs(&cert_path).ok()?;
     let key = load_pem_key(&key_path).ok()?;
@@ -335,11 +344,7 @@ async fn pair(api_url: &str) -> String {
                         expires_in,
                     } => {
                         println!("Agent successfully authorized!");
-                        persist_token_triple(
-                            &access_token,
-                            refresh_token.as_deref(),
-                            expires_in,
-                        );
+                        persist_token_triple(&access_token, refresh_token.as_deref(), expires_in);
                         return access_token;
                     }
                     DeviceTokenResponse::Error { error } => {
@@ -506,13 +511,15 @@ async fn main() {
         ws_config.max_frame_size = Some(MAX_WS_MESSAGE_BYTES);
         let handshake = async {
             match tls_config.as_ref() {
-                Some(cfg) => connect_async_tls_with_config(
-                    request,
-                    Some(ws_config),
-                    false,
-                    Some(Connector::Rustls(cfg.clone())),
-                )
-                .await,
+                Some(cfg) => {
+                    connect_async_tls_with_config(
+                        request,
+                        Some(ws_config),
+                        false,
+                        Some(Connector::Rustls(cfg.clone())),
+                    )
+                    .await
+                }
                 None => connect_async_with_config(request, Some(ws_config), false).await,
             }
         };

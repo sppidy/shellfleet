@@ -40,13 +40,7 @@ pub struct LogStreams {
 }
 
 impl LogStreams {
-    pub async fn start(
-        &self,
-        container_id: String,
-        tail: u32,
-        follow: bool,
-        tx: Outgoing,
-    ) {
+    pub async fn start(&self, container_id: String, tail: u32, follow: bool, tx: Outgoing) {
         // Reject hostile / malformed container_ids before they
         // land in argv. The send goes to the same channel the
         // dashboard's logs panel listens on, so the operator
@@ -86,12 +80,7 @@ impl LogStreams {
     }
 }
 
-async fn run_stream(
-    container_id: String,
-    tail: u32,
-    follow: bool,
-    tx: Outgoing,
-) {
+async fn run_stream(container_id: String, tail: u32, follow: bool, tx: Outgoing) {
     let mut cmd = Command::new("docker");
     cmd.arg("logs");
     if follow {

@@ -34,13 +34,7 @@ pub struct JournalStreams {
 }
 
 impl JournalStreams {
-    pub async fn start(
-        &self,
-        unit: String,
-        lines: u32,
-        follow: bool,
-        tx: Outgoing,
-    ) {
+    pub async fn start(&self, unit: String, lines: u32, follow: bool, tx: Outgoing) {
         // Reject hostile / malformed unit names before they land
         // in argv; cap the backlog before journald starts spooling.
         if !valid_unit_name(&unit) {

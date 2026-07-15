@@ -1,5 +1,5 @@
-use portable_pty::{CommandBuilder, NativePtySystem, PtySize, PtySystem};
 use agent::Outgoing;
+use portable_pty::{CommandBuilder, NativePtySystem, PtySize, PtySystem};
 use shared::Message;
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
@@ -37,10 +37,7 @@ fn pick_login_shell() -> (String, Vec<&'static str>) {
     ("bash".to_string(), vec!["-l"])
 }
 
-pub fn spawn_terminal(
-    session_id: String,
-    tx_msg: Outgoing,
-) -> Result<TerminalSession, String> {
+pub fn spawn_terminal(session_id: String, tx_msg: Outgoing) -> Result<TerminalSession, String> {
     #[cfg(target_os = "windows")]
     let cmd = CommandBuilder::new("powershell.exe");
     #[cfg(not(target_os = "windows"))]

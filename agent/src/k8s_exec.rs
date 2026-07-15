@@ -15,11 +15,11 @@
 //!      pumps; the agent map drop closes the senders, kube-rs reaps
 //!      the underlying SPDY/WebSocket stream.
 
+use agent::Outgoing;
 use futures_util::SinkExt;
 use k8s_openapi::api::core::v1::Pod;
 use kube::api::{AttachParams, TerminalSize};
 use kube::{Api, Client};
-use agent::Outgoing;
 use shared::Message;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::mpsc;
@@ -45,10 +45,7 @@ pub struct ExecArgs {
     pub command: Vec<String>,
 }
 
-pub async fn spawn_exec(
-    args: ExecArgs,
-    tx_msg: Outgoing,
-) -> Result<K8sExecSession, String> {
+pub async fn spawn_exec(args: ExecArgs, tx_msg: Outgoing) -> Result<K8sExecSession, String> {
     let client = Client::try_default()
         .await
         .map_err(|e| format!("kube client: {e}"))?;
