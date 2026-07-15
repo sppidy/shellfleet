@@ -1,0 +1,89 @@
+name: shellfleet-journey
+
+services:
+  server:
+    build:
+      context: ../..
+      dockerfile: Dockerfile.server
+    environment:
+      JWT_SECRET: dev
+      SHELLFLEET_DEV: "1"
+      COOKIE_SECURE: "false"
+      AGENT_SECRET: journey-agent-token
+      DB_PATH: /data/shellfleet.db
+      TOKENS_PATH: /data/approved_tokens.json
+      GITHUB_CLIENT_ID: journey-client
+      GITHUB_CLIENT_SECRET: journey-secret
+      OAUTH_REDIRECT_URL: http://127.0.0.1:18080/auth/callback
+      UI_URL: http://127.0.0.1:18080/
+      ALLOWED_GITHUB_USERS: dev
+      TRUSTED_PROXY_CIDRS: 172.16.0.0/12
+      WS_ALLOWED_ORIGINS: http://127.0.0.1:18080
+      SHELLFLEET_TELEMETRY: "off"
+      STALE_AGENT_REALERT_SECS: "0"
+    volumes:
+      - server-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:8080/healthz >/dev/null || exit 1"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+      start_period: 2s
+    networks:
+      - journey
+
+  web:
+    build:
+      context: ../..
+      dockerfile: Dockerfile.web
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:3000/overview >/dev/null || exit 1"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+      start_period: 2s
+    networks:
+      - journey
+
+  agent:
+    build:
+      context: ../..
+      dockerfile: Dockerfile.agent
+    hostname: journey-agent
+    environment:
+      SERVER_API_URL: http://server:8080
+      SERVER_WS_URL: ws://server:8080/agent/ws
+    volumes:
+      - ./agent-token.txt:/var/lib/shellfleet-agent/agent-token.txt:ro
+    depends_on:
+      server:
+        condition: service_healthy
+    networks:
+      - journey
+
+  ingress:
+    image: nginx:1.27-alpine
+    ports:
+      - "127.0.0.1:18080:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      server:
+        condition: service_healthy
+      web:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1/overview >/dev/null || exit 1"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+      start_period: 2s
+    networks:
+      - journey
+
+networks:
+  journey:
+    driver: bridge
+
+volumes:
+  server-data:

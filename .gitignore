@@ -20,6 +20,9 @@ graphify-out/
 
 # Build artifacts
 .next/
+web/playwright-report/
+web/test-results/
+tests/journey/logs/
 
 # EE (private repo only)
 Dockerfile.ee

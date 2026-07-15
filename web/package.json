@@ -9,7 +9,8 @@
     "start": "next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:journey": "NODE_PATH=./node_modules playwright test -c ../tests/journey/playwright.config.ts"
   },
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",
@@ -26,6 +27,7 @@
     "postcss": "^8.5.10"
   },
   "devDependencies": {
+    "@playwright/test": "^1.61.1",
     "@tailwindcss/postcss": "^4",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
