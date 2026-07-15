@@ -49,6 +49,54 @@ jobs:
       - run: npm run typecheck
       - run: npm test
 
+  journey:
+    name: journey (browser + server + agent)
+    needs: [rust, web]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Install web dependencies
+        working-directory: web
+        run: npm ci
+      - name: Install Chromium
+        working-directory: web
+        run: npx playwright install --with-deps chromium
+      - name: Build and start journey stack
+        run: docker compose -f tests/journey/docker-compose.yml up -d --build
+      - name: Run durable Fleet journey
+        working-directory: web
+        env:
+          SHELLFLEET_JOURNEY_KEEP_STACK: "1"
+        run: npm run test:journey
+      - name: Collect journey diagnostics
+        if: always()
+        run: |
+          mkdir -p tests/journey/logs
+          docker compose -f tests/journey/docker-compose.yml ps \
+            > tests/journey/logs/compose-ps.txt 2>&1 || true
+          docker compose -f tests/journey/docker-compose.yml logs --no-color \
+            > tests/journey/logs/compose.log 2>&1 || true
+      - name: Upload journey diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: durable-fleet-journey
+          if-no-files-found: warn
+          path: |
+            web/test-results/
+            web/playwright-report/
+            tests/journey/logs/
+      - name: Remove journey stack
+        if: always()
+        run: |
+          docker compose -f tests/journey/docker-compose.yml \
+            down -v --remove-orphans
+
   helm:
     name: helm (lint + template)
     runs-on: ubuntu-latest
