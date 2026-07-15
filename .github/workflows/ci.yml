@@ -18,8 +18,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-        with:
-          submodules: recursive
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
@@ -41,8 +39,6 @@ jobs:
         working-directory: web
     steps:
       - uses: actions/checkout@v6
-        with:
-          submodules: recursive
       - uses: actions/setup-node@v4
         with:
           node-version: 22

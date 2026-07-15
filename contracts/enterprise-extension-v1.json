@@ -1,0 +1,38 @@
+{
+  "contract_version": 1,
+  "transport": "http-json",
+  "authentication": "directional-hmac-sha256-v1",
+  "required_capabilities": [
+    "health",
+    "license",
+    "policy"
+  ],
+  "optional_capabilities": [
+    "sso",
+    "scim",
+    "iam",
+    "api_keys",
+    "approvals",
+    "break_glass",
+    "audit_stream",
+    "audit_archive",
+    "recordings",
+    "runbooks",
+    "drift",
+    "sla",
+    "cost",
+    "metrics_multi",
+    "ai_analysis"
+  ],
+  "required_endpoints": {
+    "health": "GET /internal/extension/v1/health",
+    "manifest": "GET /internal/extension/v1/manifest",
+    "policy": "POST /internal/extension/v1/policy/evaluate"
+  },
+  "fail_closed_on": [
+    "contract_mismatch",
+    "invalid_signature",
+    "unhealthy_extension",
+    "missing_policy_capability"
+  ]
+}

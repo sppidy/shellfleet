@@ -59,33 +59,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Fetch submodules with PAT
-        env:
-          SUBMODULES_PAT: ${{ secrets.SUBMODULES_PAT }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [ -n "${SUBMODULES_PAT:-}" ]; then
-            git config --global \
-              url."https://x-access-token:${SUBMODULES_PAT}@github.com/".insteadOf \
-              "https://github.com/"
-          fi
-          git submodule update --init --recursive --depth 1 agent shared
-
-      - name: Trim workspace to agent + shared
-        shell: bash
-        run: |
-          # The root Cargo.toml lists server as a workspace member, but we
-          # don't fetch the server submodule in this build. cargo metadata
-          # would refuse to load. Replace the manifest with an agent-only
-          # workspace just for this run; the file is restored on next
-          # checkout.
-          cat > Cargo.toml <<'EOF'
-          [workspace]
-          members = ["agent", "shared"]
-          resolver = "2"
-          EOF
-
       - name: Check package privilege boundary
         shell: bash
         run: sh agent/tests/package_security.sh

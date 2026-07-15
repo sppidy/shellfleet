@@ -50,11 +50,8 @@ jobs:
             echo "value=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Checkout (with submodules)
+      - name: Checkout
         uses: actions/checkout@v6
-        with:
-          submodules: recursive
-          token: ${{ secrets.SUBMODULES_PAT }}
 
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v4

@@ -53,19 +53,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Fetch submodules with PAT
-        env:
-          SUBMODULES_PAT: ${{ secrets.SUBMODULES_PAT }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [ -n "${SUBMODULES_PAT:-}" ]; then
-            git config --global \
-              url."https://x-access-token:${SUBMODULES_PAT}@github.com/".insteadOf \
-              "https://github.com/"
-          fi
-          git submodule update --init --recursive --depth 1 agent cli server shared
-
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v4
 
