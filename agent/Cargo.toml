@@ -1,0 +1,157 @@
+[package]
+name = "agent"
+version = "1.1.0"
+edition = "2024"
+description = "Agent for ShellFleet: connects a host to a ShellFleet server over WebSocket and exposes systemd service control, terminal, and config editing."
+license = "AGPL-3.0-or-later"
+repository = "https://github.com/sppidy/shellfleet-agent"
+
+[[bin]]
+name = "shellfleet-agent"
+path = "src/main.rs"
+
+[[bin]]
+name = "shellfleet-approval-gate"
+path = "src/bin/shellfleet-approval-gate.rs"
+
+[features]
+# Default build is the lean host-agent .deb. Turn on the `kube` feature
+# for the shellfleet-agent-k8s package, which adds kube-rs + k8s-openapi
+# (~2 MB of crypto deps) so the agent can talk to a kube-apiserver.
+default = []
+kube = ["dep:kube", "dep:k8s-openapi", "dep:chrono", "dep:serde_yaml"]
+
+[dependencies]
+crossbeam-channel = "0.5.15"
+futures-util = "0.3.32"
+hostname = "0.4.2"
+portable-pty = "0.9.0"
+reqwest = { version = "0.13.2", default-features = false, features = ["json", "native-tls", "stream"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+sha2 = "0.10"
+shared = { version = "0.1.0", path = "../shared" }
+tempfile = "3.10"
+tokio = { version = "1.52.1", features = ["macros", "process", "rt-multi-thread", "sync", "io-util", "fs", "net", "time", "signal"] }
+tokio-tungstenite = { version = "0.29.0", features = ["rustls-tls-webpki-roots"] }
+url = "2.5.8"
+base64 = "0.22"
+chacha20poly1305 = "0.10"
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+hkdf = "0.12"
+rand = "0.8"
+rusqlite = { version = "0.32", features = ["bundled"] }
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+zeroize = "1.8"
+# H-7: rustls + PEM loader for the agent↔server mutual-TLS connector
+# (client cert + server-CA pinning). Always-on — the mTLS connector is
+# part of the core agent, not gated on the kube feature.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+rustls-pemfile = "2"
+
+# AWS SDK for S3 backups. Replaces shelling out to the `aws` CLI so
+# the agent doesn't depend on the CLI being installed on every host
+# AND we get exact byte counts + native multipart on the way back to
+# the operator. ~3 MB binary cost vs the prior CLI-shellout zero.
+# Disable aws-sdk-s3's `rustls` default feature: it pulls
+# `aws-smithy-runtime/tls-rustls` → `aws-smithy-http-client/legacy-rustls-ring`
+# → `rustls v0.21` → `rustls-webpki v0.101.7` (DoS via malformed CRL +
+# name-constraint bypasses). The kept `default-https-client` feature
+# uses the modern `rustls-aws-lc` path → `rustls v0.23` + `rustls-webpki
+# v0.103.13` which has those advisories patched.
+aws-config = { version = "1", features = ["behavior-version-latest"] }
+aws-sdk-s3 = { version = "1", default-features = false, features = ["sigv4a", "http-1x", "default-https-client", "rt-tokio"] }
+
+# Optional — only compiled when `--features kube` (i.e. the
+# shellfleet-agent-k8s package). Uses rustls so we don't drag a second
+# TLS stack in alongside reqwest's native-tls.
+chrono = { version = "0.4", default-features = false, features = ["clock"], optional = true }
+kube = { version = "1.1", default-features = false, features = ["client", "rustls-tls", "ws"], optional = true }
+# k8s-openapi requires a concrete v1_* feature pinning the API surface
+# the binary supports. v1_32 covers k3s 1.34 / kubernetes 1.32 (current
+# LTS / latest). Bump in lockstep when targeting newer clusters.
+k8s-openapi = { version = "0.25", default-features = false, features = ["v1_32"], optional = true }
+# rustls 0.23 requires the binary to install a process-level default
+# CryptoProvider before any TLS handshake. The always-on `rustls` dep
+# above (for the agent↔server mTLS connector) + this call cover both the
+# mTLS connector and, when the kube feature is on, kube-rs.
+# rustls CryptoProvider install lives in main() (see `install_default`).
+# YAML serialization for K8sDescribeResponse. serde_yaml is archived
+# upstream but still functional and pervasive in the k8s ecosystem;
+# revisit if a maintained fork (serde_yml) becomes the de-facto choice.
+serde_yaml = { version = "0.9", optional = true }
+
+# Used on Unix only for `O_NOFOLLOW` when opening operator-supplied
+# config-file paths: combined with the canonicalize-and-recheck in
+# `agent::config`, this rejects symlink swaps on the final
+# component of a write target. Listed under a target-specific
+# table so non-Unix dev hosts can still `cargo check` the rest
+# of the agent (the `write_no_follow` fn has a `#[cfg(not(unix))]`
+# fallback that doesn't reference libc).
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+# cargo-deb metadata. Used by the .github/workflows/agent-deb.yml job in the
+# superproject to publish .deb packages to https://sppidy.github.io/shellfleet.
+[package.metadata.deb]
+name = "shellfleet-agent"
+maintainer = "sppidy <sppidytg@gmail.com>"
+copyright = "2026, sppidy <sppidytg@gmail.com>"
+extended-description = """\
+Agent for ShellFleet. Connects a Linux host to a ShellFleet server over a
+TLS WebSocket and exposes systemd service control, an interactive terminal,
+and remote read/write of configuration files. Pairing happens through the
+server's device-auth flow; the resulting token is cached at
+/etc/shellfleet/agent-token.txt."""
+section = "admin"
+priority = "optional"
+depends = "$auto, systemd"
+assets = [
+    ["target/release/shellfleet-agent", "usr/bin/shellfleet-agent", "755"],
+    ["target/release/shellfleet-approval-gate", "usr/bin/shellfleet-approval-gate", "755"],
+    ["debian/shellfleet-approval-gate.service", "lib/systemd/system/shellfleet-approval-gate.service", "644"],
+    ["debian/shellfleet-docker-proxy.service", "lib/systemd/system/shellfleet-docker-proxy.service", "644"],
+    ["debian/shellfleet-docker-proxy.socket", "lib/systemd/system/shellfleet-docker-proxy.socket", "644"],
+    ["debian/shellfleet-docker-proxy", "usr/sbin/shellfleet-docker-proxy", "755"],
+    ["debian/apparmor/shellfleet-agent", "etc/apparmor.d/shellfleet-agent", "644"],
+    ["debian/apparmor/shellfleet-approval-gate", "etc/apparmor.d/shellfleet-approval-gate", "644"],
+    ["debian/apparmor/shellfleet-docker-proxy", "etc/apparmor.d/shellfleet-docker-proxy", "644"],
+    ["debian/env.example", "etc/shellfleet/env.example", "644"],
+    # Stock probe library. Ships under /usr/share so apt owns the
+    # files; postinst symlinks them into /etc/shellfleet/probes.d/
+    # so the operator can `rm` individual entries to disable them
+    # without losing them on package upgrade.
+    ["debian/probes.d/apt-pending-count.sh",  "usr/share/shellfleet/probes.d/apt-pending-count.sh",  "755"],
+    ["debian/probes.d/disk-usage.sh",         "usr/share/shellfleet/probes.d/disk-usage.sh",         "755"],
+    ["debian/probes.d/failed-services.sh",    "usr/share/shellfleet/probes.d/failed-services.sh",    "755"],
+    ["debian/probes.d/swap-pressure.sh",      "usr/share/shellfleet/probes.d/swap-pressure.sh",      "755"],
+    ["debian/probes.d/load-average.sh",       "usr/share/shellfleet/probes.d/load-average.sh",       "755"],
+    ["debian/probes.d/docker-running.sh",     "usr/share/shellfleet/probes.d/docker-running.sh",     "755"],
+    ["debian/probes.d/swarm-pending.sh",      "usr/share/shellfleet/probes.d/swarm-pending.sh",      "755"],
+    ["debian/probes.d/cert-expiry-days.sh",   "usr/share/shellfleet/probes.d/cert-expiry-days.sh",   "755"],
+    ["debian/probes.d/journal-errors.sh",     "usr/share/shellfleet/probes.d/journal-errors.sh",     "755"],
+    ["debian/probes.d/ntp-drift.sh",          "usr/share/shellfleet/probes.d/ntp-drift.sh",          "755"],
+]
+maintainer-scripts = "debian"
+
+[package.metadata.deb.systemd-units]
+unit-scripts = "debian"
+unit-name = "shellfleet-agent"
+enable = true
+start = true
+restart-after-upgrade = true
+
+# Variant: shellfleet-agent-k8s. Built with `cargo deb --variant k8s
+# --features kube` in CI. Same binary path + systemd unit as the
+# standard package, so the two are mutually exclusive at install time.
+[package.metadata.deb.variants.k8s]
+name = "shellfleet-agent-k8s"
+conflicts = "shellfleet-agent"
+provides = "shellfleet-agent"
+replaces = "shellfleet-agent"
+extended-description = """\
+Agent for ShellFleet — k8s flavor. Same as shellfleet-agent plus a
+compiled-in kube-rs client so the agent can talk to a kube-apiserver
+via in-cluster ServiceAccount or a kubeconfig at $KUBECONFIG. Install
+on hosts that should appear as Kubernetes targets in the dashboard;
+install plain shellfleet-agent everywhere else."""

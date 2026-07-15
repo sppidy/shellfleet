@@ -1,0 +1,20 @@
+#include <tunables/global>
+
+# The gate is locally trusted and executes transactions carrying an enrolled
+# operator signature. Its network surface is denied; filesystem/process access
+# is intentionally broad because an approved root shell is root-equivalent.
+profile shellfleet-approval-gate /usr/bin/shellfleet-approval-gate flags=(attach_disconnected,mediate_deleted) {
+  #include <abstractions/base>
+  /usr/bin/shellfleet-approval-gate mr,
+  /var/lib/shellfleet-gate/** rwkl,
+  /etc/shellfleet/approvers.json r,
+  /run/shellfleet/** rwkl,
+  /** rixwkl,
+  network unix stream,
+  deny network inet,
+  deny network inet6,
+  capability setuid,
+  capability setgid,
+  capability dac_override,
+  capability dac_read_search,
+}

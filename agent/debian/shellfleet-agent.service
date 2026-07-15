@@ -1,0 +1,56 @@
+[Unit]
+Description=ShellFleet Agent
+After=network-online.target shellfleet-approval-gate.service
+Wants=network-online.target
+Requires=shellfleet-approval-gate.service
+
+[Service]
+Type=simple
+User=shellfleet
+Group=shellfleet
+
+ExecStart=/usr/bin/shellfleet-agent
+
+# State (auth token) lives under /var/lib/shellfleet-agent; read-only fields
+# go in /etc/shellfleet/env. A bind mount of /etc lets the config editor see
+# host configs even on systems with strict ProtectHome/ProtectSystem defaults.
+EnvironmentFile=-/etc/shellfleet/env
+# Created only by `shellfleet-docker-proxy enable`. Keeping this separate from
+# the operator's general configuration makes Docker access an explicit opt-in.
+EnvironmentFile=-/etc/shellfleet/docker-proxy.env
+
+Restart=on-failure
+RestartSec=5s
+
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateTmp=true
+PrivateDevices=true
+# Interactive sessions need a pseudoterminal, but no other host device nodes.
+BindPaths=/dev/pts
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+# ProcSubset=pid hides /proc/meminfo, loadavg, uptime, and cpuinfo, which
+# are the agent's own host telemetry inputs. ProtectProc still hides other
+# users' processes.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+UMask=0077
+ReadWritePaths=/var/lib/shellfleet-agent
+AppArmorProfile=-shellfleet-agent
+
+[Install]
+WantedBy=multi-user.target

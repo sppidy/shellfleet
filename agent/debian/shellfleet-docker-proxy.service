@@ -1,0 +1,35 @@
+[Unit]
+Description=ShellFleet local Docker API proxy
+Documentation=https://github.com/sppidy/shellfleet#docker-and-swarm-explicit-opt-in
+Requires=shellfleet-docker-proxy.socket docker.socket
+After=docker.socket shellfleet-docker-proxy.socket
+
+[Service]
+Type=simple
+ExecStart=/lib/systemd/systemd-socket-proxyd /run/docker.sock
+User=root
+Group=root
+
+# The process only receives the client socket from systemd and opens the local
+# Docker socket. It has no network, device, privilege, or writable-filesystem
+# access beyond that narrow forwarding path.
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+AppArmorProfile=-shellfleet-docker-proxy

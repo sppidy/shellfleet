@@ -1,0 +1,1530 @@
+use serde::Deserialize;
+use shared::{
+    DockerContainer, DockerContainerAction, SwarmAction, SwarmNode, SwarmRole, SwarmService,
+    SwarmServiceSpecSummary, SwarmTask, MAX_OUTPUT_BYTES,
+};
+use std::process::Stdio;
+use tokio::io::AsyncWriteExt;
+use tokio::process::Command;
+
+#[derive(Debug, Deserialize)]
+struct DockerPsRow {
+    #[serde(rename = "ID")]
+    id: String,
+    #[serde(rename = "Names")]
+    names: String,
+    #[serde(rename = "Image")]
+    image: String,
+    #[serde(rename = "State")]
+    state: String,
+    #[serde(rename = "Status")]
+    status: String,
+    #[serde(rename = "Ports")]
+    ports: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct DockerInfoSwarm {
+    #[serde(rename = "LocalNodeState")]
+    local_node_state: String,
+    #[serde(rename = "ControlAvailable")]
+    control_available: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct DockerInfo {
+    #[serde(rename = "Swarm")]
+    swarm: Option<DockerInfoSwarm>,
+}
+
+fn validate_object_ref(value: &str) -> Result<(), String> {
+    if value.is_empty() || value.len() > 255 {
+        return Err("docker object reference must be 1..=255 characters".into());
+    }
+    if !value
+        .as_bytes()
+        .first()
+        .is_some_and(|byte| byte.is_ascii_alphanumeric())
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b':'))
+    {
+        return Err("invalid docker object reference".into());
+    }
+    Ok(())
+}
+
+fn validate_image_ref(value: &str) -> Result<(), String> {
+    if value.is_empty() || value.len() > 512 {
+        return Err("docker image reference must be 1..=512 characters".into());
+    }
+    if !value
+        .as_bytes()
+        .first()
+        .is_some_and(|byte| byte.is_ascii_alphanumeric())
+        || !value.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric()
+                || matches!(byte, b'.' | b'_' | b'-' | b':' | b'/' | b'@' | b'+')
+        })
+    {
+        return Err("invalid docker image reference".into());
+    }
+    Ok(())
+}
+
+fn validate_network_driver(value: &str) -> Result<(), String> {
+    validate_object_ref(value).map_err(|_| "invalid docker network driver".into())
+}
+
+fn validate_subnet(value: &str) -> Result<(), String> {
+    if value.is_empty()
+        || value.len() > 128
+        || !value
+            .as_bytes()
+            .first()
+            .is_some_and(|byte| byte.is_ascii_hexdigit())
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() || matches!(byte, b'.' | b':' | b'/'))
+    {
+        return Err("invalid docker network subnet".into());
+    }
+    Ok(())
+}
+
+pub async fn docker_available() -> bool {
+    Command::new("docker")
+        .arg("version")
+        .arg("--format")
+        .arg("{{.Server.Version}}")
+        .output()
+        .await
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+pub async fn swarm_role() -> SwarmRole {
+    if !docker_available().await {
+        return SwarmRole::NotInSwarm;
+    }
+    let output = Command::new("docker")
+        .args(["info", "--format", "{{json .}}"])
+        .output()
+        .await;
+    let Ok(output) = output else {
+        return SwarmRole::NotInSwarm;
+    };
+    if !output.status.success() {
+        return SwarmRole::NotInSwarm;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let info: DockerInfo = match serde_json::from_str(&stdout) {
+        Ok(i) => i,
+        Err(_) => return SwarmRole::NotInSwarm,
+    };
+    let Some(s) = info.swarm else {
+        return SwarmRole::NotInSwarm;
+    };
+    if s.local_node_state != "active" {
+        return SwarmRole::NotInSwarm;
+    }
+    if s.control_available {
+        SwarmRole::Manager
+    } else {
+        SwarmRole::Worker
+    }
+}
+
+pub async fn list_containers() -> Result<Vec<DockerContainer>, String> {
+    let output = Command::new("docker")
+        .args(["ps", "-a", "--format", "{{json .}}", "--no-trunc"])
+        .output()
+        .await
+        .map_err(|e| format!("docker spawn: {e}"))?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut out = Vec::new();
+    for line in stdout.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let row: DockerPsRow = match serde_json::from_str(line) {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+        out.push(DockerContainer {
+            id: row.id.chars().take(12).collect(),
+            names: row.names,
+            image: row.image,
+            state: row.state,
+            status: row.status,
+            ports: row.ports,
+        });
+    }
+    Ok(out)
+}
+
+#[derive(Debug, Deserialize)]
+struct SvcRow {
+    #[serde(rename = "ID")]
+    id: String,
+    #[serde(rename = "Name")]
+    name: String,
+    #[serde(rename = "Mode")]
+    mode: String,
+    #[serde(rename = "Replicas")]
+    replicas: String,
+    #[serde(rename = "Image")]
+    image: String,
+    #[serde(rename = "Ports")]
+    ports: String,
+}
+
+pub async fn list_swarm_services() -> Result<Vec<SwarmService>, String> {
+    let output = Command::new("docker")
+        .args(["service", "ls", "--format", "{{json .}}"])
+        .output()
+        .await
+        .map_err(|e| format!("docker spawn: {e}"))?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut out = Vec::new();
+    for line in stdout.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let row: SvcRow = match serde_json::from_str(line) {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+        out.push(SwarmService {
+            id: row.id,
+            name: row.name,
+            mode: row.mode,
+            replicas: row.replicas,
+            image: row.image,
+            ports: row.ports,
+        });
+    }
+    Ok(out)
+}
+
+#[derive(Debug, Deserialize)]
+struct NodeRow {
+    #[serde(rename = "ID")]
+    id: String,
+    #[serde(rename = "Hostname")]
+    hostname: String,
+    #[serde(rename = "Status")]
+    status: String,
+    #[serde(rename = "Availability")]
+    availability: String,
+    #[serde(rename = "ManagerStatus")]
+    manager_status: String,
+    #[serde(rename = "EngineVersion")]
+    engine_version: String,
+}
+
+/// Run a lifecycle action against a single container by ID or name.
+pub async fn run_container_action(
+    id: &str,
+    action: DockerContainerAction,
+) -> (bool, String, Option<String>) {
+    if let Err(error) = validate_object_ref(id) {
+        return (false, String::new(), Some(error));
+    }
+    let mut cmd = Command::new("docker");
+    match action {
+        DockerContainerAction::Start => cmd.args(["start", id]),
+        DockerContainerAction::Stop => cmd.args(["stop", id]),
+        DockerContainerAction::Restart => cmd.args(["restart", id]),
+        // -f so we don't fail on a running container the operator
+        // explicitly chose to remove.
+        DockerContainerAction::Remove => cmd.args(["rm", "-f", id]),
+    };
+    let output = match cmd.output().await {
+        Ok(o) => o,
+        Err(e) => return (false, String::new(), Some(format!("docker spawn: {e}"))),
+    };
+    let success = output.status.success();
+    let mut log = String::from_utf8_lossy(&output.stdout).into_owned();
+    let err_text = String::from_utf8_lossy(&output.stderr);
+    if !err_text.is_empty() {
+        if !log.is_empty() {
+            log.push('\n');
+        }
+        log.push_str(&err_text);
+    }
+    let err = if success {
+        None
+    } else {
+        Some(format!("exit code {:?}", output.status.code()))
+    };
+    (success, log, err)
+}
+
+/// Run a swarm management action against a service. Returns combined
+/// stdout/stderr so the dashboard can show the operator what docker
+/// said. Only valid on a manager — the caller should gate with
+/// swarm_role().
+pub async fn run_swarm_action(name: &str, action: &SwarmAction) -> (bool, String, Option<String>) {
+    if let Err(error) = validate_object_ref(name) {
+        return (false, String::new(), Some(error));
+    }
+    let mut cmd = Command::new("docker");
+    match action {
+        SwarmAction::Scale(n) => {
+            cmd.args(["service", "scale", &format!("{name}={n}")]);
+        }
+        SwarmAction::ForceUpdate => {
+            cmd.args(["service", "update", "--force", name]);
+        }
+        SwarmAction::Remove => {
+            cmd.args(["service", "rm", name]);
+        }
+    }
+    let output = match cmd.output().await {
+        Ok(o) => o,
+        Err(e) => return (false, String::new(), Some(format!("docker spawn: {e}"))),
+    };
+    let success = output.status.success();
+    let mut log = String::from_utf8_lossy(&output.stdout).into_owned();
+    let err_text = String::from_utf8_lossy(&output.stderr);
+    if !err_text.is_empty() {
+        if !log.is_empty() {
+            log.push('\n');
+        }
+        log.push_str(&err_text);
+    }
+    let err = if success {
+        None
+    } else {
+        Some(format!("exit code {:?}", output.status.code()))
+    };
+    (success, log, err)
+}
+
+#[derive(Debug, Deserialize)]
+struct ServicePsRow {
+    #[serde(rename = "ID")]
+    id: String,
+    #[serde(rename = "Name")]
+    name: String,
+    #[serde(rename = "Node")]
+    node: String,
+    #[serde(rename = "DesiredState")]
+    desired_state: String,
+    #[serde(rename = "CurrentState")]
+    current_state: String,
+    #[serde(rename = "Error")]
+    #[serde(default)]
+    error: String,
+    #[serde(rename = "Image")]
+    image: String,
+}
+
+pub async fn service_ps(name: &str) -> Result<Vec<SwarmTask>, String> {
+    validate_object_ref(name)?;
+    let output = Command::new("docker")
+        .args([
+            "service",
+            "ps",
+            name,
+            "--format",
+            "{{json .}}",
+            "--no-trunc",
+        ])
+        .output()
+        .await
+        .map_err(|e| format!("docker spawn: {e}"))?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut out = Vec::new();
+    for line in stdout.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let row: ServicePsRow = match serde_json::from_str(line) {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+        out.push(SwarmTask {
+            id: row.id,
+            name: row.name,
+            node: row.node,
+            desired_state: row.desired_state,
+            current_state: row.current_state,
+            error: row.error,
+            image: row.image,
+        });
+    }
+    Ok(out)
+}
+
+pub async fn service_inspect(name: &str) -> Result<SwarmServiceSpecSummary, String> {
+    validate_object_ref(name)?;
+    let output = Command::new("docker")
+        .args(["service", "inspect", name])
+        .output()
+        .await
+        .map_err(|e| format!("docker spawn: {e}"))?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let value: serde_json::Value =
+        serde_json::from_str(&stdout).map_err(|e| format!("parse inspect json: {e}"))?;
+    let inspect = value
+        .as_array()
+        .and_then(|a| a.first())
+        .ok_or_else(|| "empty inspect array".to_string())?;
+
+    let spec = &inspect["Spec"];
+    let task_template = &spec["TaskTemplate"];
+    let container_spec = &task_template["ContainerSpec"];
+
+    let image = container_spec["Image"].as_str().unwrap_or("").to_string();
+    // Image typically looks like `repo/name:tag@sha256:…`. Split off the
+    // digest if present so the UI can show a stable identifier.
+    let (image_pretty, image_digest) = match image.split_once("@sha256:") {
+        Some((tag, digest)) => (tag.to_string(), format!("sha256:{digest}")),
+        None => (image.clone(), String::new()),
+    };
+
+    let mode_obj = &spec["Mode"];
+    let (mode, replicas) = if let Some(repl) = mode_obj.get("Replicated") {
+        (
+            "replicated".to_string(),
+            repl["Replicas"].as_u64().map(|v| v as u32),
+        )
+    } else if mode_obj.get("Global").is_some() {
+        ("global".to_string(), None)
+    } else {
+        ("unknown".to_string(), None)
+    };
+
+    let env: Vec<String> = container_spec["Env"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    let mounts: Vec<String> = container_spec["Mounts"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .map(|m| {
+                    let typ = m["Type"].as_str().unwrap_or("?");
+                    let source = m["Source"].as_str().unwrap_or("");
+                    let target = m["Target"].as_str().unwrap_or("");
+                    format!("type={typ},source={source},target={target}")
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let networks: Vec<String> = task_template["Networks"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|n| n["Target"].as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    let constraints: Vec<String> = task_template["Placement"]["Constraints"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    let published_ports: Vec<String> = spec["EndpointSpec"]["Ports"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .map(|p| {
+                    let target = p["TargetPort"].as_u64().unwrap_or(0);
+                    let published = p["PublishedPort"].as_u64().unwrap_or(0);
+                    let proto = p["Protocol"].as_str().unwrap_or("tcp");
+                    format!("{published}:{target}/{proto}")
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let created_at = inspect["CreatedAt"].as_str().unwrap_or("").to_string();
+    let updated_at = inspect["UpdatedAt"].as_str().unwrap_or("").to_string();
+
+    Ok(SwarmServiceSpecSummary {
+        image: image_pretty,
+        image_digest,
+        mode,
+        replicas,
+        created_at,
+        updated_at,
+        env,
+        mounts,
+        networks,
+        constraints,
+        published_ports,
+    })
+}
+
+/// Pipe a compose YAML to `docker stack deploy --compose-file -`. Returns
+/// stdout+stderr so the operator can see what services were created /
+/// updated.
+pub async fn stack_deploy(
+    stack_name: &str,
+    compose_yaml: &str,
+    prune: bool,
+) -> (bool, String, Option<String>) {
+    if let Err(error) = validate_object_ref(stack_name) {
+        return (false, String::new(), Some(error));
+    }
+    let mut cmd = Command::new("docker");
+    cmd.args([
+        "stack",
+        "deploy",
+        "--compose-file",
+        "-",
+        "--with-registry-auth",
+    ]);
+    if prune {
+        cmd.arg("--prune");
+    }
+    cmd.arg(stack_name);
+    cmd.stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => return (false, String::new(), Some(format!("docker spawn: {e}"))),
+    };
+
+    if let Some(mut stdin) = child.stdin.take() {
+        if let Err(e) = stdin.write_all(compose_yaml.as_bytes()).await {
+            return (false, String::new(), Some(format!("write stdin: {e}")));
+        }
+        // Drop stdin so docker reads EOF.
+        drop(stdin);
+    }
+
+    let output = match child.wait_with_output().await {
+        Ok(o) => o,
+        Err(e) => return (false, String::new(), Some(format!("docker wait: {e}"))),
+    };
+
+    let success = output.status.success();
+    let mut log = String::from_utf8_lossy(&output.stdout).into_owned();
+    let err_text = String::from_utf8_lossy(&output.stderr);
+    if !err_text.is_empty() {
+        if !log.is_empty() {
+            log.push('\n');
+        }
+        log.push_str(&err_text);
+    }
+    let err = if success {
+        None
+    } else {
+        Some(format!("exit code {:?}", output.status.code()))
+    };
+    (success, log, err)
+}
+
+pub async fn list_swarm_nodes() -> Result<Vec<SwarmNode>, String> {
+    let output = Command::new("docker")
+        .args(["node", "ls", "--format", "{{json .}}"])
+        .output()
+        .await
+        .map_err(|e| format!("docker spawn: {e}"))?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut out = Vec::new();
+    for line in stdout.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let row: NodeRow = match serde_json::from_str(line) {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+        out.push(SwarmNode {
+            id: row.id,
+            hostname: row.hostname,
+            status: row.status,
+            availability: row.availability,
+            manager_status: row.manager_status,
+            engine_version: row.engine_version,
+        });
+    }
+    Ok(out)
+}
+
+// ---------- images (v11) ----------
+
+pub async fn list_images() -> Result<Vec<shared::DockerImage>, String> {
+    // `docker images --format "{{json .}}"` emits one JSON object per
+    // image, ndjson-style. We parse defensively and skip rows that
+    // don't deserialise.
+    let output = match Command::new("docker")
+        .args(["images", "--no-trunc", "--format", "{{json .}}"])
+        .output()
+        .await
+    {
+        Ok(o) => o,
+        Err(e) => return Err(format!("spawn: {e}")),
+    };
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    #[derive(serde::Deserialize)]
+    struct Row {
+        #[serde(rename = "ID", default)]
+        id: String,
+        #[serde(rename = "Repository", default)]
+        repository: String,
+        #[serde(rename = "Tag", default)]
+        tag: String,
+        #[serde(rename = "Size", default)]
+        size: String,
+        #[serde(rename = "CreatedSince", default)]
+        created_since: String,
+        #[serde(rename = "CreatedAt", default)]
+        created_at: String,
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut out: Vec<shared::DockerImage> = Vec::new();
+    for line in stdout.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let Ok(row) = serde_json::from_str::<Row>(trimmed) else {
+            continue;
+        };
+        // Strip "sha256:" prefix from the id (cargo bin format leaves
+        // it; --no-trunc keeps it).
+        let id = row
+            .id
+            .strip_prefix("sha256:")
+            .unwrap_or(&row.id)
+            .to_string();
+        out.push(shared::DockerImage {
+            id,
+            repository: row.repository,
+            tag: row.tag,
+            size_bytes: parse_docker_size(&row.size),
+            created: if row.created_since.is_empty() {
+                row.created_at
+            } else {
+                row.created_since
+            },
+        });
+    }
+    Ok(out)
+}
+
+/// Parses docker's human-friendly size string ("12.3MB", "1.4GB", "894kB")
+/// into bytes. Returns 0 on parse failure rather than refusing the row.
+fn parse_docker_size(s: &str) -> u64 {
+    let s = s.trim();
+    if s.is_empty() {
+        return 0;
+    }
+    // Find where digits/decimal end.
+    let split = s
+        .find(|c: char| !(c.is_ascii_digit() || c == '.'))
+        .unwrap_or(s.len());
+    let (num, unit) = s.split_at(split);
+    let value: f64 = match num.parse() {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    let multiplier: f64 = match unit.trim().to_ascii_uppercase().as_str() {
+        "" | "B" => 1.0,
+        "KB" => 1_000.0,
+        "MB" => 1_000_000.0,
+        "GB" => 1_000_000_000.0,
+        "TB" => 1_000_000_000_000.0,
+        "KIB" => 1_024.0,
+        "MIB" => 1_024.0 * 1_024.0,
+        "GIB" => 1_024.0 * 1_024.0 * 1_024.0,
+        _ => return 0,
+    };
+    (value * multiplier) as u64
+}
+
+pub async fn remove_image(id: &str, force: bool) -> (bool, String, Option<String>) {
+    if let Err(error) = validate_image_ref(id) {
+        return (false, String::new(), Some(error));
+    }
+    let mut cmd = Command::new("docker");
+    cmd.arg("rmi");
+    if force {
+        cmd.arg("--force");
+    }
+    cmd.arg(id);
+    let output = match cmd.output().await {
+        Ok(o) => o,
+        Err(e) => return (false, String::new(), Some(format!("spawn: {e}"))),
+    };
+    let log = combine_stdout_stderr(&output);
+    let success = output.status.success();
+    let err = if success {
+        None
+    } else {
+        Some(format!("docker rmi exit {:?}", output.status.code()))
+    };
+    (success, log, err)
+}
+
+pub async fn pull_image(reference: &str) -> (bool, String, Option<String>) {
+    if let Err(error) = validate_image_ref(reference) {
+        return (false, String::new(), Some(error));
+    }
+    let output = match Command::new("docker")
+        .args(["pull", reference])
+        .output()
+        .await
+    {
+        Ok(o) => o,
+        Err(e) => return (false, String::new(), Some(format!("spawn: {e}"))),
+    };
+    let log = combine_stdout_stderr(&output);
+    let success = output.status.success();
+    let err = if success {
+        None
+    } else {
+        Some(format!("docker pull exit {:?}", output.status.code()))
+    };
+    (success, log, err)
+}
+
+fn combine_stdout_stderr(output: &std::process::Output) -> String {
+    let mut s = String::new();
+    if !output.stdout.is_empty() {
+        s.push_str(&String::from_utf8_lossy(&output.stdout));
+    }
+    if !output.stderr.is_empty() {
+        if !s.is_empty() {
+            s.push_str("\n--- stderr ---\n");
+        }
+        s.push_str(&String::from_utf8_lossy(&output.stderr));
+    }
+    if s.len() > 8_000 {
+        let cut = s.len() - 8_000;
+        let head = format!("…[{cut} bytes truncated]…\n");
+        s.drain(..cut);
+        s.insert_str(0, &head);
+    }
+    s
+}
+
+// ---------- networks (v12) ----------
+
+pub async fn list_networks() -> Result<Vec<shared::DockerNetwork>, String> {
+    let output = match Command::new("docker")
+        .args(["network", "ls", "--no-trunc", "--format", "{{json .}}"])
+        .output()
+        .await
+    {
+        Ok(o) => o,
+        Err(e) => return Err(format!("spawn: {e}")),
+    };
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    #[derive(serde::Deserialize)]
+    struct Row {
+        #[serde(rename = "ID", default)]
+        id: String,
+        #[serde(rename = "Name", default)]
+        name: String,
+        #[serde(rename = "Driver", default)]
+        driver: String,
+        #[serde(rename = "Scope", default)]
+        scope: String,
+        #[serde(rename = "CreatedAt", default)]
+        created_at: String,
+        #[serde(rename = "IPv6", default)]
+        ipv6: String,
+        #[serde(rename = "Internal", default)]
+        internal: String,
+        #[serde(rename = "Attachable", default)]
+        attachable: String,
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut out = Vec::new();
+    for line in stdout.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let Ok(row) = serde_json::from_str::<Row>(line) else {
+            continue;
+        };
+        out.push(shared::DockerNetwork {
+            id: row.id,
+            name: row.name,
+            driver: row.driver,
+            scope: row.scope,
+            created: row.created_at,
+            ipv6: matches!(row.ipv6.as_str(), "true" | "True" | "1"),
+            internal: matches!(row.internal.as_str(), "true" | "True" | "1"),
+            attachable: matches!(row.attachable.as_str(), "true" | "True" | "1"),
+        });
+    }
+    Ok(out)
+}
+
+pub async fn inspect_network(id: &str) -> (bool, String, Option<String>) {
+    if let Err(error) = validate_object_ref(id) {
+        return (false, String::new(), Some(error));
+    }
+    let output = match Command::new("docker")
+        .args(["network", "inspect", id])
+        .output()
+        .await
+    {
+        Ok(o) => o,
+        Err(e) => return (false, String::new(), Some(format!("spawn: {e}"))),
+    };
+    let success = output.status.success();
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    if success && stdout.len() > MAX_OUTPUT_BYTES {
+        (
+            false,
+            String::new(),
+            Some(format!("network inspect response exceeds {MAX_OUTPUT_BYTES}-byte limit")),
+        )
+    } else if success {
+        (true, stdout, None)
+    } else {
+        (false, stdout, Some(stderr))
+    }
+}
+
+pub async fn create_network(
+    name: &str,
+    driver: &str,
+    subnet: Option<&str>,
+    attachable: bool,
+    internal: bool,
+) -> (bool, Option<String>, String, Option<String>) {
+    if let Err(error) = validate_object_ref(name) {
+        return (false, None, String::new(), Some(error));
+    }
+    if let Err(error) = validate_network_driver(driver) {
+        return (false, None, String::new(), Some(error));
+    }
+    if let Some(subnet) = subnet.filter(|subnet| !subnet.is_empty()) {
+        if let Err(error) = validate_subnet(subnet) {
+            return (false, None, String::new(), Some(error));
+        }
+    }
+    let mut cmd = Command::new("docker");
+    cmd.args(["network", "create", "--driver", driver]);
+    if let Some(s) = subnet {
+        if !s.is_empty() {
+            cmd.args(["--subnet", s]);
+        }
+    }
+    if attachable {
+        cmd.arg("--attachable");
+    }
+    if internal {
+        cmd.arg("--internal");
+    }
+    cmd.arg(name);
+    let output = match cmd.output().await {
+        Ok(o) => o,
+        Err(e) => return (false, None, String::new(), Some(format!("spawn: {e}"))),
+    };
+    let log = combine_stdout_stderr(&output);
+    if output.status.success() {
+        let id = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        (true, Some(id), log, None)
+    } else {
+        (
+            false,
+            None,
+            log,
+            Some(format!(
+                "docker network create exit {:?}",
+                output.status.code()
+            )),
+        )
+    }
+}
+
+pub async fn remove_network(id: &str) -> (bool, String, Option<String>) {
+    if let Err(error) = validate_object_ref(id) {
+        return (false, String::new(), Some(error));
+    }
+    let output = match Command::new("docker")
+        .args(["network", "rm", id])
+        .output()
+        .await
+    {
+        Ok(o) => o,
+        Err(e) => return (false, String::new(), Some(format!("spawn: {e}"))),
+    };
+    let log = combine_stdout_stderr(&output);
+    let success = output.status.success();
+    let err = if success {
+        None
+    } else {
+        Some(format!("docker network rm exit {:?}", output.status.code()))
+    };
+    (success, log, err)
+}
+
+// ---------- volumes (v12) ----------
+
+pub async fn list_volumes() -> Result<Vec<shared::DockerVolume>, String> {
+    let output = match Command::new("docker")
+        .args(["volume", "ls", "--format", "{{json .}}"])
+        .output()
+        .await
+    {
+        Ok(o) => o,
+        Err(e) => return Err(format!("spawn: {e}")),
+    };
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    #[derive(serde::Deserialize)]
+    struct Row {
+        #[serde(rename = "Name", default)]
+        name: String,
+        #[serde(rename = "Driver", default)]
+        driver: String,
+        #[serde(rename = "Mountpoint", default)]
+        mountpoint: String,
+        #[serde(rename = "Size", default)]
+        size: String,
+        #[serde(rename = "Labels", default)]
+        labels: String,
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut out = Vec::new();
+    for line in stdout.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let Ok(row) = serde_json::from_str::<Row>(line) else {
+            continue;
+        };
+        out.push(shared::DockerVolume {
+            name: row.name,
+            driver: row.driver,
+            mountpoint: row.mountpoint,
+            size_bytes: parse_docker_size(&row.size),
+            created: String::new(),
+            labels: row.labels,
+        });
+    }
+    Ok(out)
+}
+
+pub async fn inspect_volume(name: &str) -> (bool, String, Option<String>) {
+    if let Err(error) = validate_object_ref(name) {
+        return (false, String::new(), Some(error));
+    }
+    let output = match Command::new("docker")
+        .args(["volume", "inspect", name])
+        .output()
+        .await
+    {
+        Ok(o) => o,
+        Err(e) => return (false, String::new(), Some(format!("spawn: {e}"))),
+    };
+    let success = output.status.success();
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    if success {
+        (true, stdout, None)
+    } else {
+        (false, stdout, Some(stderr))
+    }
+}
+
+pub async fn remove_volume(name: &str, force: bool) -> (bool, String, Option<String>) {
+    if let Err(error) = validate_object_ref(name) {
+        return (false, String::new(), Some(error));
+    }
+    let mut cmd = Command::new("docker");
+    cmd.args(["volume", "rm"]);
+    if force {
+        cmd.arg("--force");
+    }
+    cmd.arg(name);
+    let output = match cmd.output().await {
+        Ok(o) => o,
+        Err(e) => return (false, String::new(), Some(format!("spawn: {e}"))),
+    };
+    let log = combine_stdout_stderr(&output);
+    let success = output.status.success();
+    let err = if success {
+        None
+    } else {
+        Some(format!("docker volume rm exit {:?}", output.status.code()))
+    };
+    (success, log, err)
+}
+
+pub async fn prune_volumes() -> (bool, Vec<String>, u64, String, Option<String>) {
+    let output = match Command::new("docker")
+        .args(["volume", "prune", "--force"])
+        .output()
+        .await
+    {
+        Ok(o) => o,
+        Err(e) => {
+            return (
+                false,
+                Vec::new(),
+                0,
+                String::new(),
+                Some(format!("spawn: {e}")),
+            );
+        }
+    };
+    let log = combine_stdout_stderr(&output);
+    if !output.status.success() {
+        return (
+            false,
+            Vec::new(),
+            0,
+            log,
+            Some(format!(
+                "docker volume prune exit {:?}",
+                output.status.code()
+            )),
+        );
+    }
+    let mut removed = Vec::new();
+    let mut reclaimed_bytes: u64 = 0;
+    let mut in_deleted = false;
+    for line in log.lines() {
+        let l = line.trim();
+        if l.starts_with("Deleted Volumes") {
+            in_deleted = true;
+            continue;
+        }
+        if l.starts_with("Total reclaimed space:") {
+            in_deleted = false;
+            let value = l.trim_start_matches("Total reclaimed space:").trim();
+            reclaimed_bytes = parse_docker_size(value);
+            continue;
+        }
+        if in_deleted && !l.is_empty() {
+            removed.push(l.to_string());
+        }
+    }
+    (true, removed, reclaimed_bytes, log, None)
+}
+
+// ---------- swarm stacks (v12, manager-only) ----------
+
+pub async fn list_stacks() -> Result<Vec<shared::SwarmStack>, String> {
+    let output = match Command::new("docker")
+        .args(["stack", "ls", "--format", "{{json .}}"])
+        .output()
+        .await
+    {
+        Ok(o) => o,
+        Err(e) => return Err(format!("spawn: {e}")),
+    };
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    #[derive(serde::Deserialize)]
+    struct Row {
+        #[serde(rename = "Name", default)]
+        name: String,
+        #[serde(rename = "Services", default)]
+        services: String,
+        #[serde(rename = "Orchestrator", default)]
+        orchestrator: String,
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut out = Vec::new();
+    for line in stdout.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let Ok(row) = serde_json::from_str::<Row>(line) else {
+            continue;
+        };
+        out.push(shared::SwarmStack {
+            name: row.name,
+            services: row.services.parse().unwrap_or(0),
+            orchestrator: row.orchestrator,
+        });
+    }
+    Ok(out)
+}
+
+pub async fn stack_services(name: &str) -> Result<Vec<shared::SwarmService>, String> {
+    validate_object_ref(name)?;
+    let output = match Command::new("docker")
+        .args(["stack", "services", "--format", "{{json .}}", name])
+        .output()
+        .await
+    {
+        Ok(o) => o,
+        Err(e) => return Err(format!("spawn: {e}")),
+    };
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    #[derive(serde::Deserialize)]
+    struct Row {
+        #[serde(rename = "ID", default)]
+        id: String,
+        #[serde(rename = "Name", default)]
+        name: String,
+        #[serde(rename = "Mode", default)]
+        mode: String,
+        #[serde(rename = "Replicas", default)]
+        replicas: String,
+        #[serde(rename = "Image", default)]
+        image: String,
+        #[serde(rename = "Ports", default)]
+        ports: String,
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut out = Vec::new();
+    for line in stdout.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let Ok(row) = serde_json::from_str::<Row>(line) else {
+            continue;
+        };
+        out.push(shared::SwarmService {
+            id: row.id,
+            name: row.name,
+            mode: row.mode,
+            replicas: row.replicas,
+            image: row.image,
+            ports: row.ports,
+        });
+    }
+    Ok(out)
+}
+
+pub async fn stack_tasks(name: &str) -> Result<Vec<shared::SwarmTask>, String> {
+    validate_object_ref(name)?;
+    let output = match Command::new("docker")
+        .args(["stack", "ps", "--no-trunc", "--format", "{{json .}}", name])
+        .output()
+        .await
+    {
+        Ok(o) => o,
+        Err(e) => return Err(format!("spawn: {e}")),
+    };
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    #[derive(serde::Deserialize)]
+    struct Row {
+        #[serde(rename = "ID", default)]
+        id: String,
+        #[serde(rename = "Name", default)]
+        name: String,
+        #[serde(rename = "Node", default)]
+        node: String,
+        #[serde(rename = "DesiredState", default)]
+        desired_state: String,
+        #[serde(rename = "CurrentState", default)]
+        current_state: String,
+        #[serde(rename = "Error", default)]
+        error: String,
+        #[serde(rename = "Image", default)]
+        image: String,
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut out = Vec::new();
+    for line in stdout.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let Ok(row) = serde_json::from_str::<Row>(line) else {
+            continue;
+        };
+        out.push(shared::SwarmTask {
+            id: row.id,
+            name: row.name,
+            node: row.node,
+            desired_state: row.desired_state,
+            current_state: row.current_state,
+            error: row.error,
+            image: row.image,
+        });
+    }
+    Ok(out)
+}
+
+// ---------- system prune (v13) ----------
+
+#[derive(Default, Debug)]
+pub struct PruneOutcome {
+    pub success: bool,
+    pub reclaimed_bytes: u64,
+    pub containers_removed: Vec<String>,
+    pub images_removed: Vec<String>,
+    pub networks_removed: Vec<String>,
+    pub volumes_removed: Vec<String>,
+    pub log: String,
+    pub error: Option<String>,
+}
+
+/// Dry-run preview — uses `docker system df -v` to enumerate dangling
+/// resources without removing them. The numbers are an upper bound on
+/// what `docker system prune -a` would reclaim.
+pub async fn system_prune_preview(prune_volumes: bool) -> PruneOutcome {
+    let output = match Command::new("docker")
+        .args(["system", "df", "-v", "--format", "{{json .}}"])
+        .output()
+        .await
+    {
+        Ok(o) => o,
+        Err(e) => {
+            return PruneOutcome {
+                error: Some(format!("spawn: {e}")),
+                ..Default::default()
+            };
+        }
+    };
+    if !output.status.success() {
+        return PruneOutcome {
+            error: Some(String::from_utf8_lossy(&output.stderr).trim().to_string()),
+            ..Default::default()
+        };
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    // df -v emits a single JSON object; parse defensively.
+    #[derive(serde::Deserialize, Default)]
+    struct Df {
+        #[serde(rename = "Images", default)]
+        images: Vec<DfImage>,
+        #[serde(rename = "Containers", default)]
+        containers: Vec<DfContainer>,
+        #[serde(rename = "Volumes", default)]
+        volumes: Vec<DfVolume>,
+    }
+    // df -v reports counts as strings, not numbers — keep them as
+    // String and parse on the use-site so a future docker version
+    // changing the type doesn't silently break the parse.
+    #[derive(serde::Deserialize, Default)]
+    struct DfImage {
+        #[serde(rename = "ID", default)]
+        id: String,
+        #[serde(rename = "Containers", default)]
+        containers: String,
+        #[serde(rename = "Size", default)]
+        size: String,
+    }
+    #[derive(serde::Deserialize, Default)]
+    struct DfContainer {
+        #[serde(rename = "ID", default)]
+        id: String,
+        #[serde(rename = "State", default)]
+        state: String,
+        #[serde(rename = "Size", default)]
+        size: String,
+    }
+    #[derive(serde::Deserialize, Default)]
+    struct DfVolume {
+        #[serde(rename = "Name", default)]
+        name: String,
+        #[serde(rename = "Links", default)]
+        links: String,
+        #[serde(rename = "Size", default)]
+        size: String,
+    }
+    let parsed: Df = serde_json::from_str(&stdout).unwrap_or_default();
+    let mut out = PruneOutcome::default();
+    out.success = true;
+    let mut reclaimed: u64 = 0;
+    for img in parsed.images {
+        if img.containers.parse::<i64>().unwrap_or(0) == 0 {
+            out.images_removed.push(img.id.clone());
+            reclaimed += parse_docker_size(&img.size);
+        }
+    }
+    for c in parsed.containers {
+        if c.state == "exited" || c.state == "created" || c.state == "dead" {
+            out.containers_removed.push(c.id.clone());
+            reclaimed += parse_docker_size(&c.size);
+        }
+    }
+    if prune_volumes {
+        for v in parsed.volumes {
+            if v.links.parse::<i64>().unwrap_or(0) == 0 {
+                out.volumes_removed.push(v.name.clone());
+                reclaimed += parse_docker_size(&v.size);
+            }
+        }
+    }
+    out.reclaimed_bytes = reclaimed;
+    out.log = format!(
+        "preview: {} container(s), {} image(s), {} volume(s) — ~{} bytes\n",
+        out.containers_removed.len(),
+        out.images_removed.len(),
+        out.volumes_removed.len(),
+        out.reclaimed_bytes
+    );
+    out
+}
+
+/// Actually run `docker system prune -af [--volumes]`. The agent does not
+/// schedule this — it only fires in response to a UI request.
+pub async fn system_prune_apply(prune_volumes: bool) -> PruneOutcome {
+    let mut cmd = Command::new("docker");
+    cmd.args(["system", "prune", "-af"]);
+    if prune_volumes {
+        cmd.arg("--volumes");
+    }
+    let output = match cmd.output().await {
+        Ok(o) => o,
+        Err(e) => {
+            return PruneOutcome {
+                error: Some(format!("spawn: {e}")),
+                ..Default::default()
+            };
+        }
+    };
+    let log = combine_stdout_stderr(&output);
+    let success = output.status.success();
+    let mut out = PruneOutcome {
+        success,
+        log: log.clone(),
+        error: if success {
+            None
+        } else {
+            Some(format!(
+                "docker system prune exit {:?}",
+                output.status.code()
+            ))
+        },
+        ..Default::default()
+    };
+    // Parse the textual prune output for removed names + reclaimed bytes.
+    let mut current_section: Option<&str> = None;
+    for line in log.lines() {
+        let l = line.trim();
+        match l {
+            "Deleted Containers:" => {
+                current_section = Some("containers");
+                continue;
+            }
+            "Deleted Images:" => {
+                current_section = Some("images");
+                continue;
+            }
+            "Deleted Networks:" => {
+                current_section = Some("networks");
+                continue;
+            }
+            "Deleted Volumes:" => {
+                current_section = Some("volumes");
+                continue;
+            }
+            _ => {}
+        }
+        if l.starts_with("Total reclaimed space:") {
+            let value = l.trim_start_matches("Total reclaimed space:").trim();
+            out.reclaimed_bytes = parse_docker_size(value);
+            current_section = None;
+            continue;
+        }
+        if l.is_empty() {
+            current_section = None;
+            continue;
+        }
+        match current_section {
+            Some("containers") => out.containers_removed.push(l.to_string()),
+            Some("images") => out.images_removed.push(l.to_string()),
+            Some("networks") => out.networks_removed.push(l.to_string()),
+            Some("volumes") => out.volumes_removed.push(l.to_string()),
+            _ => {}
+        }
+    }
+    out
+}
+
+// ---------- container stats snapshot (v13) ----------
+
+pub async fn container_stats() -> Result<Vec<shared::DockerContainerStats>, String> {
+    let output = match Command::new("docker")
+        .args(["stats", "--no-stream", "--format", "{{json .}}"])
+        .output()
+        .await
+    {
+        Ok(o) => o,
+        Err(e) => return Err(format!("spawn: {e}")),
+    };
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    #[derive(serde::Deserialize)]
+    struct Row {
+        #[serde(rename = "ID", default)]
+        id: String,
+        #[serde(rename = "Name", default)]
+        name: String,
+        #[serde(rename = "CPUPerc", default)]
+        cpu_perc: String,
+        #[serde(rename = "MemUsage", default)]
+        mem_usage: String,
+        #[serde(rename = "NetIO", default)]
+        net_io: String,
+        #[serde(rename = "BlockIO", default)]
+        block_io: String,
+        #[serde(rename = "PIDs", default)]
+        pids: String,
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut out = Vec::new();
+    for line in stdout.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let Ok(row) = serde_json::from_str::<Row>(line) else {
+            continue;
+        };
+        // CPU % comes as "12.34%". Mem usage as "123.4MiB / 1.234GiB".
+        let cpu_percent = row
+            .cpu_perc
+            .trim_end_matches('%')
+            .trim()
+            .parse::<f32>()
+            .unwrap_or(0.0);
+        let (mem_bytes, mem_limit_bytes) = parse_pair(&row.mem_usage);
+        let (net_rx_bytes, net_tx_bytes) = parse_pair(&row.net_io);
+        let (blk_read_bytes, blk_write_bytes) = parse_pair(&row.block_io);
+        let pids = row.pids.parse::<u32>().unwrap_or(0);
+        out.push(shared::DockerContainerStats {
+            id: row.id,
+            name: row.name,
+            cpu_percent,
+            mem_bytes,
+            mem_limit_bytes,
+            net_rx_bytes,
+            net_tx_bytes,
+            blk_read_bytes,
+            blk_write_bytes,
+            pids,
+        });
+    }
+    Ok(out)
+}
+
+/// Parse "123.4MB / 1.234GB" or "1.2kB / 3.4kB" → (lhs_bytes, rhs_bytes).
+fn parse_pair(s: &str) -> (u64, u64) {
+    let parts: Vec<&str> = s.split('/').map(str::trim).collect();
+    let lhs = parts.first().map(|x| parse_docker_size(x)).unwrap_or(0);
+    let rhs = parts.get(1).map(|x| parse_docker_size(x)).unwrap_or(0);
+    (lhs, rhs)
+}
+
+pub async fn remove_stack(name: &str) -> (bool, String, Option<String>) {
+    if let Err(error) = validate_object_ref(name) {
+        return (false, String::new(), Some(error));
+    }
+    let output = match Command::new("docker")
+        .args(["stack", "rm", name])
+        .output()
+        .await
+    {
+        Ok(o) => o,
+        Err(e) => return (false, String::new(), Some(format!("spawn: {e}"))),
+    };
+    let log = combine_stdout_stderr(&output);
+    let success = output.status.success();
+    let err = if success {
+        None
+    } else {
+        Some(format!("docker stack rm exit {:?}", output.status.code()))
+    };
+    (success, log, err)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn docker_object_references_reject_flags_and_unsafe_characters() {
+        for value in [
+            "",
+            "--help",
+            "-f",
+            "name with space",
+            "name\nnext",
+            "name/child",
+        ] {
+            assert!(validate_object_ref(value).is_err(), "accepted {value:?}");
+        }
+        for value in ["abc123", "container-name", "stack_service", "sha256:abcd"] {
+            assert!(validate_object_ref(value).is_ok(), "rejected {value:?}");
+        }
+    }
+
+    #[test]
+    fn docker_image_references_reject_flags_and_accept_registry_paths() {
+        for value in ["", "--privileged", "image with space", "repo/image\n--pull"] {
+            assert!(validate_image_ref(value).is_err(), "accepted {value:?}");
+        }
+        for value in [
+            "nginx:latest",
+            "registry.example:5000/team/image:v1",
+            "alpine@sha256:abcdef",
+        ] {
+            assert!(validate_image_ref(value).is_ok(), "rejected {value:?}");
+        }
+    }
+
+    #[test]
+    fn docker_network_values_reject_option_injection() {
+        assert!(validate_network_driver("--help").is_err());
+        assert!(validate_subnet("--subnet=0.0.0.0/0").is_err());
+        assert!(validate_network_driver("overlay").is_ok());
+        assert!(validate_subnet("10.20.0.0/16").is_ok());
+        assert!(validate_subnet("2001:db8::/64").is_ok());
+    }
+
+    #[tokio::test]
+    async fn docker_operations_reject_injected_options_before_spawn() {
+        let (ok, _, error) = run_container_action("--help", DockerContainerAction::Start).await;
+        assert!(!ok);
+        assert!(error.is_some_and(|message| message.contains("invalid docker object")));
+
+        let (ok, _, error) = pull_image("--privileged").await;
+        assert!(!ok);
+        assert!(error.is_some_and(|message| message.contains("image reference")));
+
+        let (ok, _, _, error) =
+            create_network("safe", "bridge", Some("--subnet=0.0.0.0/0"), false, false).await;
+        assert!(!ok);
+        assert!(error.is_some_and(|message| message.contains("network subnet")));
+    }
+}
