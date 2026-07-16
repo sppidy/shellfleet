@@ -6,7 +6,7 @@ mod identity;
 mod session;
 mod ui;
 
-use app::{App, Mode};
+use app::{App, LinkState, Mode, View};
 use base64::Engine;
 use crossterm::{
     event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
@@ -122,9 +122,14 @@ async fn cockpit(
             .map_err(|error| error.to_string())?;
         if event::poll(Duration::from_millis(40)).map_err(|error| error.to_string())?
             && let Event::Key(key) = event::read().map_err(|error| error.to_string())?
-            && handle_key(app, key, outgoing)?
         {
-            break;
+            match handle_key(app, key, outgoing)? {
+                KeyOutcome::Continue => {}
+                KeyOutcome::Quit => break,
+                KeyOutcome::BeginPrivileged(operation) => {
+                    begin_privileged(terminal, app, outgoing, operation)?;
+                }
+            }
         }
     }
     Ok(())
@@ -136,6 +141,13 @@ fn link_state(state: client::TransportState) -> app::LinkState {
         client::TransportState::Live => app::LinkState::Live,
         client::TransportState::Degraded(_) => app::LinkState::Degraded,
     }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum KeyOutcome {
+    Continue,
+    Quit,
+    BeginPrivileged(TrustedOperation),
 }
 
 fn handle_server(app: &mut App, message: UiMessage) -> Result<(), String> {
@@ -175,26 +187,36 @@ fn handle_key(
     app: &mut App,
     key: KeyEvent,
     outgoing: &tokio::sync::mpsc::UnboundedSender<UiMessage>,
-) -> Result<bool, String> {
+) -> Result<KeyOutcome, String> {
     match app.mode {
         Mode::Fleet => match key.code {
-            KeyCode::Char('q') => return Ok(true),
-            KeyCode::Up => app.selected = app.selected.saturating_sub(1),
-            KeyCode::Down => {
-                app.selected = (app.selected + 1).min(app.agents.len().saturating_sub(1));
+            KeyCode::Char('q') => return Ok(KeyOutcome::Quit),
+            KeyCode::Up => app.select_previous(),
+            KeyCode::Down => app.select_next(),
+            KeyCode::Char('1') => app.view = View::Overview,
+            KeyCode::Char('2') => app.view = View::Services,
+            KeyCode::Char('3') => app.view = View::Containers,
+            KeyCode::Char('4') => app.view = View::Activity,
+            KeyCode::Char('5') => app.view = View::Privileged,
+            KeyCode::Tab => app.view = next_view(app.view),
+            KeyCode::BackTab => app.view = previous_view(app.view),
+            KeyCode::Char('/') => app.mode = Mode::Filter,
+            KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                app.command.clear();
+                app.mode = Mode::Palette;
             }
-            KeyCode::Char(':') => {
+            KeyCode::Char('?') => app.mode = Mode::Help,
+            KeyCode::Char(':') if app.view == View::Privileged => {
                 app.command.clear();
                 app.mode = Mode::Command;
             }
-            KeyCode::Char('r') => {
-                let message = app.begin(TrustedOperation::RootPty {
+            KeyCode::Char('r') if app.view == View::Privileged => {
+                return Ok(KeyOutcome::BeginPrivileged(TrustedOperation::RootPty {
                     shell: "/bin/bash".into(),
                     ttl_secs: 900,
                     cols: 120,
                     rows: 40,
-                })?;
-                send_to_selected(app, outgoing, message)?;
+                }));
             }
             _ => {}
         },
@@ -205,18 +227,31 @@ fn handle_key(
             }
             KeyCode::Enter if !app.command.trim().is_empty() => {
                 let command = std::mem::take(&mut app.command);
-                let message = app.begin(TrustedOperation::RootCommand {
+                return Ok(KeyOutcome::BeginPrivileged(TrustedOperation::RootCommand {
                     program: "/bin/sh".into(),
                     args: vec!["-lc".into(), command],
                     timeout_secs: 300,
-                })?;
-                send_to_selected(app, outgoing, message)?;
+                }));
             }
             KeyCode::Char(character) => app.command.push(character),
             _ => {}
         },
         Mode::Review => match key.code {
-            KeyCode::Esc => app.mode = Mode::Fleet,
+            KeyCode::Esc => {
+                if let Some(pending) = app.pending.as_ref() {
+                    let payload = shared::trusted::encode_client(&TrustedClientFrame::Close)?;
+                    let message = Message::TrustedOperationClient {
+                        request_id: pending.request_id.clone(),
+                        start: false,
+                        close: true,
+                        payload,
+                    };
+                    send_to_selected(app, outgoing, message)?;
+                }
+                app.pending = None;
+                app.mode = Mode::Fleet;
+                app.status = "Privileged transaction cancelled.".into();
+            }
             KeyCode::Char('p') => {
                 let agent = app
                     .pending
@@ -248,13 +283,138 @@ fn handle_key(
                 send_to_selected(app, outgoing, message)?;
             }
         }
-        Mode::Filter | Mode::Palette | Mode::Help => {
-            if key.code == KeyCode::Esc {
+        Mode::Filter => match key.code {
+            KeyCode::Esc | KeyCode::Enter => app.mode = Mode::Fleet,
+            KeyCode::Backspace => {
+                app.filter.pop();
+            }
+            KeyCode::Char(character) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                app.filter.push(character);
+            }
+            _ => {}
+        },
+        Mode::Palette => match key.code {
+            KeyCode::Esc => {
+                app.command.clear();
+                app.mode = Mode::Fleet;
+            }
+            KeyCode::Backspace => {
+                app.command.pop();
+            }
+            KeyCode::Enter => return apply_palette(app),
+            KeyCode::Char(character) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                app.command.push(character);
+            }
+            _ => {}
+        },
+        Mode::Help => {
+            if key.code == KeyCode::Esc || key.code == KeyCode::Char('?') {
                 app.mode = Mode::Fleet;
             }
         }
     }
-    Ok(false)
+    Ok(KeyOutcome::Continue)
+}
+
+fn next_view(view: View) -> View {
+    match view {
+        View::Overview => View::Services,
+        View::Services => View::Containers,
+        View::Containers => View::Activity,
+        View::Activity => View::Privileged,
+        View::Privileged => View::Overview,
+    }
+}
+
+fn previous_view(view: View) -> View {
+    match view {
+        View::Overview => View::Privileged,
+        View::Services => View::Overview,
+        View::Containers => View::Services,
+        View::Activity => View::Containers,
+        View::Privileged => View::Activity,
+    }
+}
+
+fn apply_palette(app: &mut App) -> Result<KeyOutcome, String> {
+    let command = std::mem::take(&mut app.command).trim().to_ascii_lowercase();
+    app.mode = Mode::Fleet;
+    app.view = match command.as_str() {
+        "overview" | "1" => View::Overview,
+        "services" | "2" => View::Services,
+        "containers" | "3" => View::Containers,
+        "activity" | "4" => View::Activity,
+        "privileged" | "5" => View::Privileged,
+        "quit" | "q" => return Ok(KeyOutcome::Quit),
+        "" => return Ok(KeyOutcome::Continue),
+        _ => {
+            app.status = format!("Unknown cockpit command: {command}");
+            return Ok(KeyOutcome::Continue);
+        }
+    };
+    Ok(KeyOutcome::Continue)
+}
+
+fn begin_privileged(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    app: &mut App,
+    outgoing: &tokio::sync::mpsc::UnboundedSender<UiMessage>,
+    operation: TrustedOperation,
+) -> Result<(), String> {
+    if app.websocket_state != LinkState::Live {
+        app.mode = Mode::Fleet;
+        app.status = "Interactive channel unavailable; fleet reads remain available.".into();
+        return Ok(());
+    }
+    if !app.approver_unlocked()
+        && let Err(error) = unlock_approver(terminal, app)
+    {
+        app.mode = Mode::Fleet;
+        app.status = error;
+        return Ok(());
+    }
+    let message = match app.begin(operation) {
+        Ok(message) => message,
+        Err(error) => {
+            app.mode = Mode::Fleet;
+            app.status = error;
+            return Ok(());
+        }
+    };
+    send_to_selected(app, outgoing, message)
+}
+
+fn unlock_approver(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    app: &mut App,
+) -> Result<(), String> {
+    disable_raw_mode().map_err(|error| error.to_string())?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen).map_err(|error| error.to_string())?;
+    terminal.show_cursor().map_err(|error| error.to_string())?;
+
+    let result = (|| {
+        let key_path = identity::default_key_path()?;
+        if !key_path.is_file() {
+            return Err(format!(
+                "No approver key at {}; run `shellfleet keygen` before privileged access.",
+                key_path.display()
+            ));
+        }
+        let passphrase = key_passphrase("Approver key passphrase: ")?;
+        identity::load(&key_path, &passphrase)
+    })();
+
+    let restore = (|| {
+        execute!(terminal.backend_mut(), EnterAlternateScreen)
+            .map_err(|error| error.to_string())?;
+        enable_raw_mode().map_err(|error| error.to_string())?;
+        terminal.hide_cursor().map_err(|error| error.to_string())?;
+        terminal.clear().map_err(|error| error.to_string())
+    })();
+    restore?;
+    app.unlock_approver(result?);
+    app.status = "Approver key unlocked for this process only.".into();
+    Ok(())
 }
 
 fn send_to_selected(
@@ -294,4 +454,70 @@ fn key_passphrase(prompt: &str) -> Result<String, String> {
     std::env::var("SHELLFLEET_KEY_PASSPHRASE")
         .or_else(|_| rpassword::prompt_password(prompt))
         .map_err(|error| error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::View;
+
+    fn app() -> App {
+        App::new(PathBuf::from("/nonexistent/pins"))
+    }
+
+    fn press(app: &mut App, code: KeyCode, modifiers: KeyModifiers) -> Result<KeyOutcome, String> {
+        let (outgoing, _) = tokio::sync::mpsc::unbounded_channel();
+        handle_key(app, KeyEvent::new(code, modifiers), &outgoing)
+    }
+
+    #[test]
+    fn browse_keys_navigate_views_and_context_help() {
+        let mut app = app();
+        assert_eq!(
+            press(&mut app, KeyCode::Char('5'), KeyModifiers::NONE).unwrap(),
+            KeyOutcome::Continue
+        );
+        assert_eq!(app.view, View::Privileged);
+        press(&mut app, KeyCode::Char('?'), KeyModifiers::NONE).unwrap();
+        assert_eq!(app.mode, Mode::Help);
+        press(&mut app, KeyCode::Esc, KeyModifiers::NONE).unwrap();
+        assert_eq!(app.mode, Mode::Fleet);
+    }
+
+    #[test]
+    fn root_shortcuts_are_scoped_to_the_privileged_view() {
+        let mut app = app();
+        press(&mut app, KeyCode::Char(':'), KeyModifiers::NONE).unwrap();
+        assert_eq!(app.mode, Mode::Fleet);
+
+        app.view = View::Privileged;
+        let outcome = press(&mut app, KeyCode::Char('r'), KeyModifiers::NONE).unwrap();
+        assert!(matches!(
+            outcome,
+            KeyOutcome::BeginPrivileged(TrustedOperation::RootPty { .. })
+        ));
+        assert!(!app.approver_unlocked());
+    }
+
+    #[test]
+    fn filter_and_palette_are_keyboard_discoverable() {
+        let mut app = app();
+        press(&mut app, KeyCode::Char('/'), KeyModifiers::NONE).unwrap();
+        assert_eq!(app.mode, Mode::Filter);
+        for character in "dock".chars() {
+            press(&mut app, KeyCode::Char(character), KeyModifiers::NONE).unwrap();
+        }
+        press(&mut app, KeyCode::Enter, KeyModifiers::NONE).unwrap();
+        assert_eq!(app.filter, "dock");
+        assert_eq!(app.mode, Mode::Fleet);
+
+        press(&mut app, KeyCode::Char('p'), KeyModifiers::CONTROL).unwrap();
+        assert_eq!(app.mode, Mode::Palette);
+        for character in "services".chars() {
+            press(&mut app, KeyCode::Char(character), KeyModifiers::NONE).unwrap();
+        }
+        press(&mut app, KeyCode::Enter, KeyModifiers::NONE).unwrap();
+        assert_eq!(app.view, View::Services);
+        assert_eq!(app.mode, Mode::Fleet);
+    }
 }

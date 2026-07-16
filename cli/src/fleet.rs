@@ -1,22 +1,15 @@
 use serde::Deserialize;
 use shared::{
-    DockerContainer, ServiceInfo, SwarmNode, SwarmRole, SwarmService,
+    DockerContainer, ServiceInfo, SwarmRole, SwarmService,
     fleet::{FleetHost, SnapshotValue},
 };
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct SystemSnapshot {
     pub hostname: String,
-    pub kernel: String,
-    pub uptime_secs: u64,
-    pub cpu_count: u32,
     pub load_1: f32,
-    pub load_5: f32,
-    pub load_15: f32,
     pub mem_total_kb: u64,
     pub mem_available_kb: u64,
-    pub swap_total_kb: u64,
-    pub swap_free_kb: u64,
     pub root_disk_total_kb: u64,
     pub root_disk_used_kb: u64,
 }
@@ -26,16 +19,12 @@ pub struct DockerSnapshot {
     pub available: bool,
     pub swarm_role: SwarmRole,
     pub containers: Vec<DockerContainer>,
-    pub error: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct SwarmSnapshot {
-    pub available: bool,
     pub is_manager: bool,
     pub services: Vec<SwarmService>,
-    pub nodes: Vec<SwarmNode>,
-    pub error: Option<String>,
 }
 
 #[derive(Deserialize)]
