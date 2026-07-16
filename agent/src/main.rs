@@ -434,7 +434,7 @@ async fn main() {
     } else if let Some(t) = read_token() {
         t
     } else {
-        eprintln!("No agent token found. Run `shellfleet-agent --pair` to pair this host.");
+        eprintln!("No agent token found. Run `sudo shellfleet-agent-pair` to pair this host.");
         std::process::exit(1);
     };
 
@@ -537,7 +537,7 @@ async fn main() {
                     }
                 }
                 eprintln!(
-                    "Failed to connect to server: {e}. Re-pair this agent: shellfleet-agent --pair"
+                    "Failed to connect to server: {e}. Re-pair this agent: sudo shellfleet-agent-pair"
                 );
                 std::process::exit(1);
             }

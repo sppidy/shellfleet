@@ -7,6 +7,7 @@ gate="$root/agent/debian/shellfleet-approval-gate.service"
 proxy="$root/agent/debian/shellfleet-docker-proxy.service"
 proxy_socket="$root/agent/debian/shellfleet-docker-proxy.socket"
 proxy_helper="$root/agent/debian/shellfleet-docker-proxy"
+pair_helper="$root/agent/debian/shellfleet-agent-pair"
 prerm="$root/agent/debian/prerm"
 
 grep -qx 'User=shellfleet' "$unit"
@@ -50,6 +51,17 @@ grep -qx 'ExecStart=/lib/systemd/systemd-socket-proxyd /run/docker.sock' "$proxy
 grep -qx '    systemctl enable --now "$SOCKET_UNIT"' "$proxy_helper"
 ! grep -q 'enable .*shellfleet-docker-proxy.socket' "$root/agent/debian/postinst"
 grep -q 'disable --now shellfleet-docker-proxy.socket' "$prerm"
+
+# Pairing is initiated by an administrator but the network agent must still
+# execute as the unprivileged service account. The helper owns the service
+# transition and loads only the packaged root-controlled environment file.
+test -x "$pair_helper"
+grep -q 'runuser -u shellfleet' "$pair_helper"
+grep -q '\. /etc/shellfleet/env' "$pair_helper"
+grep -q "root:shellfleet 640" "$pair_helper"
+grep -q 'exec /usr/bin/shellfleet-agent --pair' "$pair_helper"
+grep -q 'systemctl stop shellfleet-agent.service' "$pair_helper"
+grep -q 'systemctl restart shellfleet-agent.service' "$pair_helper"
 
 grep -q 'refuses to run as root' "$root/agent/src/main.rs"
 

@@ -1,0 +1,40 @@
+#!/bin/sh
+set -eu
+
+UNIT=shellfleet-agent.service
+ENV_FILE=/etc/shellfleet/env
+
+die() {
+    printf '%s\n' "shellfleet-agent-pair: $*" >&2
+    exit 1
+}
+
+[ "$(id -u)" -eq 0 ] || die 'run this command as root (for example: sudo shellfleet-agent-pair)'
+getent passwd shellfleet >/dev/null 2>&1 || die 'the shellfleet service account is missing; reinstall shellfleet-agent'
+[ -f "$ENV_FILE" ] || die "$ENV_FILE is missing; configure the agent before pairing"
+[ "$(stat -c '%U:%G %a' "$ENV_FILE")" = 'root:shellfleet 640' ] \
+    || die "$ENV_FILE must be owned by root:shellfleet with mode 0640"
+runuser -u shellfleet -- test -r "$ENV_FILE" \
+    || die "$ENV_FILE must be readable by shellfleet (expected root:shellfleet mode 0640)"
+
+was_active=false
+if systemctl is-active --quiet "$UNIT"; then
+    was_active=true
+fi
+systemctl stop shellfleet-agent.service
+
+if runuser -u shellfleet -- sh -c '
+    set -a
+    . /etc/shellfleet/env
+    set +a
+    exec /usr/bin/shellfleet-agent --pair
+'; then
+    systemctl restart shellfleet-agent.service
+    printf '%s\n' 'ShellFleet agent paired and service restarted.'
+else
+    status=$?
+    if [ "$was_active" = true ]; then
+        systemctl start "$UNIT" || true
+    fi
+    die "pairing failed (exit $status); the previous service state was restored"
+fi

@@ -4,7 +4,7 @@ version = "1.1.0"
 edition = "2024"
 description = "Agent for ShellFleet: connects a host to a ShellFleet server over WebSocket and exposes systemd service control, terminal, and config editing."
 license = "AGPL-3.0-or-later"
-repository = "https://github.com/sppidy/shellfleet-agent"
+repository = "https://github.com/sppidy/shellfleet"
 
 [[bin]]
 name = "shellfleet-agent"
@@ -102,7 +102,7 @@ Agent for ShellFleet. Connects a Linux host to a ShellFleet server over a
 TLS WebSocket and exposes systemd service control, an interactive terminal,
 and remote read/write of configuration files. Pairing happens through the
 server's device-auth flow; the resulting token is cached at
-/etc/shellfleet/agent-token.txt."""
+/var/lib/shellfleet-agent/agent-token.txt."""
 section = "admin"
 priority = "optional"
 depends = "$auto, systemd"
@@ -113,6 +113,7 @@ assets = [
     ["debian/shellfleet-docker-proxy.service", "lib/systemd/system/shellfleet-docker-proxy.service", "644"],
     ["debian/shellfleet-docker-proxy.socket", "lib/systemd/system/shellfleet-docker-proxy.socket", "644"],
     ["debian/shellfleet-docker-proxy", "usr/sbin/shellfleet-docker-proxy", "755"],
+    ["debian/shellfleet-agent-pair", "usr/sbin/shellfleet-agent-pair", "755"],
     ["debian/apparmor/shellfleet-agent", "etc/apparmor.d/shellfleet-agent", "644"],
     ["debian/apparmor/shellfleet-approval-gate", "etc/apparmor.d/shellfleet-approval-gate", "644"],
     ["debian/apparmor/shellfleet-docker-proxy", "etc/apparmor.d/shellfleet-docker-proxy", "644"],

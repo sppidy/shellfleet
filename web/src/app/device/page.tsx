@@ -163,7 +163,7 @@ function DeviceAuthPageContent() {
 │                                          │
 │  2. Start pairing:                       │
 │                                          │
-│  sudo shellfleet-agent --pair            │
+│  sudo shellfleet-agent-pair              │
 │                                          │
 │  3. It prints an 8-char code below.      │
 │     Enter it here to approve.            │
