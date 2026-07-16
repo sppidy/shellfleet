@@ -86,7 +86,7 @@ pub async fn middleware(
         };
     }
 
-    // A CLI device token is purpose-bound to `/ui/ws`. Reject it even if a
+    // A CLI device token is purpose-bound to fleet reads. Reject it even if a
     // local user manually places it in the browser session-cookie slot; this
     // protects the routes whitelisted below as well as normal API handlers.
     if jar
@@ -94,7 +94,7 @@ pub async fn middleware(
         .and_then(|cookie| auth::claims_from_token(cookie.value()))
         .is_some_and(|claims| claims.cli)
     {
-        return forbidden("CLI session is only valid for the operator WebSocket");
+        return forbidden("CLI session is only valid for fleet reads");
     }
 
     // This middleware is mounted *inside* the `/api` nest, so axum

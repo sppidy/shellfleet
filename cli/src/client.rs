@@ -1,15 +1,8 @@
 use crate::credentials::Connection;
-use futures_util::{SinkExt, StreamExt};
-use shared::{
-    UiMessage,
-    fleet::{CoreEvent, FleetResponse},
-};
+use futures_util::StreamExt;
+use shared::fleet::{CoreEvent, FleetResponse};
 use std::time::Duration;
 use tokio::sync::mpsc;
-use tokio_tungstenite::{
-    connect_async,
-    tungstenite::{client::IntoClientRequest, protocol::Message},
-};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TransportState {
@@ -22,10 +15,8 @@ pub enum TransportState {
 pub enum ClientEvent {
     Fleet(FleetResponse),
     Core(CoreEvent),
-    WebSocket(Box<UiMessage>),
     DataState(TransportState),
     EventState(TransportState),
-    WebSocketState(TransportState),
 }
 
 #[derive(Default)]
@@ -57,21 +48,10 @@ impl SseDecoder {
     }
 }
 
-pub fn connect(
-    connection: Connection,
-) -> (
-    mpsc::UnboundedSender<UiMessage>,
-    mpsc::UnboundedReceiver<ClientEvent>,
-) {
-    let (outgoing_tx, outgoing_rx) = mpsc::unbounded_channel();
+pub fn connect(connection: Connection) -> mpsc::UnboundedReceiver<ClientEvent> {
     let (incoming_tx, incoming_rx) = mpsc::unbounded_channel();
     let (refresh_tx, refresh_rx) = mpsc::channel(1);
 
-    tokio::spawn(websocket_loop(
-        connection.clone(),
-        outgoing_rx,
-        incoming_tx.clone(),
-    ));
     tokio::spawn(fleet_refresh_loop(
         connection.clone(),
         refresh_rx,
@@ -79,7 +59,7 @@ pub fn connect(
     ));
     tokio::spawn(sse_loop(connection, refresh_tx, incoming_tx));
 
-    (outgoing_tx, incoming_rx)
+    incoming_rx
 }
 
 async fn fleet_refresh_loop(
@@ -213,93 +193,6 @@ async fn sse_loop(
         }
         tokio::time::sleep(Duration::from_secs(2)).await;
     }
-}
-
-async fn websocket_loop(
-    connection: Connection,
-    mut outgoing: mpsc::UnboundedReceiver<UiMessage>,
-    incoming: mpsc::UnboundedSender<ClientEvent>,
-) {
-    loop {
-        let _ = incoming.send(ClientEvent::WebSocketState(TransportState::Connecting));
-        let request = websocket_request(&connection);
-        let stream = match request {
-            Ok(request) => connect_async(request).await,
-            Err(error) => {
-                let _ = incoming.send(ClientEvent::WebSocketState(TransportState::Degraded(error)));
-                return;
-            }
-        };
-        match stream {
-            Ok((stream, _)) => {
-                let _ = incoming.send(ClientEvent::WebSocketState(TransportState::Live));
-                let (mut writer, mut reader) = stream.split();
-                let list = serde_json::to_string(&UiMessage::ListAgentsRequest)
-                    .expect("ListAgentsRequest is serializable");
-                if writer.send(Message::Text(list.into())).await.is_err() {
-                    continue;
-                }
-                loop {
-                    tokio::select! {
-                        outbound = outgoing.recv() => {
-                            let Some(outbound) = outbound else { return; };
-                            let Ok(json) = serde_json::to_string(&outbound) else { continue; };
-                            if writer.send(Message::Text(json.into())).await.is_err() {
-                                break;
-                            }
-                        }
-                        frame = reader.next() => {
-                            match frame {
-                                Some(Ok(Message::Text(text))) => {
-                                    if let Ok(message) = serde_json::from_str(&text) {
-                                        let _ = incoming.send(ClientEvent::WebSocket(Box::new(message)));
-                                    }
-                                }
-                                Some(Ok(Message::Ping(payload))) => {
-                                    match writer.send(Message::Pong(payload)).await {
-                                        Ok(()) => {}
-                                        Err(_) => break,
-                                    }
-                                }
-                                Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,
-                                _ => {}
-                            }
-                        }
-                    }
-                }
-                let _ = incoming.send(ClientEvent::WebSocketState(TransportState::Degraded(
-                    "interactive channel disconnected".into(),
-                )));
-            }
-            Err(error) => {
-                let _ = incoming.send(ClientEvent::WebSocketState(TransportState::Degraded(
-                    error.to_string(),
-                )));
-            }
-        }
-        tokio::time::sleep(Duration::from_secs(2)).await;
-    }
-}
-
-fn websocket_request(
-    connection: &Connection,
-) -> Result<tokio_tungstenite::tungstenite::http::Request<()>, String> {
-    let mut request = connection
-        .ws_url
-        .as_str()
-        .into_client_request()
-        .map_err(|error| format!("invalid WebSocket URL: {error}"))?;
-    request.headers_mut().insert(
-        "authorization",
-        format!("Bearer {}", connection.access_token)
-            .parse()
-            .map_err(|_| "invalid authentication token")?,
-    );
-    request.headers_mut().insert(
-        "x-shellfleet-cli",
-        "1".parse().map_err(|_| "invalid CLI marker")?,
-    );
-    Ok(request)
 }
 
 #[cfg(test)]

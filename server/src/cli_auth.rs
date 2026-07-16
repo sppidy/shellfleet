@@ -2,7 +2,8 @@
 //!
 //! The CLI creates a short-lived request and shows its human-friendly code.
 //! An already-authenticated dashboard user approves that code on `/device`.
-//! The CLI then receives a purpose-restricted JWT that only works on `/ui/ws`.
+//! The CLI then receives a purpose-restricted JWT that only works on the
+//! durable fleet and event read APIs.
 
 use axum::{
     Json, Router,

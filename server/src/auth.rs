@@ -95,8 +95,8 @@ pub struct Claims {
     /// session. Endpoints that mutate state require `true`.
     #[serde(default = "default_mfa")]
     pub mfa: bool,
-    /// CLI-issued sessions are accepted only by the native operator
-    /// WebSocket. They never authorize browser/API routes.
+    /// CLI-issued sessions are accepted only by the durable fleet read APIs.
+    /// They never authorize browser sessions, interactive sockets, or writes.
     #[serde(default)]
     pub cli: bool,
 }
@@ -800,7 +800,7 @@ pub async fn current_user(
     if claims.cli {
         return Err((
             StatusCode::FORBIDDEN,
-            "CLI session is only valid for the operator WebSocket",
+            "CLI session is only valid for fleet reads",
         ));
     }
     match crate::db::get_user(db, &claims.sub).await {
@@ -826,7 +826,7 @@ pub async fn current_user(
 /// Resolve a purpose-bound native CLI session from a Bearer token.
 ///
 /// CLI sessions intentionally cannot become browser sessions, but the durable
-/// fleet read plane and operator WebSocket need the same revocation behavior.
+/// fleet read plane needs the same revocation behavior as browser sessions.
 /// Re-resolving the user row makes logout, role changes, and account removal
 /// take effect without waiting for the short-lived token to expire.
 pub async fn current_cli_user(

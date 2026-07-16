@@ -1,5 +1,5 @@
 use crate::{
-    app::{App, LinkState, Mode, View, fingerprint},
+    app::{App, Mode, View},
     fleet::{docker, services, swarm, system},
 };
 use ratatui::{
@@ -11,7 +11,7 @@ use ratatui::{
         Block, Borders, Cell, Clear, List, ListItem, Paragraph, Row, Table, TableState, Tabs, Wrap,
     },
 };
-use shared::{SwarmRole, fleet::ConnectionStatus, trusted::TrustedOperation};
+use shared::{SwarmRole, fleet::ConnectionStatus};
 
 const ACCENT: Color = Color::Cyan;
 const MUTED: Color = Color::DarkGray;
@@ -28,16 +28,11 @@ pub fn draw(frame: &mut Frame, app: &App) {
         .split(frame.area());
     draw_header(frame, app, bands[0]);
     draw_tabs(frame, app, bands[1]);
-    if app.mode == Mode::Terminal {
-        draw_terminal(frame, app, bands[2]);
-    } else {
-        match app.view {
-            View::Overview => draw_overview(frame, app, bands[2]),
-            View::Services => draw_services(frame, app, bands[2]),
-            View::Containers => draw_containers(frame, app, bands[2]),
-            View::Activity => draw_activity(frame, app, bands[2]),
-            View::Privileged => draw_privileged(frame, app, bands[2]),
-        }
+    match app.view {
+        View::Overview => draw_overview(frame, app, bands[2]),
+        View::Services => draw_services(frame, app, bands[2]),
+        View::Containers => draw_containers(frame, app, bands[2]),
+        View::Activity => draw_activity(frame, app, bands[2]),
     }
     draw_footer(frame, app, bands[3]);
     match app.mode {
@@ -52,7 +47,7 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
     let label = app.connection_label();
     let state_color = match label {
         "LIVE" => Color::Green,
-        "READ ONLY" | "STALE" => Color::Yellow,
+        "DEGRADED" | "STALE" => Color::Yellow,
         _ => Color::Red,
     };
     let total = app.fleet.hosts.len();
@@ -84,19 +79,12 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_tabs(frame: &mut Frame, app: &App, area: Rect) {
-    let titles = [
-        "1 Overview",
-        "2 Services",
-        "3 Containers",
-        "4 Activity",
-        "5 Privileged",
-    ];
+    let titles = ["1 Overview", "2 Services", "3 Containers", "4 Activity"];
     let selected = match app.view {
         View::Overview => 0,
         View::Services => 1,
         View::Containers => 2,
         View::Activity => 3,
-        View::Privileged => 4,
     };
     let tabs = Tabs::new(titles)
         .select(selected)
@@ -402,79 +390,12 @@ fn draw_activity(frame: &mut Frame, app: &App, area: Rect) {
     );
 }
 
-fn draw_privileged(frame: &mut Frame, app: &App, area: Rect) {
-    let host = app
-        .selected_host()
-        .map(|host| host.hostname.as_str())
-        .unwrap_or("no host selected");
-    let body = match app.mode {
-        Mode::Command => format!(
-            "PRIVILEGED COMMAND · {host}\n\n$ {}_\n\nThe exact command is reviewed and signed before execution.",
-            app.command
-        ),
-        Mode::Review => review(app),
-        _ => {
-            let key = if app.approver_unlocked() {
-                "unlocked for this process"
-            } else {
-                "locked (loaded only when needed)"
-            };
-            let output = if app.output.is_empty() {
-                "No privileged output in this session.".into()
-            } else {
-                app.output
-                    .iter()
-                    .rev()
-                    .take(6)
-                    .rev()
-                    .cloned()
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            };
-            format!(
-                "PRIVILEGED WORKFLOW\n\nTarget: {host}\nApprover key: {key}\nInteractive channel: {}\n\n:  prepare a reviewed root command\nr  prepare an encrypted root PTY\n\nRoot-equivalent access is explicit, host-signed, identity-pinned, and separately approved.\n\nRECENT OUTPUT\n{output}",
-                link_name(app.websocket_state)
-            )
-        }
-    };
-    frame.render_widget(
-        Paragraph::new(body)
-            .style(Style::default().fg(Color::Gray))
-            .block(
-                Block::default()
-                    .title(" Privileged · explicit approval required ")
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::Yellow)),
-            )
-            .wrap(Wrap { trim: false }),
-        area,
-    );
-}
-
-fn draw_terminal(frame: &mut Frame, app: &App, area: Rect) {
-    frame.render_widget(
-        Paragraph::new(app.output.join("\n"))
-            .style(Style::default().fg(Color::Gray).bg(Color::Black))
-            .block(
-                Block::default()
-                    .title(" Encrypted privileged terminal · Esc closes ")
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::Red)),
-            )
-            .wrap(Wrap { trim: false }),
-        area,
-    );
-}
-
 fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
     let hints = match app.mode {
-        Mode::Review => "p pin  a approve  Esc cancel",
-        Mode::Terminal => "Esc close  Ctrl keys pass through",
-        Mode::Command => "Enter review  Esc cancel",
         Mode::Filter => "type to filter  Enter apply  Esc cancel",
         Mode::Palette => "type command  Enter select  Esc cancel",
         Mode::Help => "Esc close help",
-        Mode::Fleet => "↑↓ host  1-5 view  / filter  Ctrl-P menu  ? help  q quit",
+        Mode::Fleet => "↑↓ host  1-4 view  / filter  Ctrl-P menu  ? help  q quit",
     };
     frame.render_widget(
         Paragraph::new(vec![
@@ -494,7 +415,7 @@ fn draw_help(frame: &mut Frame) {
     frame.render_widget(Clear, area);
     frame.render_widget(
         Paragraph::new(
-            "Keyboard help\n\n1-5 / Tab   switch view\n↑↓          select host\n/           filter fleet\nCtrl-P      command palette\n?           open this help\nq           quit from browse mode\nEsc         close the current mode\n\nPrivileged view only\n:           reviewed root command\nr           encrypted root PTY\np / a       pin identity / approve",
+            "Keyboard help\n\n1-4 / Tab   switch view\n↑↓          select host\n/           filter fleet\nCtrl-P      command palette\n?           open this help\nq           quit from browse mode\nEsc         close the current mode",
         )
         .block(Block::default().borders(Borders::ALL).title(" Keyboard help "))
         .wrap(Wrap { trim: false }),
@@ -507,7 +428,7 @@ fn draw_palette(frame: &mut Frame, app: &App) {
     frame.render_widget(Clear, area);
     frame.render_widget(
         Paragraph::new(format!(
-            "> {}_\n\noverview  services  containers  activity  privileged  quit",
+            "> {}_\n\noverview  services  containers  activity  quit",
             app.command
         ))
         .block(
@@ -545,69 +466,11 @@ fn draw_empty(frame: &mut Frame, area: Rect, title: &str, message: &str) {
     );
 }
 
-fn review(app: &App) -> String {
-    let Some(pending) = &app.pending else {
-        return "No privileged transaction is pending.".into();
-    };
-    let operation = format_operation(&pending.operation);
-    let Some(challenge) = &pending.challenge else {
-        return format!(
-            "WAITING FOR HOST-SIGNED MANIFEST\n\nTarget: {}\nRequest: {}\n{}",
-            pending.agent, pending.request_id, operation
-        );
-    };
-    let manifest = &challenge.manifest;
-    format!(
-        "ROOT-EQUIVALENT TRANSACTION\n\nTarget: {}\nIdentity: {}\nRequest: {}\n{}\nPolicy: {}\nCreated: {}\nExpires: {}\n\nIdentity state: {}\n\nApprove only if every field is expected.",
-        manifest.host_id,
-        fingerprint(&challenge.host_identity_public),
-        manifest.request_id,
-        format_operation(&manifest.operation),
-        manifest.policy_version,
-        manifest.created_at,
-        manifest.expires_at,
-        if pending.pinned {
-            "PIN MATCH · SIGNATURE VALID"
-        } else {
-            "UNPAIRED · APPROVAL BLOCKED"
-        },
-    )
-}
-
-pub(crate) fn format_operation(operation: &TrustedOperation) -> String {
-    match operation {
-        TrustedOperation::RootCommand {
-            program,
-            args,
-            timeout_secs,
-        } => format!(
-            "Operation: reviewed root command\nProgram: {program}\nArguments: {}\nTimeout: {timeout_secs}s",
-            args.join(" ")
-        ),
-        TrustedOperation::RootPty {
-            shell,
-            ttl_secs,
-            cols,
-            rows,
-        } => format!(
-            "Operation: encrypted root terminal\nShell: {shell}\nSession limit: {ttl_secs}s\nTerminal: {cols}x{rows}"
-        ),
-    }
-}
-
 fn percent(used: u64, total: u64) -> String {
     used.saturating_mul(100)
         .checked_div(total)
         .map(|value| format!("{value}%"))
         .unwrap_or_else(|| "—".into())
-}
-
-fn link_name(state: LinkState) -> &'static str {
-    match state {
-        LinkState::Connecting => "connecting",
-        LinkState::Live => "available",
-        LinkState::Degraded => "unavailable",
-    }
 }
 
 fn centered(area: Rect, width: u16, height: u16) -> Rect {
@@ -623,17 +486,14 @@ fn centered(area: Rect, width: u16, height: u16) -> Rect {
 
 #[cfg(test)]
 mod tests {
-    use super::{draw, format_operation};
+    use super::draw;
     use crate::app::{App, LinkState, Mode, View};
     use ratatui::{Terminal, backend::TestBackend};
-    use shared::{
-        fleet::{ConnectionStatus, FleetHost, FleetResponse, SnapshotValue},
-        trusted::TrustedOperation,
-    };
-    use std::{collections::BTreeMap, path::PathBuf};
+    use shared::fleet::{ConnectionStatus, FleetHost, FleetResponse, SnapshotValue};
+    use std::collections::BTreeMap;
 
     fn app() -> App {
-        let mut app = App::new(PathBuf::from("/nonexistent/pins"));
+        let mut app = App::new();
         app.replace_fleet(FleetResponse {
             generated_at: 100,
             offline_after_seconds: 45,
@@ -699,7 +559,6 @@ mod tests {
         });
         app.set_data_state(LinkState::Live);
         app.set_event_state(LinkState::Live);
-        app.set_websocket_state(LinkState::Degraded);
         app
     }
 
@@ -723,10 +582,11 @@ mod tests {
         let screen = render(&app(), 80, 24);
         assert!(screen.contains("SHELLFLEET"));
         assert!(screen.contains("1 Overview"));
-        assert!(screen.contains("5 Privileged"));
+        assert!(screen.contains("4 Activity"));
+        assert!(!screen.contains("Privileged"));
         assert!(screen.contains("worker-a"));
         assert!(screen.contains("DOCKER"));
-        assert!(screen.contains("READ ONLY"));
+        assert!(screen.contains("LIVE"));
         assert!(screen.contains("Loading durable fleet data"));
         assert!(!screen.contains("VERIFIED ROOT"));
         assert!(!screen.contains("agent-1234567890"));
@@ -751,18 +611,5 @@ mod tests {
         assert!(screen.contains("Keyboard help"));
         assert!(screen.contains("Ctrl-P"));
         assert!(screen.contains("Esc"));
-    }
-
-    #[test]
-    fn privileged_operations_are_formatted_as_product_copy() {
-        let text = format_operation(&TrustedOperation::RootCommand {
-            program: "/bin/sh".into(),
-            args: vec!["-lc".into(), "uptime".into()],
-            timeout_secs: 300,
-        });
-        assert!(text.contains("Program: /bin/sh"));
-        assert!(text.contains("Arguments: -lc uptime"));
-        assert!(text.contains("Timeout: 300s"));
-        assert!(!text.contains("RootCommand {"));
     }
 }

@@ -25,7 +25,6 @@ struct StoredSession {
 #[derive(Clone, Debug)]
 pub struct Connection {
     pub dashboard_url: String,
-    pub ws_url: String,
     pub access_token: String,
 }
 
@@ -218,30 +217,23 @@ pub fn logout() -> Result<(), String> {
 }
 
 pub fn connection() -> Result<Connection, String> {
-    let env_ws = std::env::var("SHELLFLEET_WS_URL").ok();
     let env_token = std::env::var("SHELLFLEET_AUTH_TOKEN").ok();
     let env_dashboard = std::env::var("SHELLFLEET_URL")
         .ok()
         .map(|value| value.trim_end_matches('/').to_string());
-    if let (Some(ws_url), Some(access_token)) = (&env_ws, &env_token) {
-        let dashboard_url = env_dashboard
-            .map(Ok)
-            .unwrap_or_else(|| dashboard_url_from_ws(ws_url))?;
+    if let (Some(dashboard_url), Some(access_token)) = (&env_dashboard, &env_token) {
         return Ok(Connection {
-            dashboard_url,
-            ws_url: ws_url.clone(),
+            dashboard_url: dashboard_url.clone(),
             access_token: access_token.clone(),
         });
     }
     let session = read_session()?;
-    let ws_url = env_ws.unwrap_or(session.ws_url);
     let dashboard_url = env_dashboard
         .or(session.dashboard_url)
         .map(Ok)
-        .unwrap_or_else(|| dashboard_url_from_ws(&ws_url))?;
+        .unwrap_or_else(|| dashboard_url_from_ws(&session.ws_url))?;
     Ok(Connection {
         dashboard_url,
-        ws_url,
         access_token: env_token.unwrap_or(session.access_token),
     })
 }
