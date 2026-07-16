@@ -16,7 +16,7 @@ keywords:
 home: https://github.com/sppidy/shellfleet
 sources:
   - https://github.com/sppidy/shellfleet
-  - https://github.com/sppidy/shellfleet-agent
+  - https://github.com/sppidy/shellfleet
 maintainers:
   - name: sppidy
     email: sppidytg@gmail.com

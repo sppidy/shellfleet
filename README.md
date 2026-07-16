@@ -28,7 +28,7 @@ no background polling and sits around 4 MB of RAM when idle.
    echo 'deb [signed-by=/etc/apt/keyrings/shellfleet.asc] https://shellfleet-repo.sppidy.in stable main' \
      | sudo tee /etc/apt/sources.list.d/shellfleet.list
    sudo apt-get update && sudo apt-get install -y shellfleet-agent
-   sudo shellfleet-agent --pair        # prints an 8-char pairing code
+   sudo shellfleet-agent-pair          # prints a code, then restarts the service
    ```
 
 3. Sign in with GitHub, open `/device`, and paste the pairing code to approve
@@ -50,28 +50,46 @@ socket. Docker API access is root-equivalent on typical hosts, so enable it
 only for a ShellFleet server and administrators you trust. Disable it with
 `sudo shellfleet-docker-proxy disable`.
 
+The proxy socket follows `docker.socket`; do not add dependencies from
+`docker.socket` to NFS, Tailscale, or `remote-fs.target`. If Docker data lives
+on a remote mount, order `docker.service` after that mount instead. Ordering
+the socket itself after a remote filesystem can create a boot cycle and make
+the agent correctly stop advertising `docker` and `swarm`.
+
+Verify the advertised state after enabling access:
+
+```bash
+sudo shellfleet-docker-proxy status
+sudo systemctl is-active docker.service shellfleet-docker-proxy.socket shellfleet-agent
+```
+
 ## Repository layout
 
-This superproject pins four submodules, each its own GitHub repo:
+The public product is one monorepo. These are ordinary directories, not Git
+submodules or gitlinks, so protocol and consumer changes land atomically:
 
-| Path      | Repo                       | Stack        | Purpose                                                  |
-|-----------|----------------------------|--------------|----------------------------------------------------------|
-| `web/`    | `sppidy/shellfleet-web`    | Next.js 16   | Dashboard SPA — sidebar, per-agent tabs, command palette |
-| `server/` | `sppidy/shellfleet-server` | axum + SQLx  | WS hub, REST API, GitHub OAuth, SQLite store at `/data`  |
-| `agent/`  | `sppidy/shellfleet-agent`  | Rust + Tokio | Per-host daemon, shipped as a `.deb`                     |
-| `shared/` | `sppidy/shellfleet-shared` | Rust crate   | Wire-format `Message` enum + `PROTOCOL_VERSION`          |
+| Path      | Stack        | Purpose                                                                  |
+|-----------|--------------|--------------------------------------------------------------------------|
+| `web/`    | Next.js 16   | Dashboard SPA with durable fleet reads and interactive control surfaces |
+| `server/` | axum + SQLx  | REST/SSE read plane, WS control hub, OAuth, SQLite projections           |
+| `agent/`  | Rust + Tokio | Per-host daemon, shipped as a `.deb`                                     |
+| `shared/` | Rust         | Wire format, protocol version, and shared contracts                      |
+| `cli/`    | Rust         | Trusted native operator cockpit and device authorization client          |
 
 The rest of the top level is build and deploy plumbing: `docker-compose.yml`
 (the server + web stack), the `Dockerfile.*` files, `helm/shellfleet-agent/`
 (the in-cluster install chart), `metrics.example.yaml`, and
 `.github/workflows/agent-deb.yml` (multi-arch `.deb` build + apt repo publish).
+The proprietary `shellfleet-ee` repository stays private and is checked out as
+a sibling for compatible Enterprise builds; it is never a submodule.
 
 ## Documentation
 
 Everything past the quick start lives on the docs site, so it stays in one
 place instead of drifting in this file:
 
-- **[Quickstart & environment variables](https://shellfleet.sppidy.in/docs.html#quickstart)** — deploy, the `.env`, the submodule-bump workflow.
+- **[Quickstart & environment variables](https://shellfleet.sppidy.in/docs.html#quickstart)** — deploy, reverse-proxy routes, the `.env`, and agent pairing.
+- **[Operator CLI](https://shellfleet.sppidy.in/docs.html#cli)** — device authorization without copying browser cookies or dashboard API keys.
 - **[Metrics](https://shellfleet.sppidy.in/docs.html#metrics)** — point the dashboard at your Prometheus; YAML panel templates.
 - **[Kubernetes](https://shellfleet.sppidy.in/docs.html#kubernetes)** / **[Helm](https://shellfleet.sppidy.in/docs.html#helm)** — the k8s agent flavor and every chart value.
 - **[Webhooks](https://shellfleet.sppidy.in/docs.html#webhooks)** and **[Cloudflare](https://shellfleet.sppidy.in/docs.html#cloudflare)** — outbound events and edge setup.
@@ -86,6 +104,7 @@ connected"):
 docker compose up --build server web    # full stack
 cd web && npm install && npm run dev     # web dev server → http://localhost:3000
 cd agent && cargo build --release        # build the agent (Linux only)
+cargo build --release --manifest-path cli/Cargo.toml  # build the operator CLI
 ```
 
 To test against a real agent locally, uncomment the `agent:` stanza in
@@ -94,11 +113,17 @@ agent can drive the host's systemd.
 
 ## Wire format
 
-`shared/` defines the `Message` enum that travels both ways over the WebSocket,
-plus `PROTOCOL_VERSION`, which the server checks at the `Register` handshake to
-reject mismatched agents. Add a field to an existing variant with
+`shared/` defines the `Message` enum that travels both ways over the agent and
+operator WebSockets, plus `PROTOCOL_VERSION`, which the server checks at the
+agent `Register` handshake to reject mismatched agents. Add a field to an existing variant with
 `#[serde(default)]` so older agents still deserialize it; a new variant needs an
 agent rollout.
+
+Fleet identity, online state, capabilities, and latest snapshots are server-owned
+SQLite projections exposed through authenticated REST plus SSE. The dashboard
+uses `/ui/ws` only for interactive control and streaming operations. A transient
+browser WebSocket failure therefore does not erase the fleet or hide Docker and
+Swarm capabilities.
 
 ## Security
 

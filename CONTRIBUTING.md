@@ -11,17 +11,20 @@
 
 ## Repository layout
 
-`shellfleet` is a super-repo of git submodules:
+`shellfleet` is a public monorepo:
 
-| Submodule | Repo | Purpose |
-|-----------|------|---------|
-| `agent/`  | [`shellfleet-agent`](https://github.com/sppidy/shellfleet-agent)   | Rust daemon installed on managed hosts |
-| `server/` | [`shellfleet-server`](https://github.com/sppidy/shellfleet-server) | Rust/axum control-plane API + WS hub |
-| `web/`    | [`shellfleet-web`](https://github.com/sppidy/shellfleet-web)       | Next.js dashboard (standalone build) |
-| `shared/` | [`shellfleet-shared`](https://github.com/sppidy/shellfleet-shared) | Common protocol/types crate |
+| Directory | Purpose |
+|-----------|---------|
+| `agent/`  | Rust daemon installed on managed hosts |
+| `server/` | Rust/axum control-plane API, durable REST/SSE read plane, and WS hub |
+| `web/`    | Next.js dashboard (standalone build) |
+| `shared/` | Common protocol and contract crate |
+| `cli/`    | Trusted native operator cockpit |
 
-PRs should target the submodule repo for the component you're changing.
-Once merged, a maintainer bumps the pointer in the super-repo.
+PRs target this repository. Cross-component changes should update every affected
+consumer in one branch and include the relevant Rust, web, and journey tests.
+The proprietary `shellfleet-ee` repository remains private and is tested as a
+sibling checkout, never as a submodule or vendored directory.
 
 ## Development setup
 

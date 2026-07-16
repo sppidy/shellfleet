@@ -6,11 +6,6 @@ on:
     paths:
       - "agent/**"
       - "shared/**"
-      # Submodule-pointer entries (160000 mode) — without these,
-      # super-repo bumps that only change submodule SHAs don't
-      # trigger this workflow.
-      - "agent"
-      - "shared"
       - ".github/workflows/agent-deb.yml"
   workflow_dispatch:
   release:
@@ -97,12 +92,12 @@ jobs:
           # --target is given. Each runner is native to its arch, so a
           # plain build produces a correct .deb for that arch.
           if [ "${{ matrix.flavor }}" = "k8s" ]; then
-            cargo deb --no-strip -p agent \
+            cargo deb --locked --no-strip -p agent \
               --variant k8s \
               --deb-revision "${{ steps.rev.outputs.rev }}" \
               -- --features kube
           else
-            cargo deb --no-strip -p agent \
+            cargo deb --locked --no-strip -p agent \
               --deb-revision "${{ steps.rev.outputs.rev }}"
           fi
           ls -la target/debian/
