@@ -576,7 +576,11 @@ async fn query_handler(
         Ok(v) => v,
         Err(e) => {
             tracing::warn!(error = %e, panel = %body.panel, "metrics response parse failed");
-            return (StatusCode::BAD_GATEWAY, "metrics upstream returned invalid data").into_response();
+            return (
+                StatusCode::BAD_GATEWAY,
+                "metrics upstream returned invalid data",
+            )
+                .into_response();
         }
     };
 

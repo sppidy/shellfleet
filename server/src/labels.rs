@@ -22,7 +22,10 @@ pub fn routes() -> Router<Arc<AppState>> {
 }
 
 async fn require_auth(jar: &CookieJar, state: &AppState) -> Option<String> {
-    auth::current_user(jar, &state.db).await.ok().map(|claims| claims.sub)
+    auth::current_user(jar, &state.db)
+        .await
+        .ok()
+        .map(|claims| claims.sub)
 }
 
 #[derive(Serialize)]

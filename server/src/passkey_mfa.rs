@@ -49,7 +49,10 @@ fn ee_ctx() -> Option<String> {
 /// `{ available: bool }` — whether the pending user has a registered passkey.
 /// Any negative (no EE, unlicensed, no creds, error) returns false so the UI
 /// simply doesn't advertise the option.
-async fn available_handler(jar: CookieJar, State(state): State<Arc<AppState>>) -> impl IntoResponse {
+async fn available_handler(
+    jar: CookieJar,
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
     let deny = || Json(serde_json::json!({ "available": false }));
     let pending = match auth::pending_mfa_user(&jar, &state.db).await {
         Ok(pending) => pending,
@@ -272,13 +275,21 @@ async fn login_finish_handler(
     let current = match crate::db::get_user(&state.db, &claims.sub).await {
         Ok(Some(row)) if claims.iat >= row.session_epoch => row,
         Ok(Some(_)) => {
-            return (StatusCode::UNAUTHORIZED, "session revoked — please sign in again")
+            return (
+                StatusCode::UNAUTHORIZED,
+                "session revoked — please sign in again",
+            )
                 .into_response();
         }
-        Ok(None) => return (StatusCode::BAD_GATEWAY, "unknown session user from EE").into_response(),
+        Ok(None) => {
+            return (StatusCode::BAD_GATEWAY, "unknown session user from EE").into_response();
+        }
         Err(error) => {
             tracing::error!(%error, login = %claims.sub, "passkey login session verification failed");
-            return (StatusCode::SERVICE_UNAVAILABLE, "session verification unavailable")
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "session verification unavailable",
+            )
                 .into_response();
         }
     };

@@ -43,9 +43,8 @@ fn legacy_key() -> Option<Key<Aes256Gcm>> {
 }
 
 fn current_key() -> Result<Key<Aes256Gcm>, String> {
-    let secret = env::var("TOTP_ENCRYPTION_KEY").map_err(|_| {
-        "TOTP_ENCRYPTION_KEY is required to encrypt TOTP credentials".to_string()
-    })?;
+    let secret = env::var("TOTP_ENCRYPTION_KEY")
+        .map_err(|_| "TOTP_ENCRYPTION_KEY is required to encrypt TOTP credentials".to_string())?;
     if secret.len() < 32 {
         return Err("TOTP_ENCRYPTION_KEY must be at least 32 characters".to_string());
     }

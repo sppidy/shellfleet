@@ -48,7 +48,10 @@ fn default_enabled() -> bool {
 }
 
 async fn require_auth(jar: &CookieJar, state: &AppState) -> Option<String> {
-    auth::current_user(jar, &state.db).await.ok().map(|claims| claims.sub)
+    auth::current_user(jar, &state.db)
+        .await
+        .ok()
+        .map(|claims| claims.sub)
 }
 
 fn next_run(cron_expr: &str) -> Option<i64> {

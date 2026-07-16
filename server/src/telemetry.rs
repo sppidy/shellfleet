@@ -7,12 +7,12 @@
 //! set of feature names. No PII (no logins, hostnames, IPs, or agent ids).
 
 use axum::{Json, Router, extract::State, response::IntoResponse, routing::get};
+use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use sha2::Sha256;
 use std::sync::Arc;
 use std::time::Duration;
-use hmac::{Hmac, Mac};
-use sha2::Sha256;
 
 use crate::{AppState, db, ee};
 
@@ -55,8 +55,8 @@ pub fn telemetry_enabled(env_value: Option<&str>, toggle_enabled: bool) -> bool 
 /// counters. The key is deployment configuration, not telemetry data, and is
 /// never sent over the wire.
 fn sign_report(secret: &str, timestamp: i64, body: &[u8]) -> String {
-    let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes())
-        .expect("HMAC accepts keys of any length");
+    let mut mac =
+        Hmac::<Sha256>::new_from_slice(secret.as_bytes()).expect("HMAC accepts keys of any length");
     mac.update(timestamp.to_string().as_bytes());
     mac.update(b"\n");
     mac.update(body);

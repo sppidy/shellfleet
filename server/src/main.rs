@@ -20,9 +20,9 @@ mod api_v1;
 mod auth;
 mod backups;
 mod cli_auth;
+pub mod core;
 mod crypto;
 mod csrf;
-pub mod core;
 mod db;
 mod device_auth;
 mod ee;
@@ -408,13 +408,19 @@ async fn me_handler(jar: CookieJar, State(state): State<Arc<AppState>>) -> impl 
     let (role, mfa_enabled) = match db::get_user(&state.db, &claims.sub).await {
         Ok(Some(row)) if claims.iat >= row.session_epoch => (row.role, row.totp_enabled != 0),
         Ok(Some(_)) => {
-            return (StatusCode::UNAUTHORIZED, "session revoked — please sign in again")
-                .into_response()
+            return (
+                StatusCode::UNAUTHORIZED,
+                "session revoked — please sign in again",
+            )
+                .into_response();
         }
         Ok(None) => return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response(),
         Err(error) => {
             tracing::error!(%error, login = %claims.sub, "session verification failed for /api/me");
-            return (StatusCode::SERVICE_UNAVAILABLE, "session verification unavailable")
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "session verification unavailable",
+            )
                 .into_response();
         }
     };
@@ -687,9 +693,15 @@ async fn main() {
     // cannot connect — fail-closed, while the browser UI on :8080 stays
     // up.
     if !dev_mode {
-        let cert = std::env::var("SERVER_TLS_CERT_PATH").ok().filter(|s| !s.is_empty());
-        let key = std::env::var("SERVER_TLS_KEY_PATH").ok().filter(|s| !s.is_empty());
-        let ca = std::env::var("AGENT_MTLS_CA_PATH").ok().filter(|s| !s.is_empty());
+        let cert = std::env::var("SERVER_TLS_CERT_PATH")
+            .ok()
+            .filter(|s| !s.is_empty());
+        let key = std::env::var("SERVER_TLS_KEY_PATH")
+            .ok()
+            .filter(|s| !s.is_empty());
+        let ca = std::env::var("AGENT_MTLS_CA_PATH")
+            .ok()
+            .filter(|s| !s.is_empty());
         match (cert, key, ca) {
             (Some(cert), Some(key), Some(ca)) => {
                 let cert = std::path::PathBuf::from(cert);
@@ -917,16 +929,25 @@ async fn ui_ws_handler(
             }
             Err(error) => {
                 tracing::error!(%error, login = %claims.sub, "ui ws: session verification failed");
-                return (StatusCode::SERVICE_UNAVAILABLE, "session verification unavailable")
+                return (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "session verification unavailable",
+                )
                     .into_response();
             }
         }
-        (claims.sub.clone(), auth::Role::parse(&claims.role), claims.iat)
+        (
+            claims.sub.clone(),
+            auth::Role::parse(&claims.role),
+            claims.iat,
+        )
     };
 
     let client_ip = throttle::real_client_ip(&headers, Some(peer.ip()));
-    ws.on_upgrade(move |socket| handle_ui_socket(socket, state, login, initial_role, token_iat, client_ip))
-        .into_response()
+    ws.on_upgrade(move |socket| {
+        handle_ui_socket(socket, state, login, initial_role, token_iat, client_ip)
+    })
+    .into_response()
 }
 
 async fn handle_agent_socket(socket: WebSocket, state: Arc<AppState>, token: String) {
@@ -1013,11 +1034,8 @@ async fn handle_agent_socket(socket: WebSocket, state: Arc<AppState>, token: Str
                     // intentionally serves many hosts).
                     let legacy_token = std::env::var("AGENT_SECRET").unwrap_or_default();
                     let is_legacy = !legacy_token.is_empty()
-                        && subtle::ConstantTimeEq::ct_eq(
-                            token.as_bytes(),
-                            legacy_token.as_bytes(),
-                        )
-                        .into();
+                        && subtle::ConstantTimeEq::ct_eq(token.as_bytes(), legacy_token.as_bytes())
+                            .into();
                     if !is_legacy {
                         if let Ok(Some(bound)) = db::token_hostname(&state.db, &token).await {
                             if !bound.is_empty() && bound != hostname {
@@ -1201,15 +1219,9 @@ async fn handle_agent_socket(socket: WebSocket, state: Arc<AppState>, token: Str
                 }
                 Message::CapabilitiesUpdate { capabilities } => {
                     if let Some(id) = &agent_id_opt {
-                        let changed = state
-                            .agents
-                            .lock()
-                            .await
-                            .get(id)
-                            .is_some_and(|entry| {
-                                entry.tx.same_channel(&tx)
-                                    && entry.capabilities != capabilities
-                            });
+                        let changed = state.agents.lock().await.get(id).is_some_and(|entry| {
+                            entry.tx.same_channel(&tx) && entry.capabilities != capabilities
+                        });
                         if changed {
                             let observed_at = now_unix();
                             if let Err(error) = core::ingest::capabilities_updated(
@@ -1277,13 +1289,9 @@ async fn handle_agent_socket(socket: WebSocket, state: Arc<AppState>, token: Str
                 // server's read timeout, so the symmetric reap can't misfire.
                 Message::Ping => {
                     if let Some(agent_id) = &agent_id_opt {
-                        if let Err(error) = core::ingest::touch(
-                            &state.db,
-                            &state.core_events,
-                            agent_id,
-                            now_unix(),
-                        )
-                        .await
+                        if let Err(error) =
+                            core::ingest::touch(&state.db, &state.core_events, agent_id, now_unix())
+                                .await
                         {
                             tracing::error!(
                                 %error,
@@ -1703,13 +1711,8 @@ async fn handle_agent_socket(socket: WebSocket, state: Arc<AppState>, token: Str
             pe.retain(|_, (expected, _)| expected != &id);
         }
         state.operation_owners.lock().await.release_agent(&id);
-        if let Err(error) = core::ingest::disconnected(
-            &state.db,
-            &state.core_events,
-            &id,
-            now_unix(),
-        )
-        .await
+        if let Err(error) =
+            core::ingest::disconnected(&state.db, &state.core_events, &id, now_unix()).await
         {
             tracing::error!(%error, agent_id = %id, "failed to persist agent disconnect");
         }

@@ -80,11 +80,10 @@ pub async fn init() -> Result<SqlitePool, sqlx::Error> {
     let _ = sqlx::query("ALTER TABLE tokens ADD COLUMN refresh_token TEXT")
         .execute(&pool)
         .await;
-    let _ = sqlx::query(
-        "ALTER TABLE tokens ADD COLUMN refresh_expires_at INTEGER NOT NULL DEFAULT 0",
-    )
-    .execute(&pool)
-    .await;
+    let _ =
+        sqlx::query("ALTER TABLE tokens ADD COLUMN refresh_expires_at INTEGER NOT NULL DEFAULT 0")
+            .execute(&pool)
+            .await;
     let _ = sqlx::query("ALTER TABLE tokens ADD COLUMN revoked INTEGER NOT NULL DEFAULT 0")
         .execute(&pool)
         .await;

@@ -61,7 +61,10 @@ fn set_csrf_cookie(resp: &mut Response<Body>, token: &str) {
     } else {
         ""
     };
-    let value = format!("{}={token}; Path=/; SameSite=Strict{secure_attr}", csrf_cookie_name());
+    let value = format!(
+        "{}={token}; Path=/; SameSite=Strict{secure_attr}",
+        csrf_cookie_name()
+    );
     if let Ok(hv) = HeaderValue::from_str(&value) {
         resp.headers_mut()
             .append(axum::http::header::SET_COOKIE, hv);

@@ -23,12 +23,12 @@ use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
 
+use rustls::ServerConfig;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::server::WebPkiClientVerifier;
-use rustls::ServerConfig;
 use tokio::net::TcpListener;
-use tokio_rustls::server::TlsStream;
 use tokio_rustls::TlsAcceptor;
+use tokio_rustls::server::TlsStream;
 
 /// An `axum::serve::Listener` that wraps a TCP listener in a rustls TLS
 /// acceptor requiring a verified client certificate. Handshake failures

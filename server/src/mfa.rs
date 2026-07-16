@@ -209,13 +209,19 @@ async fn status_handler(jar: CookieJar, State(state): State<Arc<AppState>>) -> i
     let enabled = match crate::db::get_user(&state.db, &claims.sub).await {
         Ok(Some(row)) if claims.iat >= row.session_epoch => row.totp_enabled != 0,
         Ok(Some(_)) => {
-            return (StatusCode::UNAUTHORIZED, "session revoked — please sign in again")
+            return (
+                StatusCode::UNAUTHORIZED,
+                "session revoked — please sign in again",
+            )
                 .into_response();
         }
         Ok(None) => return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response(),
         Err(error) => {
             tracing::error!(%error, login = %claims.sub, "session verification failed for mfa status");
-            return (StatusCode::SERVICE_UNAVAILABLE, "session verification unavailable")
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "session verification unavailable",
+            )
                 .into_response();
         }
     };
@@ -273,7 +279,10 @@ async fn confirm_handler(
         Ok(value) => value,
         Err(error) => {
             tracing::error!(%error, "failed to encrypt TOTP secret");
-            return (StatusCode::INTERNAL_SERVER_ERROR, "credential encryption unavailable")
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "credential encryption unavailable",
+            )
                 .into_response();
         }
     };
@@ -283,7 +292,10 @@ async fn confirm_handler(
         Ok(value) => value,
         Err(error) => {
             tracing::error!(%error, "failed to encrypt recovery hashes");
-            return (StatusCode::INTERNAL_SERVER_ERROR, "credential encryption unavailable")
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "credential encryption unavailable",
+            )
                 .into_response();
         }
     };

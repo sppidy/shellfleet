@@ -189,16 +189,17 @@ async fn poll_cli_token(
             .into_response();
         }
     };
-    let consumed = match db::consume_pending_cli_device(&state.db, &row.device_code, &actor, now).await {
-        Ok(consumed) => consumed,
-        Err(error) => {
-            tracing::error!(%error, "consume CLI device authorization failed");
-            return Json(CliAuthTokenResponse::Error {
-                error: "server_error".to_string(),
-            })
-            .into_response();
-        }
-    };
+    let consumed =
+        match db::consume_pending_cli_device(&state.db, &row.device_code, &actor, now).await {
+            Ok(consumed) => consumed,
+            Err(error) => {
+                tracing::error!(%error, "consume CLI device authorization failed");
+                return Json(CliAuthTokenResponse::Error {
+                    error: "server_error".to_string(),
+                })
+                .into_response();
+            }
+        };
     if !consumed {
         return Json(CliAuthTokenResponse::Error {
             error: "invalid_grant".to_string(),
