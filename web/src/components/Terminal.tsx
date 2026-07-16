@@ -229,7 +229,7 @@ export default function Terminal({
         style={{ background: 'var(--bg-1)', flexShrink: 0 }}
       >
         <div className="panel-title">
-          <span className="ico">›_</span> {title ?? 'SHELL'}
+          <span className="ico">›_</span> {title ?? 'ROOT SHELL'}
           <span className="meta">root@{agentId.replace(/-id$/, '')}</span>
         </div>
         <div className="panel-actions">

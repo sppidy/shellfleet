@@ -87,6 +87,35 @@ pub enum TrustedPlaintext {
     Exit { code: i32, message: String },
 }
 
+/// Local Unix-socket protocol between the unprivileged network agent and the
+/// root-owned terminal broker. These frames never cross the public network;
+/// the server continues to authorize and audit the browser's terminal session.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(tag = "type", content = "payload", rename_all = "snake_case")]
+pub enum RootTerminalClientFrame {
+    Start {
+        session_id: String,
+        cols: u16,
+        rows: u16,
+    },
+    Input {
+        data: Vec<u8>,
+    },
+    Resize {
+        cols: u16,
+        rows: u16,
+    },
+    Close,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(tag = "type", content = "payload", rename_all = "snake_case")]
+pub enum RootTerminalHostFrame {
+    Output { data: Vec<u8> },
+    Exit { code: i32 },
+    Error { message: String },
+}
+
 pub fn encode_client(frame: &TrustedClientFrame) -> Result<Vec<u8>, String> {
     let encoded = serde_json::to_vec(frame).map_err(|error| error.to_string())?;
     if encoded.len() > MAX_TRUSTED_FRAME_BYTES {
@@ -113,6 +142,37 @@ pub fn encode_host(frame: &TrustedHostFrame) -> Result<Vec<u8>, String> {
 pub fn decode_host(bytes: &[u8]) -> Result<TrustedHostFrame, String> {
     if bytes.len() > MAX_TRUSTED_FRAME_BYTES {
         return Err("trusted host frame too large".into());
+    }
+    serde_json::from_slice(bytes).map_err(|error| error.to_string())
+}
+
+pub fn encode_root_terminal_client(frame: &RootTerminalClientFrame) -> Result<Vec<u8>, String> {
+    encode_bounded(frame)
+}
+
+pub fn decode_root_terminal_client(bytes: &[u8]) -> Result<RootTerminalClientFrame, String> {
+    decode_bounded(bytes)
+}
+
+pub fn encode_root_terminal_host(frame: &RootTerminalHostFrame) -> Result<Vec<u8>, String> {
+    encode_bounded(frame)
+}
+
+pub fn decode_root_terminal_host(bytes: &[u8]) -> Result<RootTerminalHostFrame, String> {
+    decode_bounded(bytes)
+}
+
+fn encode_bounded<T: Serialize>(frame: &T) -> Result<Vec<u8>, String> {
+    let encoded = serde_json::to_vec(frame).map_err(|error| error.to_string())?;
+    if encoded.len() > MAX_TRUSTED_FRAME_BYTES {
+        return Err("trusted frame too large".into());
+    }
+    Ok(encoded)
+}
+
+fn decode_bounded<T: for<'de> Deserialize<'de>>(bytes: &[u8]) -> Result<T, String> {
+    if bytes.len() > MAX_TRUSTED_FRAME_BYTES {
+        return Err("trusted frame too large".into());
     }
     serde_json::from_slice(bytes).map_err(|error| error.to_string())
 }
@@ -154,5 +214,27 @@ mod tests {
     #[test]
     fn oversized_relay_frame_is_rejected_before_deserialization() {
         assert!(decode_client(&vec![0; MAX_TRUSTED_FRAME_BYTES + 1]).is_err());
+    }
+
+    #[test]
+    fn local_root_terminal_frames_are_bounded_and_roundtrip() {
+        let start = RootTerminalClientFrame::Start {
+            session_id: "browser-session".into(),
+            cols: 120,
+            rows: 40,
+        };
+        assert_eq!(
+            decode_root_terminal_client(&encode_root_terminal_client(&start).unwrap()).unwrap(),
+            start
+        );
+
+        let output = RootTerminalHostFrame::Output {
+            data: b"root prompt".to_vec(),
+        };
+        assert_eq!(
+            decode_root_terminal_host(&encode_root_terminal_host(&output).unwrap()).unwrap(),
+            output
+        );
+        assert!(decode_root_terminal_client(&vec![0; MAX_TRUSTED_FRAME_BYTES + 1]).is_err());
     }
 }

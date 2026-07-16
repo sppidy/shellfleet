@@ -1,5 +1,5 @@
 [Unit]
-Description=ShellFleet local trusted-operation approval gate
+Description=ShellFleet local root-operation broker
 After=local-fs.target
 Before=shellfleet-agent.service
 

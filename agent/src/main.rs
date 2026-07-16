@@ -693,8 +693,10 @@ async fn main() {
     // dashboard-generated session_id and lands as its own entry.
     // Container exec stays singleton (a separate concern, scoped by
     // container_id, identified on the wire by an empty session_id).
-    let mut term_sessions: std::collections::HashMap<String, terminal::TerminalSession> =
-        std::collections::HashMap::new();
+    let mut term_sessions: std::collections::HashMap<
+        String,
+        agent::privileged::client::RootTerminalSession,
+    > = std::collections::HashMap::new();
     let mut exec_session: Option<terminal::TerminalSession> = None;
     let mut trusted_sessions: std::collections::HashMap<
         String,
@@ -1750,12 +1752,24 @@ async fn main() {
                                     // rather than tearing down the live PTY.
                                     println!("Terminal session_id={} already exists", session_id);
                                 } else {
-                                    match terminal::spawn_terminal(session_id.clone(), tx.clone()) {
+                                    match agent::privileged::client::connect_root_terminal(
+                                        session_id.clone(),
+                                        tx.clone(),
+                                    )
+                                    .await
+                                    {
                                         Ok(session) => {
                                             term_sessions.insert(session_id.clone(), session);
-                                            println!("Terminal spawned session_id={}", session_id);
+                                            println!("Root terminal opened session_id={}", session_id);
                                         }
-                                        Err(e) => eprintln!("Failed to spawn terminal: {}", e),
+                                        Err(e) => {
+                                            eprintln!("Failed to open root terminal: {}", e);
+                                            let _ = tx.send(Message::TerminalData {
+                                                session_id,
+                                                data: format!("\r\n[root terminal unavailable: {e}]\r\n")
+                                                    .into_bytes(),
+                                            });
+                                        }
                                     }
                                 }
                             }

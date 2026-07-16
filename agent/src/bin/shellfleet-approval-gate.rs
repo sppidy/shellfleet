@@ -136,6 +136,34 @@ async fn handle(stream: UnixStream, state: Arc<GateState>) -> Result<(), String>
     }
     let (mut reader, mut writer) = stream.into_split();
     let first = framing::read_frame(&mut reader).await?;
+    if let Ok(shared::trusted::RootTerminalClientFrame::Start {
+        session_id,
+        cols,
+        rows,
+    }) = shared::trusted::decode_root_terminal_client(&first)
+    {
+        if session_id.is_empty()
+            || session_id.len() > 128
+            || !session_id
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || b"._-".contains(&byte))
+        {
+            send_root_error(&mut writer, "invalid root terminal session id").await?;
+            return Err("invalid root terminal session id".into());
+        }
+        if let Err(error) = run_browser_root_pty(
+            &mut reader,
+            &mut writer,
+            cols.clamp(20, 500),
+            rows.clamp(5, 200),
+        )
+        .await
+        {
+            let _ = send_root_error(&mut writer, &error).await;
+            return Err(error);
+        }
+        return Ok(());
+    }
     let start = shared::trusted::decode_client(&first)?;
     let challenge = state.challenge(&start, now_unix())?;
     send_host(
@@ -228,6 +256,26 @@ async fn send_error<W: tokio::io::AsyncWrite + Unpin>(
     .await
 }
 
+async fn send_root_host<W: tokio::io::AsyncWrite + Unpin>(
+    writer: &mut W,
+    frame: &shared::trusted::RootTerminalHostFrame,
+) -> Result<(), String> {
+    framing::write_frame(writer, &shared::trusted::encode_root_terminal_host(frame)?).await
+}
+
+async fn send_root_error<W: tokio::io::AsyncWrite + Unpin>(
+    writer: &mut W,
+    message: &str,
+) -> Result<(), String> {
+    send_root_host(
+        writer,
+        &shared::trusted::RootTerminalHostFrame::Error {
+            message: message.to_owned(),
+        },
+    )
+    .await
+}
+
 async fn send_encrypted<W: tokio::io::AsyncWrite + Unpin>(
     writer: &mut W,
     transport: &mut Transport,
@@ -287,6 +335,107 @@ async fn run_command<W: tokio::io::AsyncWrite + Unpin>(
             code: output.status.code().unwrap_or(-1),
             message: "root command complete".into(),
         },
+    )
+    .await
+}
+
+async fn run_browser_root_pty<R, W>(
+    reader: &mut R,
+    writer: &mut W,
+    cols: u16,
+    rows: u16,
+) -> Result<(), String>
+where
+    R: tokio::io::AsyncRead + Unpin,
+    W: tokio::io::AsyncWrite + Unpin,
+{
+    let pair = NativePtySystem::default()
+        .openpty(PtySize {
+            rows,
+            cols,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .map_err(|error| error.to_string())?;
+    let shell = if std::path::Path::new("/bin/bash").is_file() {
+        "/bin/bash"
+    } else {
+        "/bin/sh"
+    };
+    let mut command = CommandBuilder::new(shell);
+    if shell.ends_with("bash") {
+        command.arg("-l");
+    } else {
+        command.arg("-i");
+    }
+    let mut child = pair
+        .slave
+        .spawn_command(command)
+        .map_err(|error| format!("spawn root terminal: {error}"))?;
+    drop(pair.slave);
+    let mut pty_reader = pair
+        .master
+        .try_clone_reader()
+        .map_err(|error| error.to_string())?;
+    let mut pty_writer = pair
+        .master
+        .take_writer()
+        .map_err(|error| error.to_string())?;
+    let (output_tx, mut output_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
+    std::thread::spawn(move || {
+        let mut buffer = [0u8; 8192];
+        loop {
+            match pty_reader.read(&mut buffer) {
+                Ok(0) | Err(_) => break,
+                Ok(length) => {
+                    if output_tx.send(buffer[..length].to_vec()).is_err() {
+                        break;
+                    }
+                }
+            }
+        }
+    });
+
+    let deadline = tokio::time::sleep(Duration::from_secs(4 * 60 * 60));
+    tokio::pin!(deadline);
+    loop {
+        tokio::select! {
+            _ = &mut deadline => break,
+            output = output_rx.recv() => {
+                let Some(data) = output else { break };
+                send_root_host(
+                    writer,
+                    &shared::trusted::RootTerminalHostFrame::Output { data },
+                ).await?;
+            }
+            incoming = framing::read_frame(reader) => {
+                let payload = match incoming { Ok(value) => value, Err(_) => break };
+                match shared::trusted::decode_root_terminal_client(&payload)? {
+                    shared::trusted::RootTerminalClientFrame::Input { data } => {
+                        pty_writer.write_all(&data).map_err(|error| error.to_string())?;
+                        pty_writer.flush().map_err(|error| error.to_string())?;
+                    }
+                    shared::trusted::RootTerminalClientFrame::Resize { cols, rows } => {
+                        pair.master.resize(PtySize {
+                            rows: rows.clamp(5, 200),
+                            cols: cols.clamp(20, 500),
+                            pixel_width: 0,
+                            pixel_height: 0,
+                        }).map_err(|error| error.to_string())?;
+                    }
+                    shared::trusted::RootTerminalClientFrame::Close => break,
+                    shared::trusted::RootTerminalClientFrame::Start { .. } => {
+                        return Err("duplicate root terminal start frame".into());
+                    }
+                }
+            }
+        }
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+    send_root_host(
+        writer,
+        &shared::trusted::RootTerminalHostFrame::Exit { code: 0 },
     )
     .await
 }

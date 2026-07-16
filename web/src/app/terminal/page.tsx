@@ -27,7 +27,7 @@ interface Tab {
 
 export default function TerminalPage() {
   const router = useRouter();
-  const { agents } = useWebSocket();
+  const { agents, agentCapabilities } = useWebSocket();
   const { status } = useSession();
   const canWrite = useCanWrite();
   const [tabs, setTabs] = useState<Tab[]>([]);
@@ -106,7 +106,7 @@ export default function TerminalPage() {
                 ←&nbsp;back
               </button>
               <span className="sep">/</span>
-              <span className="here">terminal</span>
+              <span className="here">root terminal</span>
             </div>
           </div>
           <div className="scroll">
@@ -129,9 +129,13 @@ export default function TerminalPage() {
     );
   }
 
-  // All online agents are eligible; multiple tabs against the same
-  // agent are now allowed.
-  const availableAgents = agents;
+  // The packaged root broker advertises `trusted-root`. Keep legacy agents
+  // with no capability list visible, but do not offer a terminal for a host
+  // that explicitly reports it cannot open one.
+  const availableAgents = agents.filter((agentId) => {
+    const capabilities = agentCapabilities[agentId] ?? [];
+    return capabilities.length === 0 || capabilities.includes('trusted-root');
+  });
 
   return (
     <div
@@ -166,7 +170,7 @@ export default function TerminalPage() {
           ←&nbsp;back
         </button>
         <span className="muted mono" style={{ fontSize: 11 }}>
-          terminal
+          root terminal
         </span>
         <div style={{ width: 1, alignSelf: 'stretch', background: 'var(--line)', margin: '0 4px' }} />
 
@@ -326,7 +330,7 @@ export default function TerminalPage() {
               }}
             >
               {`┌────────────────────────────────────┐
-│  no terminals open                 │
+│  no root terminals open            │
 │                                    │
 │  click '+ host' to start one;      │
 │  multiple tabs per host are fine,  │
@@ -348,7 +352,7 @@ export default function TerminalPage() {
                 agentId={t.agentId}
                 sessionId={t.id}
                 visible={t.id === activeId}
-                title={`shell · ${t.agentId.replace(/-id$/, '')}`}
+                title={`root · ${t.agentId.replace(/-id$/, '')}`}
               />
             </div>
           ))
