@@ -1,6 +1,7 @@
 mod app;
 mod client;
 mod credentials;
+mod fleet;
 mod identity;
 mod session;
 mod ui;
@@ -61,13 +62,11 @@ async fn run() -> Result<(), String> {
         return credentials::logout();
     }
 
-    let key_path = identity::default_key_path()?;
-    let signer = identity::load(&key_path, &key_passphrase("Approver key passphrase: ")?)?;
     let home = std::env::var("HOME").map_err(|_| "HOME is not set")?;
     let pins = PathBuf::from(home).join(".config/shellfleet/host-pins.json");
     let connection = credentials::connection()?;
     let (outgoing, mut incoming) = client::connect(connection);
-    let mut app = App::new(signer, pins);
+    let mut app = App::new(pins);
     let _ = outgoing.send(UiMessage::ListAgentsRequest);
 
     enable_raw_mode().map_err(|error| error.to_string())?;
@@ -92,22 +91,29 @@ async fn cockpit(
         while let Ok(message) = incoming.try_recv() {
             match message {
                 client::ClientEvent::Fleet(fleet) => {
-                    app.agents = fleet.hosts.into_iter().map(|host| host.agent_id).collect();
-                    app.agents.sort();
+                    app.replace_fleet(fleet);
                 }
                 client::ClientEvent::WebSocket(message) => handle_server(app, *message)?,
-                client::ClientEvent::DataState(state)
-                | client::ClientEvent::EventState(state)
-                | client::ClientEvent::WebSocketState(state) => {
-                    if let client::TransportState::Degraded(reason) = state {
-                        app.status = reason;
+                client::ClientEvent::DataState(state) => {
+                    if let client::TransportState::Degraded(reason) = &state {
+                        app.status = reason.clone();
                     }
+                    app.set_data_state(link_state(state));
+                }
+                client::ClientEvent::EventState(state) => {
+                    if let client::TransportState::Degraded(reason) = &state {
+                        app.status = reason.clone();
+                    }
+                    app.set_event_state(link_state(state));
                 }
                 client::ClientEvent::Core(event) => {
-                    app.status = match event.agent_id {
-                        Some(agent) => format!("Fleet event on {agent}"),
-                        None => "Fleet refresh requested".into(),
-                    };
+                    app.record_core_event(event);
+                }
+                client::ClientEvent::WebSocketState(state) => {
+                    if let client::TransportState::Degraded(reason) = &state {
+                        app.status = reason.clone();
+                    }
+                    app.set_websocket_state(link_state(state));
                 }
             }
         }
@@ -124,13 +130,20 @@ async fn cockpit(
     Ok(())
 }
 
+fn link_state(state: client::TransportState) -> app::LinkState {
+    match state {
+        client::TransportState::Connecting => app::LinkState::Connecting,
+        client::TransportState::Live => app::LinkState::Live,
+        client::TransportState::Degraded(_) => app::LinkState::Degraded,
+    }
+}
+
 fn handle_server(app: &mut App, message: UiMessage) -> Result<(), String> {
     match message {
-        UiMessage::ListAgentsResponse { agents, .. } => {
-            app.agents = agents;
-            app.agents.sort();
-            app.selected = app.selected.min(app.agents.len().saturating_sub(1));
-        }
+        // Durable REST inventory is the fleet source of truth. The WebSocket
+        // list is only a legacy compatibility signal and must never clear or
+        // reorder the read plane during an interactive reconnect.
+        UiMessage::ListAgentsResponse { .. } => {}
         UiMessage::PermissionDenied { reason, .. } => app.status = reason,
         UiMessage::AgentMessage {
             agent_id,
@@ -233,6 +246,11 @@ fn handle_key(
             } else if let Some(bytes) = terminal_key_bytes(key) {
                 let message = app.encrypted_input(&bytes)?;
                 send_to_selected(app, outgoing, message)?;
+            }
+        }
+        Mode::Filter | Mode::Palette | Mode::Help => {
+            if key.code == KeyCode::Esc {
+                app.mode = Mode::Fleet;
             }
         }
     }
