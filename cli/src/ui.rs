@@ -23,7 +23,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
             Constraint::Length(3),
             Constraint::Length(3),
             Constraint::Min(8),
-            Constraint::Length(3),
+            Constraint::Length(4),
         ])
         .split(frame.area());
     draw_header(frame, app, bands[0]);
@@ -477,11 +477,13 @@ fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
         Mode::Fleet => "↑↓ host  1-5 view  / filter  Ctrl-P menu  ? help  q quit",
     };
     frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled(hints, Style::default().fg(Color::Gray)),
-            Span::raw("  │  "),
-            Span::styled(&app.status, Style::default().fg(Color::Yellow)),
-        ]))
+        Paragraph::new(vec![
+            Line::from(Span::styled(hints, Style::default().fg(Color::Gray))),
+            Line::from(vec![
+                Span::styled("Status: ", Style::default().fg(MUTED)),
+                Span::styled(&app.status, Style::default().fg(Color::Yellow)),
+            ]),
+        ])
         .block(Block::default().borders(Borders::ALL)),
         area,
     );
@@ -725,6 +727,7 @@ mod tests {
         assert!(screen.contains("worker-a"));
         assert!(screen.contains("DOCKER"));
         assert!(screen.contains("READ ONLY"));
+        assert!(screen.contains("Loading durable fleet data"));
         assert!(!screen.contains("VERIFIED ROOT"));
         assert!(!screen.contains("agent-1234567890"));
     }
