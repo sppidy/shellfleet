@@ -94,6 +94,12 @@ case "$1" in
         fi
         systemctl daemon-reload >/dev/null 2>&1 || true
         systemctl enable shellfleet-approval-gate.service >/dev/null 2>&1 || true
+        # debhelper restarts the primary agent unit on upgrade, but this
+        # package also ships the separate root broker. Restart an already
+        # running broker so its process cannot keep serving the old binary.
+        # On first install try-restart is a no-op; the agent's Requires= edge
+        # starts the broker with the primary service.
+        systemctl try-restart shellfleet-approval-gate.service >/dev/null 2>&1 || true
         ;;
 esac
 
