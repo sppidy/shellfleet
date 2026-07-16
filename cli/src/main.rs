@@ -34,9 +34,12 @@ async fn run() -> Result<(), String> {
         args.get(1).map(String::as_str),
         Some("--help" | "-h" | "help")
     ) {
-        println!(
-            "ShellFleet Operator Cockpit\n\nUSAGE:\n  shellfleet                              Open the trusted fleet TUI\n  shellfleet login <dashboard-url>        Approve a browser-free CLI session\n  shellfleet logout                       Remove the local CLI session\n  shellfleet keygen [PATH]                Create an encrypted Ed25519 approver key\n\nENVIRONMENT:\n  SHELLFLEET_URL              Dashboard URL used by `login` when no argument is given\n  SHELLFLEET_WS_URL           Override the saved Dashboard /ui/ws URL\n  SHELLFLEET_AUTH_TOKEN       Override the saved CLI session (automation only)\n  SHELLFLEET_KEY_PASSPHRASE   Optional non-interactive key passphrase"
-        );
+        let command = args
+            .first()
+            .and_then(|value| std::path::Path::new(value).file_name())
+            .and_then(|value| value.to_str())
+            .unwrap_or("shellfleetctl");
+        println!("{}", help_text(command));
         return Ok(());
     }
     if args.get(1).map(String::as_str) == Some("keygen") {
@@ -456,6 +459,12 @@ fn key_passphrase(prompt: &str) -> Result<String, String> {
         .map_err(|error| error.to_string())
 }
 
+fn help_text(command: &str) -> String {
+    format!(
+        "ShellFleet Fleet Cockpit\n\nUSAGE:\n  {command}                              Open the durable fleet cockpit\n  {command} login <dashboard-url>        Authorize a CLI session in the browser\n  {command} logout                       Remove the local CLI session\n  {command} keygen [PATH]                Create an encrypted approver key\n\nCOCKPIT:\n  1-5 / Tab                  Switch fleet views\n  /                          Filter hosts and capabilities\n  Ctrl-P                     Open the command palette\n  ?                          Show context help\n\nSECURITY:\n  Fleet reads use a purpose-bound session. Approver key is requested only\n  when you start an explicit action from the Privileged view.\n\nENVIRONMENT:\n  SHELLFLEET_URL              Dashboard origin used by login and fleet reads\n  SHELLFLEET_WS_URL           Override the saved interactive /ui/ws URL\n  SHELLFLEET_AUTH_TOKEN       Override the saved CLI session (automation only)\n  SHELLFLEET_KEY_PASSPHRASE   Optional non-interactive key passphrase"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -519,5 +528,14 @@ mod tests {
         press(&mut app, KeyCode::Enter, KeyModifiers::NONE).unwrap();
         assert_eq!(app.view, View::Services);
         assert_eq!(app.mode, Mode::Fleet);
+    }
+
+    #[test]
+    fn help_copy_describes_the_fleet_first_product() {
+        let help = help_text("shellfleetctl");
+        assert!(help.contains("shellfleetctl"));
+        assert!(help.contains("durable fleet cockpit"));
+        assert!(help.contains("Approver key is requested only"));
+        assert!(!help.contains("trusted fleet TUI"));
     }
 }

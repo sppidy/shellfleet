@@ -184,7 +184,7 @@ pub async fn login(arg: Option<&String>) -> Result<(), String> {
                 expires_at: now_unix()? + expires_in,
             };
             write_session(&session)?;
-            println!("CLI authorized. Launch shellfleet to open the operator cockpit.");
+            println!("CLI authorized. Launch the ShellFleet fleet cockpit.");
             return Ok(());
         }
         match response.error.as_deref() {
