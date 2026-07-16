@@ -156,7 +156,9 @@ impl App {
     }
 
     pub fn set_data_state(&mut self, state: LinkState) {
-        self.data_state = state;
+        if !(self.data_state == LinkState::Live && state == LinkState::Connecting) {
+            self.data_state = state;
+        }
     }
 
     pub fn set_event_state(&mut self, state: LinkState) {
@@ -208,10 +210,14 @@ impl App {
         if self.signer.is_none() {
             return Err("approver key is locked; unlock it before a privileged action".into());
         }
-        let agent = self
-            .selected_agent()
-            .ok_or("no online agent selected")?
-            .to_owned();
+        let host = self.selected_host().ok_or("no host selected")?;
+        if host.status != ConnectionStatus::Online {
+            return Err(format!(
+                "{} is offline; privileged action blocked",
+                host.hostname
+            ));
+        }
+        let agent = host.agent_id.clone();
         let mut random = [0u8; 16];
         rand::rngs::OsRng.fill_bytes(&mut random);
         let request_id = format!("tui-{}", hex(&random));
@@ -468,6 +474,33 @@ mod tests {
         app.set_data_state(LinkState::Live);
         app.set_websocket_state(LinkState::Degraded);
         assert_eq!(app.connection_label(), "READ ONLY");
+    }
+
+    #[test]
+    fn background_refresh_does_not_downgrade_last_good_data() {
+        let mut app = App::new(PathBuf::from("/nonexistent/pins"));
+        app.set_data_state(LinkState::Live);
+        app.set_data_state(LinkState::Connecting);
+        assert_eq!(app.data_state, LinkState::Live);
+    }
+
+    #[test]
+    fn privileged_action_rejects_an_offline_target() {
+        let signer = SigningKey::from_bytes(&[9; 32]);
+        let mut app = App::new(PathBuf::from("/nonexistent/pins"));
+        app.unlock_approver(signer);
+        let mut response = fleet(&[("host-a", "host-a")]);
+        response.hosts[0].status = ConnectionStatus::Offline;
+        app.replace_fleet(response);
+        let error = app
+            .begin(TrustedOperation::RootPty {
+                shell: "/bin/bash".into(),
+                ttl_secs: 60,
+                cols: 80,
+                rows: 24,
+            })
+            .unwrap_err();
+        assert!(error.contains("offline"));
     }
 
     #[test]
