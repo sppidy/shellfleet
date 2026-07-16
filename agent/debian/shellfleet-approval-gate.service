@@ -13,6 +13,10 @@ Restart=on-failure
 RestartSec=2s
 RuntimeDirectory=shellfleet
 RuntimeDirectoryMode=0750
+# The Docker proxy socket shares this runtime directory. Package upgrades
+# restart the broker, so preserve the directory across that restart instead
+# of silently unlinking the independently managed proxy socket.
+RuntimeDirectoryPreserve=restart
 StateDirectory=shellfleet-gate
 StateDirectoryMode=0700
 UMask=0007
