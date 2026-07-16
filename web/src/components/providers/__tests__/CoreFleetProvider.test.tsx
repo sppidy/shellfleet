@@ -162,6 +162,37 @@ describe('CoreFleetProvider', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it('throttles fleet events that arrive throughout one collection window', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(fleetResponse([host('node-a-id')]));
+    vi.stubGlobal('fetch', fetchMock);
+    render(
+      <CoreFleetProvider>
+        <Probe />
+      </CoreFleetProvider>,
+    );
+
+    expect(await screen.findByText('node-a-id:offline')).toBeInTheDocument();
+    vi.useFakeTimers();
+    act(() => MockEventSource.current?.emitFleet());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    for (let index = 0; index < 4; index += 1) {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2_000);
+        MockEventSource.current?.emitFleet();
+      });
+    }
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
   it('closes the stream and clears fleet state when the session ends', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(fleetResponse([host('node-a-id')])));
     const view = render(
