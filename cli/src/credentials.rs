@@ -15,9 +15,18 @@ const SESSION_VERSION: u32 = 1;
 #[derive(Debug, Serialize, Deserialize)]
 struct StoredSession {
     version: u32,
+    #[serde(default)]
+    dashboard_url: Option<String>,
     ws_url: String,
     access_token: String,
     expires_at: i64,
+}
+
+#[derive(Clone, Debug)]
+pub struct Connection {
+    pub dashboard_url: String,
+    pub ws_url: String,
+    pub access_token: String,
 }
 
 #[derive(Deserialize)]
@@ -62,6 +71,21 @@ fn base_url(arg: Option<&String>) -> Result<String, String> {
         return Err("ShellFleet URL must be an absolute http(s) URL".into());
     }
     Ok(raw.trim_end_matches('/').to_string())
+}
+
+fn dashboard_url_from_ws(raw: &str) -> Result<String, String> {
+    let mut url = reqwest::Url::parse(raw).map_err(|_| "invalid ShellFleet WebSocket URL")?;
+    let scheme = match url.scheme() {
+        "wss" => "https",
+        "ws" => "http",
+        _ => return Err("ShellFleet WebSocket URL must use ws or wss".into()),
+    };
+    url.set_scheme(scheme)
+        .map_err(|_| "invalid ShellFleet WebSocket scheme")?;
+    url.set_path("");
+    url.set_query(None);
+    url.set_fragment(None);
+    Ok(url.as_str().trim_end_matches('/').to_string())
 }
 
 fn write_session(session: &StoredSession) -> Result<(), String> {
@@ -154,6 +178,7 @@ pub async fn login(arg: Option<&String>) -> Result<(), String> {
                 .ok_or("CLI token response missing expiry")?;
             let session = StoredSession {
                 version: SESSION_VERSION,
+                dashboard_url: Some(base.clone()),
                 ws_url: request.ws_url,
                 access_token: token,
                 expires_at: now_unix()? + expires_in,
@@ -192,15 +217,48 @@ pub fn logout() -> Result<(), String> {
     }
 }
 
-pub fn connection() -> Result<(String, String), String> {
+pub fn connection() -> Result<Connection, String> {
     let env_ws = std::env::var("SHELLFLEET_WS_URL").ok();
     let env_token = std::env::var("SHELLFLEET_AUTH_TOKEN").ok();
-    if let (Some(ws_url), Some(token)) = (&env_ws, &env_token) {
-        return Ok((ws_url.clone(), token.clone()));
+    let env_dashboard = std::env::var("SHELLFLEET_URL")
+        .ok()
+        .map(|value| value.trim_end_matches('/').to_string());
+    if let (Some(ws_url), Some(access_token)) = (&env_ws, &env_token) {
+        let dashboard_url = env_dashboard
+            .map(Ok)
+            .unwrap_or_else(|| dashboard_url_from_ws(ws_url))?;
+        return Ok(Connection {
+            dashboard_url,
+            ws_url: ws_url.clone(),
+            access_token: access_token.clone(),
+        });
     }
     let session = read_session()?;
-    Ok((
-        env_ws.unwrap_or(session.ws_url),
-        env_token.unwrap_or(session.access_token),
-    ))
+    let ws_url = env_ws.unwrap_or(session.ws_url);
+    let dashboard_url = env_dashboard
+        .or(session.dashboard_url)
+        .map(Ok)
+        .unwrap_or_else(|| dashboard_url_from_ws(&ws_url))?;
+    Ok(Connection {
+        dashboard_url,
+        ws_url,
+        access_token: env_token.unwrap_or(session.access_token),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::dashboard_url_from_ws;
+
+    #[test]
+    fn derives_dashboard_origin_from_operator_websocket() {
+        assert_eq!(
+            dashboard_url_from_ws("wss://fleet.example/ui/ws").unwrap(),
+            "https://fleet.example"
+        );
+        assert_eq!(
+            dashboard_url_from_ws("ws://127.0.0.1:8080/ui/ws").unwrap(),
+            "http://127.0.0.1:8080"
+        );
+    }
 }

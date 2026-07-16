@@ -65,8 +65,8 @@ async fn run() -> Result<(), String> {
     let signer = identity::load(&key_path, &key_passphrase("Approver key passphrase: ")?)?;
     let home = std::env::var("HOME").map_err(|_| "HOME is not set")?;
     let pins = PathBuf::from(home).join(".config/shellfleet/host-pins.json");
-    let (url, token) = credentials::connection()?;
-    let (outgoing, mut incoming) = client::connect(&url, &token).await?;
+    let connection = credentials::connection()?;
+    let (outgoing, mut incoming) = client::connect(connection);
     let mut app = App::new(signer, pins);
     let _ = outgoing.send(UiMessage::ListAgentsRequest);
 
@@ -86,11 +86,30 @@ async fn cockpit(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     app: &mut App,
     outgoing: &tokio::sync::mpsc::UnboundedSender<UiMessage>,
-    incoming: &mut tokio::sync::mpsc::UnboundedReceiver<UiMessage>,
+    incoming: &mut tokio::sync::mpsc::UnboundedReceiver<client::ClientEvent>,
 ) -> Result<(), String> {
     loop {
         while let Ok(message) = incoming.try_recv() {
-            handle_server(app, message)?;
+            match message {
+                client::ClientEvent::Fleet(fleet) => {
+                    app.agents = fleet.hosts.into_iter().map(|host| host.agent_id).collect();
+                    app.agents.sort();
+                }
+                client::ClientEvent::WebSocket(message) => handle_server(app, *message)?,
+                client::ClientEvent::DataState(state)
+                | client::ClientEvent::EventState(state)
+                | client::ClientEvent::WebSocketState(state) => {
+                    if let client::TransportState::Degraded(reason) = state {
+                        app.status = reason;
+                    }
+                }
+                client::ClientEvent::Core(event) => {
+                    app.status = match event.agent_id {
+                        Some(agent) => format!("Fleet event on {agent}"),
+                        None => "Fleet refresh requested".into(),
+                    };
+                }
+            }
         }
         terminal
             .draw(|frame| ui::draw(frame, app))
