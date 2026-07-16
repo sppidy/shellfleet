@@ -22,7 +22,6 @@ export const metadata: Metadata = {
 
 import { WebSocketProvider } from "@/components/providers/WebSocketProvider";
 import { SessionProvider } from "@/components/providers/SessionProvider";
-import { FleetSnapshotsProvider } from "@/components/providers/FleetSnapshotsProvider";
 import { CoreFleetProvider } from "@/components/providers/CoreFleetProvider";
 import { UiProvider } from "@/components/providers/UiProvider";
 import ViewerBanner from "@/components/ViewerBanner";
@@ -46,7 +45,7 @@ export default function RootLayout({
             <CoreFleetProvider>
               <ViewerBanner />
               <WebSocketProvider>
-                <FleetSnapshotsProvider>{children}</FleetSnapshotsProvider>
+                {children}
               </WebSocketProvider>
             </CoreFleetProvider>
           </SessionProvider>

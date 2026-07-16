@@ -29,6 +29,7 @@ type CoreFleetContextValue = {
 };
 
 const CoreFleetContext = createContext<CoreFleetContextValue | null>(null);
+const SSE_REFRESH_DELAY_MS = 1_000;
 
 function errorMessage(error: unknown): string {
   if (error instanceof FleetApiError) return error.code;
@@ -46,6 +47,7 @@ export function CoreFleetProvider({ children }: { children: React.ReactNode }) {
   const trailingRefreshRef = useRef(false);
   const abortRef = useRef<AbortController | null>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
+  const eventRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const generationRef = useRef(0);
 
   const load = useCallback(function loadFleet() {
@@ -90,8 +92,12 @@ export function CoreFleetProvider({ children }: { children: React.ReactNode }) {
     if (status !== 'authed') {
       abortRef.current?.abort();
       eventSourceRef.current?.close();
+      if (eventRefreshTimerRef.current !== null) {
+        clearTimeout(eventRefreshTimerRef.current);
+      }
       abortRef.current = null;
       eventSourceRef.current = null;
+      eventRefreshTimerRef.current = null;
       inFlightRef.current = null;
       trailingRefreshRef.current = false;
       setHosts([]);
@@ -112,15 +118,26 @@ export function CoreFleetProvider({ children }: { children: React.ReactNode }) {
       if (generation === generationRef.current) setLiveStatus('degraded');
     };
     eventSource.addEventListener('fleet', () => {
-      if (generation === generationRef.current) load();
+      if (generation !== generationRef.current) return;
+      if (eventRefreshTimerRef.current !== null) {
+        clearTimeout(eventRefreshTimerRef.current);
+      }
+      eventRefreshTimerRef.current = setTimeout(() => {
+        eventRefreshTimerRef.current = null;
+        if (generation === generationRef.current) load();
+      }, SSE_REFRESH_DELAY_MS);
     });
 
     return () => {
       generationRef.current += 1;
       abortRef.current?.abort();
       eventSourceRef.current?.close();
+      if (eventRefreshTimerRef.current !== null) {
+        clearTimeout(eventRefreshTimerRef.current);
+      }
       abortRef.current = null;
       eventSourceRef.current = null;
+      eventRefreshTimerRef.current = null;
       inFlightRef.current = null;
       trailingRefreshRef.current = false;
     };

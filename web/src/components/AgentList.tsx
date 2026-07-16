@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useWebSocket } from './providers/WebSocketProvider';
-import { useFleetSnapshots } from './providers/FleetSnapshotsProvider';
+import { useCoreFleet } from './providers/CoreFleetProvider';
 import { apiFetch } from '@/lib/api';
 
 interface TokenInfo {
@@ -18,7 +18,7 @@ export default function AgentList({
   onSelectAgent: (agentId: string) => void;
 }) {
   const { agents } = useWebSocket();
-  const { snapshots } = useFleetSnapshots();
+  const { snapshots } = useCoreFleet();
   const [knownHosts, setKnownHosts] = useState<TokenInfo[]>([]);
 
   useEffect(() => {

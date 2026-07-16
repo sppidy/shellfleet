@@ -90,6 +90,7 @@ describe('CoreFleetProvider', () => {
 
   afterEach(() => {
     cleanup();
+    vi.useRealTimers();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
@@ -122,9 +123,42 @@ describe('CoreFleetProvider', () => {
     );
 
     expect(await screen.findByText('node-a-id:offline')).toBeInTheDocument();
+    vi.useFakeTimers();
     act(() => MockEventSource.current?.emitFleet());
+    expect(fetchMock).toHaveBeenCalledOnce();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
 
-    expect(await screen.findByText('node-a-id:online')).toBeInTheDocument();
+    expect(screen.getByText('node-a-id:online')).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('coalesces a burst of fleet events into one durable-state refresh', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(fleetResponse([host('node-a-id')]));
+    vi.stubGlobal('fetch', fetchMock);
+    render(
+      <CoreFleetProvider>
+        <Probe />
+      </CoreFleetProvider>,
+    );
+
+    expect(await screen.findByText('node-a-id:offline')).toBeInTheDocument();
+    vi.useFakeTimers();
+    act(() => {
+      for (let index = 0; index < 20; index += 1) {
+        MockEventSource.current?.emitFleet();
+      }
+    });
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(999);
+    });
+    expect(fetchMock).toHaveBeenCalledOnce();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 

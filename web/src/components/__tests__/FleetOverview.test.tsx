@@ -101,10 +101,6 @@ vi.mock('../providers/WebSocketProvider', () => ({
   useWebSocket: () => ({ agents: [] }),
 }));
 
-vi.mock('../providers/FleetSnapshotsProvider', () => ({
-  useFleetSnapshots: () => ({ snapshots: {}, refresh }),
-}));
-
 describe('FleetOverview', () => {
   beforeEach(() => {
     vi.stubGlobal(
