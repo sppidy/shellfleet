@@ -435,6 +435,9 @@ function HostRow({
     ) : swarmRole === 'worker' ? (
       <span className="chip role-wrk">WRK</span>
     ) : null;
+  const workloadCapabilities = host.capabilities.filter((capability) =>
+    ['docker', 'swarm', 'k8s'].includes(capability),
+  );
 
   const probeState = health
     ? health.red === 0 && health.unknown === 0
@@ -467,7 +470,15 @@ function HostRow({
         )}
       </td>
       <td className="mono">
-        {snapshot.hostname} {roleChip}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+          <span>{snapshot.hostname}</span>
+          {roleChip}
+          {workloadCapabilities.map((capability) => (
+            <span key={capability} className="chip">
+              {capability.toUpperCase()}
+            </span>
+          ))}
+        </div>
         {newestSnapshotAt !== null && (
           <div className="muted" style={{ fontSize: 9, marginTop: 3 }}>
             data {formatRelativeTime(newestSnapshotAt, nowSeconds)}

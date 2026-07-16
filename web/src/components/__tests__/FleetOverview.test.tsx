@@ -130,6 +130,8 @@ describe('FleetOverview', () => {
     expect(screen.getByText('swarm-master')).toBeInTheDocument();
     expect(screen.getByText('swarm-worker-1')).toBeInTheDocument();
     expect(screen.getByText('offline')).toBeInTheDocument();
+    expect(screen.getAllByText('DOCKER')).toHaveLength(2);
+    expect(screen.getAllByText('SWARM')).toHaveLength(2);
     expect(screen.getByText(/live updates disconnected/i)).toBeInTheDocument();
   });
 });

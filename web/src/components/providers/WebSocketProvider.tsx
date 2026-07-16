@@ -1,9 +1,19 @@
 'use client';
 
-import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { AgentMessagePayload, UiMessage } from '@/lib/types';
+import { effectiveAgentDirectory } from '@/lib/agentDirectory';
 import { reconnectDelay } from '@/lib/backoff';
 import { useSession } from './SessionProvider';
+import { useCoreFleet } from './CoreFleetProvider';
 import { useUi } from './UiProvider';
 
 type AgentMessageHandler = (msg: AgentMessagePayload) => void;
@@ -48,6 +58,7 @@ const WS_URL = resolveWsUrl();
 
 export function WebSocketProvider({ children }: { children: React.ReactNode }) {
   const { status } = useSession();
+  const { hosts } = useCoreFleet();
   const { toast } = useUi();
   // Keep toast in a ref so the WS effect doesn't tear down and reconnect
   // every time React rebinds the callback identity.
@@ -55,8 +66,8 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     toastRef.current = toast;
   }, [toast]);
-  const [agents, setAgents] = useState<string[]>([]);
-  const [agentCapabilities, setAgentCapabilities] = useState<Record<string, string[]>>({});
+  const [socketAgents, setSocketAgents] = useState<string[]>([]);
+  const [socketCapabilities, setSocketCapabilities] = useState<Record<string, string[]>>({});
   const [isConnected, setIsConnected] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -106,8 +117,8 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
     // produces a reconnect storm in the console + audit log.
     if (status !== 'authed') {
       setIsConnected(false);
-      setAgents([]);
-      setAgentCapabilities({});
+      setSocketAgents([]);
+      setSocketCapabilities({});
       return;
     }
     stoppedRef.current = false;
@@ -124,8 +135,8 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
 
       ws.onclose = () => {
         setIsConnected(false);
-        setAgents([]);
-        setAgentCapabilities({});
+        setSocketAgents([]);
+        setSocketCapabilities({});
         if (stoppedRef.current) return;
         // Exponential backoff capped at 15s. The provider auto-reconnects so
         // momentary network blips don't leave the dashboard stuck.
@@ -147,8 +158,8 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
         try {
           const msg = JSON.parse(event.data) as UiMessage;
           if (msg.type === 'ListAgentsResponse') {
-            setAgents(msg.payload.agents);
-            setAgentCapabilities(msg.payload.capabilities ?? {});
+            setSocketAgents(msg.payload.agents);
+            setSocketCapabilities(msg.payload.capabilities ?? {});
           } else if (msg.type === 'AgentMessage') {
             dispatch(msg.payload.agent_id, msg.payload.message);
           } else if (msg.type === 'PermissionDenied') {
@@ -192,9 +203,21 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
     [sendMessage],
   );
 
+  const directory = useMemo(
+    () => effectiveAgentDirectory(hosts, socketAgents, socketCapabilities),
+    [hosts, socketAgents, socketCapabilities],
+  );
+
   return (
     <WebSocketContext.Provider
-      value={{ agents, agentCapabilities, isConnected, sendMessage, sendToAgent, onAgentMessage }}
+      value={{
+        agents: directory.agents,
+        agentCapabilities: directory.capabilities,
+        isConnected,
+        sendMessage,
+        sendToAgent,
+        onAgentMessage,
+      }}
     >
       {children}
     </WebSocketContext.Provider>
