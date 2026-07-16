@@ -441,9 +441,7 @@ async fn callback_handler(
         .get(oauth_state_cookie_name())
         .map(|c| c.value().to_string());
     match &cookie_state {
-        Some(s)
-            if subtle::ConstantTimeEq::ct_eq(s.as_bytes(), query.state.as_bytes()).into() =>
-        {
+        Some(s) if subtle::ConstantTimeEq::ct_eq(s.as_bytes(), query.state.as_bytes()).into() => {
             /* ok */
         }
         _ => {
@@ -570,9 +568,7 @@ async fn callback_handler(
     let user_count = crate::db::count_users(&state.db).await.unwrap_or(0);
 
     // Check for a pending invite — overrides the default role assignment
-    let invite_code = jar
-        .get(invite_cookie_name())
-        .map(|c| c.value().to_string());
+    let invite_code = jar.get(invite_cookie_name()).map(|c| c.value().to_string());
     let invite_role = if let Some(ref code) = invite_code {
         match crate::db::get_invite(&state.db, code).await {
             Ok(Some(inv)) if inv.used_by.is_none() && now <= inv.expires_at => {
@@ -818,6 +814,43 @@ pub async fn current_user(
         Ok(None) => return Err((StatusCode::UNAUTHORIZED, "Unauthorized")),
         Err(error) => {
             tracing::error!(%error, login = %claims.sub, "session verification failed");
+            return Err((
+                StatusCode::SERVICE_UNAVAILABLE,
+                "session verification unavailable",
+            ));
+        }
+    }
+    Ok(claims)
+}
+
+/// Resolve a purpose-bound native CLI session from a Bearer token.
+///
+/// CLI sessions intentionally cannot become browser sessions, but the durable
+/// fleet read plane and operator WebSocket need the same revocation behavior.
+/// Re-resolving the user row makes logout, role changes, and account removal
+/// take effect without waiting for the short-lived token to expire.
+pub async fn current_cli_user(
+    token: &str,
+    db: &sqlx::SqlitePool,
+) -> Result<Claims, (StatusCode, &'static str)> {
+    let mut claims = claims_from_token(token).ok_or((StatusCode::UNAUTHORIZED, "Unauthorized"))?;
+    if !claims.mfa {
+        return Err((StatusCode::FORBIDDEN, "MFA required"));
+    }
+    if !claims.cli {
+        return Err((StatusCode::FORBIDDEN, "not a CLI session"));
+    }
+    match crate::db::get_user(db, &claims.sub).await {
+        Ok(Some(row)) if claims.iat >= row.session_epoch => claims.role = row.role,
+        Ok(Some(_)) => {
+            return Err((
+                StatusCode::UNAUTHORIZED,
+                "session revoked — please sign in again",
+            ));
+        }
+        Ok(None) => return Err((StatusCode::UNAUTHORIZED, "Unauthorized")),
+        Err(error) => {
+            tracing::error!(%error, login = %claims.sub, "CLI session verification failed");
             return Err((
                 StatusCode::SERVICE_UNAVAILABLE,
                 "session verification unavailable",

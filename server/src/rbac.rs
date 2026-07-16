@@ -33,6 +33,10 @@ fn is_mutating(method: &Method) -> bool {
     )
 }
 
+fn is_cli_read(method: &Method, path: &str) -> bool {
+    *method == Method::GET && matches!(path, "/core/v1/fleet" | "/core/v1/events")
+}
+
 fn forbidden(reason: &'static str) -> Response<Body> {
     Response::builder()
         .status(StatusCode::FORBIDDEN)
@@ -59,6 +63,28 @@ pub async fn middleware(
 
     let path = req.uri().path().to_string();
     let method = req.method().clone();
+
+    if let Some(token) = req
+        .headers()
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && !value.starts_with("sf_live_"))
+        && auth::claims_from_token(token).is_some_and(|claims| claims.cli)
+    {
+        if !is_cli_read(&method, &path) {
+            return forbidden("CLI session is not valid for this API route");
+        }
+        return match auth::current_cli_user(token, &state.db).await {
+            Ok(_) => next.run(req).await,
+            Err((StatusCode::FORBIDDEN, reason)) => forbidden(reason),
+            Err((status, reason)) => Response::builder()
+                .status(status)
+                .body(Body::from(reason))
+                .unwrap(),
+        };
+    }
 
     // A CLI device token is purpose-bound to `/ui/ws`. Reject it even if a
     // local user manually places it in the browser session-cookie slot; this
@@ -125,7 +151,8 @@ pub async fn middleware(
 
 #[cfg(test)]
 mod tests {
-    use super::is_api_keys_path;
+    use super::{is_api_keys_path, is_cli_read};
+    use axum::http::Method;
 
     #[test]
     fn matches_keys_routes_segment_bounded() {
@@ -134,5 +161,14 @@ mod tests {
         assert!(!is_api_keys_path("/ee/keys-extra"));
         assert!(!is_api_keys_path("/ee/keysX"));
         assert!(!is_api_keys_path("/ee/metrics/panels"));
+    }
+
+    #[test]
+    fn cli_http_scope_is_read_only_and_segment_bounded() {
+        assert!(is_cli_read(&Method::GET, "/core/v1/fleet"));
+        assert!(is_cli_read(&Method::GET, "/core/v1/events"));
+        assert!(!is_cli_read(&Method::POST, "/core/v1/fleet"));
+        assert!(!is_cli_read(&Method::GET, "/core/v1/fleet/export"));
+        assert!(!is_cli_read(&Method::GET, "/me"));
     }
 }

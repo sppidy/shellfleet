@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+pub mod fleet;
 pub mod internal_auth;
 mod security;
 pub mod trusted;
