@@ -99,7 +99,7 @@ jobs:
             > tests/journey/logs/compose.log 2>&1 || true
       - name: Upload journey diagnostics
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: durable-fleet-journey
           if-no-files-found: warn
