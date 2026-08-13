@@ -147,7 +147,7 @@ path validation, argument validation, protocol limits, or transport security.
 
 ## Implementation self-review results
 
-The implementation review found and resolved four concrete defects beyond the
+The implementation review found and resolved five concrete defects beyond the
 initial design:
 
 1. **Wrong expiry filename:** the first mode-transition helper normalized
@@ -165,6 +165,12 @@ initial design:
    restrictive drop-in is removed. A crash between those steps therefore
    leaves the safer restricted runtime, while the recorded operator choice can
    be reconciled on the next invocation.
+5. **AppArmor attachment semantics:** the first restricted profile retained an
+   executable attachment, which made AppArmor apply it automatically even when
+   managed mode omitted the systemd profile directive. A real package canary
+   caught the resulting root credential denial. The profile is now named-only
+   and entered exclusively by the restricted-mode drop-in, with a package
+   boundary assertion preventing accidental auto-attachment.
 
 Completed verification evidence:
 

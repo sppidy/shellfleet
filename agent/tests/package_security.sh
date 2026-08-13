@@ -60,6 +60,13 @@ grep -q 'systemctl try-restart shellfleet-approval-gate.service' "$postinst"
 test -f "$root/agent/debian/apparmor/shellfleet-agent"
 test -f "$root/agent/debian/apparmor/shellfleet-approval-gate"
 test -f "$root/agent/debian/apparmor/shellfleet-docker-proxy"
+grep -Fqx -- 'profile shellfleet-agent flags=(attach_disconnected,mediate_deleted) {' \
+    "$root/agent/debian/apparmor/shellfleet-agent"
+if grep -Eq '^profile shellfleet-agent[[:space:]]+/usr/bin/shellfleet-agent' \
+    "$root/agent/debian/apparmor/shellfleet-agent"; then
+    echo 'restricted AppArmor profile unexpectedly auto-attaches in managed mode' >&2
+    exit 1
+fi
 grep -q 'deny /run/docker.sock' "$root/agent/debian/apparmor/shellfleet-agent"
 grep -q '/run/shellfleet/docker.sock rw,' "$root/agent/debian/apparmor/shellfleet-agent"
 grep -Fqx -- '  /usr/lib/docker/cli-plugins/ r,' "$root/agent/debian/apparmor/shellfleet-agent"
