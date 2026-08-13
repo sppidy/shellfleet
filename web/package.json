@@ -20,7 +20,7 @@
     "next": "^16.2.6",
     "qrcode.react": "^4.2.0",
     "react": "^19.2.7",
-    "react-dom": "^19.2.7"
+    "react-dom": "^19.2.8"
   },
   "overrides": {
     "dompurify": "^3.4.11",
