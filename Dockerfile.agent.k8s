@@ -3,7 +3,7 @@
 # the binary advertises the `"k8s"` capability and handles the
 # K8sList* / K8sDescribe / K8sLogs* / K8sExec* variants.
 
-FROM rust:1-bookworm AS builder
+FROM docker.io/library/rust:1-bookworm AS builder
 
 WORKDIR /src
 COPY Cargo.toml Cargo.lock /src/
@@ -16,7 +16,7 @@ RUN cargo build --locked --release -p agent --features kube
 RUN strip /src/target/release/shellfleet-agent
 
 # ─────────────────────────────────────────────────────────────────
-FROM debian:bookworm-slim AS runtime
+FROM docker.io/library/debian:bookworm-slim AS runtime
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends ca-certificates && \

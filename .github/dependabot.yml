@@ -8,6 +8,10 @@ updates:
       - dependency-name: time
         versions:
           - "0.3.52"
+  - package-ecosystem: npm
+    directory: /web
+    schedule:
+      interval: weekly
   - package-ecosystem: github-actions
     directory: /
     schedule:

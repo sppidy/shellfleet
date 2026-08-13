@@ -9,10 +9,11 @@ boundary.
 ## Build
 
 ```bash
-cargo build --release
+cargo build --release -p shellfleet-cli
 ```
 
-The binary is `target/release/shellfleet`.
+Run that command from the monorepo root. The binary is
+`target/release/shellfleet`.
 
 ## Sign in
 

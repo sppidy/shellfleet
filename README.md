@@ -121,8 +121,8 @@ connected"):
 ```bash
 docker compose up --build server web    # full stack
 cd web && npm install && npm run dev     # web dev server → http://localhost:3000
-cd agent && cargo build --release        # build the agent (Linux only)
-cargo build --release --manifest-path cli/Cargo.toml  # build the operator CLI
+cargo build --release -p agent           # build the agent (Linux only)
+cargo build --release -p shellfleet-cli  # build the operator CLI
 ```
 
 The optional `agent:` stanza in `docker-compose.yml` uses the restricted,

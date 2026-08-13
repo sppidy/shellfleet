@@ -20,8 +20,12 @@ jobs:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: clippy
+          components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
+      - name: Monorepo invariants
+        run: sh scripts/check-monorepo.sh
+      - name: Format (workspace)
+        run: cargo fmt --all -- --check
       - name: Package scripts and runtime boundary
         run: |
           shellcheck \
@@ -51,7 +55,7 @@ jobs:
         working-directory: web
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -67,7 +71,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -114,6 +118,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: azure/setup-helm@v4
+      - uses: azure/setup-helm@v5
       - name: Lint and render matrix
         run: bash helm/shellfleet-agent/tests/render_test.sh
