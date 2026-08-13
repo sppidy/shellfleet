@@ -277,7 +277,7 @@ credentials are sensitive state as well as recovery state.
 
 ## Implementation self-review results
 
-The final diff review found and resolved seven issues that were not explicit in
+The final diff review found and resolved eight issues that were not explicit in
 the first draft:
 
 1. **Transport-triggered rotation:** the inherited reconnect path attempted a
@@ -308,6 +308,11 @@ the first draft:
    releases, so only `package-lock.json` changed. `npm audit` now reports zero
    vulnerabilities, and lint, typecheck, 67 tests, and the production build all
    pass on the refreshed graph.
+8. **Explicit re-pair portability:** managed-mode refreshes can leave
+   credentials root-owned, while the pairing helper intentionally runs as the
+   unprivileged service account. Explicit pairing now skips reading the stale
+   access token before device authorization, so unreadable or revoked state
+   cannot block the documented recovery path.
 
 Additional executable evidence from the completed implementation:
 

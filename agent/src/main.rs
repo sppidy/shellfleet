@@ -74,6 +74,9 @@ mod tests {
             pairing_mode(&["--pair-if-needed".into()]),
             PairingMode::IfNeeded
         );
+        assert!(!should_read_stored_credentials(PairingMode::Always));
+        assert!(should_read_stored_credentials(PairingMode::IfNeeded));
+        assert!(should_read_stored_credentials(PairingMode::RequireExisting));
     }
 
     #[test]
@@ -500,6 +503,10 @@ fn pairing_mode(args: &[String]) -> PairingMode {
     }
 }
 
+fn should_read_stored_credentials(mode: PairingMode) -> bool {
+    mode != PairingMode::Always
+}
+
 fn should_pair_after_rejection(
     mode: PairingMode,
     status: Option<tokio_tungstenite::tungstenite::http::StatusCode>,
@@ -537,12 +544,20 @@ async fn main() {
     println!("agent runtime mode: {}", runtime_mode.as_str());
 
     let credentials = credentials::CredentialStore::default();
-    let stored_token = match credentials.access_token() {
-        Ok(token) => token,
-        Err(error) => {
-            eprintln!("Failed to read agent credentials: {error}");
-            std::process::exit(1);
+    // Explicit pairing is the recovery path for unreadable or revoked state.
+    // Do not inspect the old access token first: managed-mode rotation can
+    // legitimately leave it root-owned while the pairing helper deliberately
+    // runs as the unprivileged service account.
+    let stored_token = if should_read_stored_credentials(pairing_mode) {
+        match credentials.access_token() {
+            Ok(token) => token,
+            Err(error) => {
+                eprintln!("Failed to read agent credentials: {error}");
+                std::process::exit(1);
+            }
         }
+    } else {
+        None
     };
 
     let api_url = std::env::var("SERVER_API_URL")
