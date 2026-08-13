@@ -1,31 +1,5 @@
 Package: shellfleet-agent-k8s
 Architecture: amd64
-Version: 1.1.0-ci202607111506.gf6f3647
-Priority: optional
-Section: admin
-Maintainer: sppidy <sppidytg@gmail.com>
-Installed-Size: 42693
-Provides: shellfleet-agent
-Depends: libc6 (>= 2.39), libssl3t64 (>= 3.0.0), systemd
-Conflicts: shellfleet-agent
-Replaces: shellfleet-agent
-Filename: pool/main/shellfleet-agent-k8s_1.1.0-ci202607111506.gf6f3647_amd64.deb
-Size: 8859884
-MD5sum: 3c5a39194914d61ecbc1d8a556b2e804
-SHA1: 1eca7e6d278d249703b7f7f768f55d35ba45d3ba
-SHA256: 8a0b795ee3f45e8e5663e3b52d34ad46f7a8ab8ea7b19f589ee2da8b6a1a0049
-SHA512: 6b6eb660103643d712cb6dd5cb2fc330792f88d5afe1d2224c421d0cd8b6c416c4d008728bca04d2c0e814a63603e030ee45c4806e50ff286ab6727d17b31da7
-Homepage: https://github.com/sppidy/shellfleet-agent
-Description: Agent for ShellFleet: connects a host to a ShellFleet server over WebSocket and
- exposes systemd service control, terminal, and config editing.
- Agent for ShellFleet — k8s flavor. Same as shellfleet-agent plus a
- compiled-in kube-rs client so the agent can talk to a kube-apiserver
- via in-cluster ServiceAccount or a kubeconfig at $KUBECONFIG. Install
- on hosts that should appear as Kubernetes targets in the dashboard;
- install plain shellfleet-agent everywhere else.
-
-Package: shellfleet-agent-k8s
-Architecture: amd64
 Version: 1.1.0-ci202607161621.g76b334e
 Priority: optional
 Section: admin
@@ -128,28 +102,31 @@ Description: Agent for ShellFleet: connects a host to a ShellFleet server over W
  on hosts that should appear as Kubernetes targets in the dashboard;
  install plain shellfleet-agent everywhere else.
 
-Package: shellfleet-agent
+Package: shellfleet-agent-k8s
 Architecture: amd64
-Version: 1.1.0-ci202607111506.gf6f3647
+Version: 1.2.0-ci202608130332.g9eea4ff
 Priority: optional
 Section: admin
 Maintainer: sppidy <sppidytg@gmail.com>
-Installed-Size: 33420
-Depends: libc6 (>= 2.39), libssl3t64 (>= 3.0.0), systemd
-Filename: pool/main/shellfleet-agent_1.1.0-ci202607111506.gf6f3647_amd64.deb
-Size: 7266356
-MD5sum: 733d1981593ce8a5183cda78f5402178
-SHA1: 6c2e42b36355c938c60f94ddcdb2af49cad7fb36
-SHA256: 3764092c5ada143db99b153abbe1fab1e05e14420e7332b07accaea618f073f9
-SHA512: e4792339f88c5cc2d4fb85b9a44c13b85968b1e12583bc6305380cc0687e8e3c10c58e766ad099db27a07b4363a2577ac7cd0241a0108d1be8720bcf75be4462
-Homepage: https://github.com/sppidy/shellfleet-agent
+Installed-Size: 43131
+Provides: shellfleet-agent
+Depends: ca-certificates, libc6 (>= 2.39), systemd
+Conflicts: shellfleet-agent
+Replaces: shellfleet-agent
+Filename: pool/main/shellfleet-agent-k8s_1.2.0-ci202608130332.g9eea4ff_amd64.deb
+Size: 8923356
+MD5sum: 9abcb8dd9670a8c92f94a5c10ae05590
+SHA1: 0fc09ff2c6bc8f65b158df5c8124d07869cbb118
+SHA256: 4eabe64d02a18cbdd7197fbc30ebc65de2fc17d0695c9c372ba281f026390b77
+SHA512: 22acee4ab9a42c354965f432718b19156c1327f74656e1be795122028544c39c24e31d19f8f29c480f662005dc45b4b0d34117f6cc6dcb368d22f0a5df8c670c
+Homepage: https://github.com/sppidy/shellfleet
 Description: Agent for ShellFleet: connects a host to a ShellFleet server over WebSocket and
  exposes systemd service control, terminal, and config editing.
- Agent for ShellFleet. Connects a Linux host to a ShellFleet server over a
- TLS WebSocket and exposes systemd service control, an interactive terminal,
- and remote read/write of configuration files. Pairing happens through the
- server's device-auth flow; the resulting token is cached at
- /etc/shellfleet/agent-token.txt.
+ Agent for ShellFleet — k8s flavor. Same as shellfleet-agent plus a
+ compiled-in kube-rs client so the agent can talk to a kube-apiserver
+ via in-cluster ServiceAccount or a kubeconfig at $KUBECONFIG. Install
+ on hosts that should appear as Kubernetes targets in the dashboard;
+ install plain shellfleet-agent everywhere else.
 
 Package: shellfleet-agent
 Architecture: amd64
@@ -242,6 +219,31 @@ Description: Agent for ShellFleet: connects a host to a ShellFleet server over W
  and remote read/write of configuration files. Pairing happens through the
  server's device-auth flow; the resulting token is cached at
  /var/lib/shellfleet-agent/agent-token.txt.
+
+Package: shellfleet-agent
+Architecture: amd64
+Version: 1.2.0-ci202608130332.g9eea4ff
+Priority: optional
+Section: admin
+Maintainer: sppidy <sppidytg@gmail.com>
+Installed-Size: 33928
+Depends: ca-certificates, libc6 (>= 2.39), systemd
+Filename: pool/main/shellfleet-agent_1.2.0-ci202608130332.g9eea4ff_amd64.deb
+Size: 7339224
+MD5sum: dd2632ddd646ef37b54b750d177b030e
+SHA1: 7a9352a7c04960b94154c1efd1151788d3059af4
+SHA256: 6f36417c2200ce06c080d39da4720d195dcfb9df4d0347b76ce4f35cf9d53bb6
+SHA512: e0407d5f8228d21415e59fab62e6e5a56ce9a1612a248524cebe9d29ec9a0bc3615401d0232054bd9fe9c4f1a2794ef55051a326e07e24e46ef89ee789b485fe
+Homepage: https://github.com/sppidy/shellfleet
+Description: Agent for ShellFleet: connects a host to a ShellFleet server over WebSocket and
+ exposes systemd service control, terminal, and config editing.
+ Agent for ShellFleet. Connects a Linux host to a ShellFleet server over a
+ TLS WebSocket and exposes systemd service control, an interactive terminal,
+ and remote read/write of configuration files. Pairing happens through the
+ server's device-auth flow; the resulting rotating credential set is cached
+ under /var/lib/shellfleet-agent/. Native installs and upgrades without a
+ recorded choice use root-equivalent managed mode so host controls work;
+ shellfleet-agent-mode can select the capability-free restricted posture.
 
 Package: sys-manager-agent-k8s
 Architecture: amd64
