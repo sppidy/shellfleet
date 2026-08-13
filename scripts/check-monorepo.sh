@@ -1,7 +1,12 @@
 #!/bin/sh
 set -eu
 
-repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+script_path=$0
+case $script_path in
+    /*) ;;
+    *) script_path=./$script_path ;;
+esac
+repo_root=$(CDPATH= cd -P "$(dirname "$script_path")/.." && pwd)
 cd "$repo_root"
 
 fail() {
