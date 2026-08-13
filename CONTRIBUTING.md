@@ -34,7 +34,7 @@ deployment walkthrough.
 
 Minimum tooling:
 
-- Rust stable (toolchain pinned in `rust-toolchain.toml` where present)
+- Rust stable
 - Node 22+ and npm (for `web/`)
 - Docker + Buildx (only if you're touching deployment)
 
@@ -72,8 +72,8 @@ form.
 
 ## Commit hygiene
 
-- **Sign every commit** (`-S`). Branch protection on `main` requires it
-  across all five repos. Set up signing once:
+- **Sign every commit** (`-S`). Branch protection on the monorepo's `main`
+  requires it. Set up signing once:
   `git config --global user.signingkey ...` and `commit.gpgsign true`.
   See GitHub's [signing-commits docs](https://docs.github.com/en/authentication/managing-commit-signature-verification).
 - **Conventional-style summaries** are appreciated but not strict:

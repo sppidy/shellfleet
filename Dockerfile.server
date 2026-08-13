@@ -1,12 +1,12 @@
 # Pinned to a specific Rust toolchain rather than `rust:latest` so a
 # silent upstream Rust release can't change the produced binary
 # behaviour mid-deploy. Bump deliberately when it's time.
-FROM rust:1.92-bookworm AS builder
+FROM docker.io/library/rust:1.92-bookworm AS builder
 WORKDIR /usr/src/app
 COPY . .
 RUN cargo build --release --locked -p server
 
-FROM debian:bookworm-slim
+FROM docker.io/library/debian:bookworm-slim
 WORKDIR /app
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates wget gosu \

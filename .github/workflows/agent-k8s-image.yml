@@ -11,9 +11,6 @@ on:
       - "shared/**"
       - "Dockerfile.agent.k8s"
       - "helm/**"
-      - "agent"
-      - "server"
-      - "shared"
       - ".github/workflows/agent-k8s-image.yml"
   workflow_dispatch:
   release:

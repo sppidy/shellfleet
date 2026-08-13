@@ -28,6 +28,3 @@ tests/journey/logs/
 Dockerfile.ee
 docker-compose.ee.yml
 ee/
-
-# Local docs
-docs/

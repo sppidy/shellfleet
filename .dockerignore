@@ -1,10 +1,9 @@
-# Build context exclusions for all three Dockerfiles
-# (Dockerfile.server, Dockerfile.web, Dockerfile.agent share the repo root context).
+# Build context exclusions for the root Dockerfiles. Every public image builds
+# from the monorepo root so local path dependencies resolve consistently.
 
 # VCS + tooling
 .git
 .gitignore
-.gitmodules
 .gitattributes
 .dockerignore
 .github
