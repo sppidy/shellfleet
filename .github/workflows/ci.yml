@@ -18,20 +18,30 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-        with:
-          submodules: recursive
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
+      - name: Package scripts and runtime boundary
+        run: |
+          shellcheck \
+            agent/debian/shellfleet-agent-mode \
+            agent/debian/shellfleet-agent-pair \
+            agent/debian/shellfleet-docker-proxy \
+            agent/debian/postinst \
+            agent/debian/postrm \
+            agent/debian/prerm \
+            agent/tests/package_security.sh \
+            helm/shellfleet-agent/tests/render_test.sh
+          sh agent/tests/package_security.sh
       - name: Clippy (workspace, deny warnings)
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Clippy (agent, kube feature)
-        run: cargo clippy -p agent --all-targets --features kube -- -D warnings
+        run: cargo clippy -p agent --all-targets --features kube --locked -- -D warnings
       - name: Test (workspace)
-        run: cargo test --workspace
+        run: cargo test --workspace --locked
       - name: Test (agent, kube feature)
-        run: cargo test -p agent --features kube
+        run: cargo test -p agent --features kube --locked
 
   web:
     name: web (lint + typecheck + test)
@@ -41,8 +51,6 @@ jobs:
         working-directory: web
     steps:
       - uses: actions/checkout@v6
-        with:
-          submodules: recursive
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -53,13 +61,59 @@ jobs:
       - run: npm run typecheck
       - run: npm test
 
+  journey:
+    name: journey (browser + server + agent)
+    needs: [rust, web]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Install web dependencies
+        working-directory: web
+        run: npm ci
+      - name: Install Chromium
+        working-directory: web
+        run: npx playwright install --with-deps chromium
+      - name: Build and start journey stack
+        run: docker compose -f tests/journey/docker-compose.yml up -d --build
+      - name: Run durable Fleet journey
+        working-directory: web
+        env:
+          SHELLFLEET_JOURNEY_KEEP_STACK: "1"
+        run: npm run test:journey
+      - name: Collect journey diagnostics
+        if: always()
+        run: |
+          mkdir -p tests/journey/logs
+          docker compose -f tests/journey/docker-compose.yml ps \
+            > tests/journey/logs/compose-ps.txt 2>&1 || true
+          docker compose -f tests/journey/docker-compose.yml logs --no-color \
+            > tests/journey/logs/compose.log 2>&1 || true
+      - name: Upload journey diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: durable-fleet-journey
+          if-no-files-found: warn
+          path: |
+            web/test-results/
+            web/playwright-report/
+            tests/journey/logs/
+      - name: Remove journey stack
+        if: always()
+        run: |
+          docker compose -f tests/journey/docker-compose.yml \
+            down -v --remove-orphans
+
   helm:
     name: helm (lint + template)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
       - uses: azure/setup-helm@v4
-      - name: Lint chart
-        run: helm lint helm/shellfleet-agent
-      - name: Template smoke test (defaults render)
-        run: helm template sf helm/shellfleet-agent > /dev/null
+      - name: Lint and render matrix
+        run: bash helm/shellfleet-agent/tests/render_test.sh

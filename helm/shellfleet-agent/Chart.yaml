@@ -6,8 +6,8 @@ description: |
   deployments, services, ingresses, PVCs, events, describe, logs, and
   pod exec, all read-mostly by default.
 type: application
-version: 0.1.0
-appVersion: 1.1.0
+version: 0.2.0
+appVersion: 1.2.0
 keywords:
   - shellfleet
   - kubernetes
@@ -16,7 +16,6 @@ keywords:
 home: https://github.com/sppidy/shellfleet
 sources:
   - https://github.com/sppidy/shellfleet
-  - https://github.com/sppidy/shellfleet-agent
 maintainers:
   - name: sppidy
     email: sppidytg@gmail.com

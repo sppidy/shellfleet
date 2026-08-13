@@ -6,46 +6,40 @@ A Pod is running in namespace `{{ .Release.Namespace }}`:
 
 {{- if not .Values.token.existingSecret }}
 
-⚡ First-run pairing
-The agent is waiting for a pairing code. Tail its logs and paste the
-code into your dashboard at /device:
+First-run pairing
+
+If this state volume has not been paired before, tail the agent logs and paste
+the displayed code into your dashboard at /device:
 
   kubectl -n {{ .Release.Namespace }} logs -f deploy/{{ include "shellfleet-agent.fullname" . }}
 
-The line you want looks like:
-
-  Visit https://your-dashboard.example.com/device
-  And enter the code: ABCD-EFGH
-
-After approval, the agent appears in the dashboard's Kubernetes tab
-on the agent named `{{ include "shellfleet-agent.fullname" . }}-id`.
-
-⚠ The pairing token is stored at /etc/shellfleet/agent-token.txt INSIDE
-the running container. A Pod restart wipes it. Once you've paired,
-copy the token into a Kubernetes Secret and re-install with
-`token.existingSecret` set so the binding survives restarts:
-
-  kubectl -n {{ .Release.Namespace }} exec deploy/{{ include "shellfleet-agent.fullname" . }} \
-    -- cat /etc/shellfleet/agent-token.txt > /tmp/agent-token.txt
-  kubectl -n {{ .Release.Namespace }} create secret generic {{ include "shellfleet-agent.fullname" . }}-token \
-    --from-file=agent-token.txt=/tmp/agent-token.txt
-  helm upgrade {{ .Release.Name }} shellfleet-agent \
-    --set token.existingSecret={{ include "shellfleet-agent.fullname" . }}-token
-
-Then wipe the temp copy so the bearer token isn't left on disk:
-
-  shred -u /tmp/agent-token.txt   # or `rm -P` / `rm -f` if shred is unavailable
-
 {{- else }}
 
-🔑 Token wired from existing Secret `{{ .Values.token.existingSecret }}`.
+Credential bootstrap
+
+Credentials from Secret `{{ .Values.token.existingSecret }}` are copied into
+the state volume only when it does not already contain agent-token.txt. Agent
+rotations on the state volume are never overwritten by the bootstrap Secret.
+After confirming the agent connected, clear token.existingSecret and remove the
+now-stale Secret according to your credential-retention policy.
 {{- end }}
 
-📊 RBAC posture: read{{ if .Values.rbac.exec }} + exec{{ end }}{{ if .Values.rbac.write }} + write{{ end }}
+{{- if .Values.persistence.enabled }}
+
+Durable state is mounted from PVC `{{ include "shellfleet-agent.stateClaimName" . }}`.
+{{- if and (not .Values.persistence.existingClaim) .Values.persistence.retain }}
+The chart-created PVC is retained on `helm uninstall`. Delete it explicitly
+only when you intend to destroy this agent's paired identity.
+{{- end }}
+{{- else }}
+
+WARNING: persistence is disabled. A Pod replacement loses rotated credentials
+and starts a new pairing flow unless token.existingSecret can bootstrap it.
+{{- end }}
+
+RBAC posture: read{{ if .Values.rbac.exec }} + exec{{ end }}{{ if .Values.rbac.write }} + write{{ end }}
 {{- if not .Values.rbac.exec }}
 
-ℹ Pod exec is disabled. Re-install with `--set rbac.exec=true` to enable
-the dashboard's "exec" button on pod rows.
+Pod exec is disabled. Upgrade with `--set rbac.exec=true` to enable the
+dashboard's exec action.
 {{- end }}
-
-See docs/KUBERNETES.md and docs/HELM.md for the full reference.

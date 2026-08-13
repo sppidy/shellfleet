@@ -1,0 +1,25 @@
+#!/bin/sh
+set -e
+
+CONF_DIR=/etc/shellfleet
+TOKEN_FILE="$CONF_DIR/agent-token.txt"
+AGENT_STATE_DIR=/var/lib/shellfleet-agent
+MODE_DROPIN_DIR=/etc/systemd/system/shellfleet-agent.service.d
+MODE_DROPIN="$MODE_DROPIN_DIR/20-runtime-mode.conf"
+
+case "$1" in
+    purge)
+        # On purge, remove the cached credential set. The operator-edited env
+        # file is also cleared so a future install starts fresh.
+        rm -f "$TOKEN_FILE" "$CONF_DIR/env" "$CONF_DIR/env.example" \
+            "$CONF_DIR/docker-proxy.env" "$CONF_DIR/agent-mode" "$MODE_DROPIN"
+        rm -rf -- "$AGENT_STATE_DIR"
+        rmdir "$MODE_DROPIN_DIR" 2>/dev/null || true
+        # Best-effort directory removal; ignore failure if non-empty.
+        rmdir "$CONF_DIR" 2>/dev/null || true
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0

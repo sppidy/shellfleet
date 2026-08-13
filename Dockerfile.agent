@@ -8,12 +8,17 @@ RUN cargo build --release --locked -p agent
 FROM debian:bookworm-slim
 WORKDIR /app
 # systemd + dbus drive host service control; bash backs portable-pty shells.
-RUN apt-get update && apt-get install -y --no-install-recommends systemd dbus bash && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends systemd dbus bash ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
 COPY --from=builder /usr/src/app/target/release/shellfleet-agent /app/agent
-# Run unprivileged by default. This image is primarily for local end-to-end
-# testing (see docker-compose.yml). Driving the *host's* systemd/dbus needs
-# root or explicit capabilities — override with `user: root` / add caps when
-# you mount the host bus socket.
-RUN useradd -r -u 10001 -s /usr/sbin/nologin shellfleet
+# This image is the restricted local end-to-end test target (see
+# docker-compose.yml). It explicitly selects the restricted runtime contract
+# and therefore refuses root and effective capabilities.
+RUN groupadd --system --gid 10001 shellfleet && \
+    useradd --system --uid 10001 --gid shellfleet --no-create-home \
+      --shell /usr/sbin/nologin shellfleet && \
+    install -d -m 0700 -o shellfleet -g shellfleet /var/lib/shellfleet-agent
+ENV SHELLFLEET_AGENT_MODE=restricted
 USER 10001
 CMD ["./agent"]

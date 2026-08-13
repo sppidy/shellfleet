@@ -25,12 +25,15 @@ RUN apt-get update && \
 COPY --from=builder /src/target/release/shellfleet-agent /usr/bin/shellfleet-agent
 
 # Run unprivileged: the k8s agent reaches the cluster API via its mounted
-# ServiceAccount token, never host privileges.
-RUN useradd -r -u 10001 -s /usr/sbin/nologin shellfleet
+# ServiceAccount token, never host privileges. Keep the image UID/GID in sync
+# with the Helm chart's default security context.
+RUN groupadd --system --gid 10001 shellfleet && \
+    useradd --system --uid 10001 --gid shellfleet --no-create-home \
+      --shell /usr/sbin/nologin shellfleet && \
+    install -d -m 0700 -o shellfleet -g shellfleet /var/lib/shellfleet-agent && \
+    install -d -m 0755 -o root -g root /etc/shellfleet/mtls
 
-# Token directory — owned by the agent user, mode 0700, so it can persist the
-# bearer token after pairing without touching root-owned paths.
-RUN install -d -m 0700 -o shellfleet -g shellfleet /etc/shellfleet
-
+ENV SHELLFLEET_AGENT_MODE=restricted
 USER 10001
-ENTRYPOINT ["/usr/bin/shellfleet-agent", "--pair"]
+ENTRYPOINT ["/usr/bin/shellfleet-agent"]
+CMD ["--pair-if-needed"]

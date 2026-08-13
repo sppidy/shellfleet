@@ -104,11 +104,13 @@ services:
       #   # server cert (CN/SAN = the host agents reach SERVER_WS_URL on)
       #   openssl genrsa -out server-key.pem 4096
       #   openssl req -new -key server-key.pem -subj "/CN=dashboard.example.com" -out server.csr
-      #   openssl x509 -req -in server.csr -CA agent-ca.pem -CAkey agent-ca.key -CAcreateserial -days 825 -out server.pem
+      #   printf '%s\n' 'subjectAltName=DNS:dashboard.example.com' 'extendedKeyUsage=serverAuth' > server.ext
+      #   openssl x509 -req -in server.csr -CA agent-ca.pem -CAkey agent-ca.key -CAcreateserial -days 825 -extfile server.ext -out server.pem
       #   # per-agent client cert (repeat per agent)
       #   openssl genrsa -out agent-01.key 2048
       #   openssl req -new -key agent-01.key -subj "/CN=agent-01" -out agent-01.csr
-      #   openssl x509 -req -in agent-01.csr -CA agent-ca.pem -CAkey agent-ca.key -CAcreateserial -days 825 -out agent-01.pem
+      #   printf '%s\n' 'extendedKeyUsage=clientAuth' > agent-01.ext
+      #   openssl x509 -req -in agent-01.csr -CA agent-ca.pem -CAkey agent-ca.key -CAcreateserial -days 825 -extfile agent-01.ext -out agent-01.pem
       # The agent gets AGENT_MTLS_CERT_PATH=agent-01.pem,
       # AGENT_MTLS_KEY_PATH=agent-01.key, SERVER_TLS_CA_PATH=agent-ca.pem.
       - SERVER_TLS_CERT_PATH=/etc/shellfleet/tls/server.pem

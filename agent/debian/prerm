@@ -1,0 +1,15 @@
+#!/bin/sh
+set -e
+
+# Docker access must stop when the agent package is removed. Keep the normal
+# upgrade path untouched so an explicitly enabled proxy survives upgrades.
+case "$1" in
+    remove|deconfigure)
+        systemctl disable --now shellfleet-docker-proxy.socket >/dev/null 2>&1 || true
+        rm -f /etc/shellfleet/docker-proxy.env
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0

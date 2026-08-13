@@ -46,3 +46,12 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- required "serviceAccount.name is required when serviceAccount.create=false; refusing to bind cluster privileges to the namespace default account" .Values.serviceAccount.name -}}
 {{- end -}}
 {{- end -}}
+
+{{/* Persistent state claim, either operator-supplied or chart-managed. */}}
+{{- define "shellfleet-agent.stateClaimName" -}}
+{{- if .Values.persistence.existingClaim -}}
+{{- .Values.persistence.existingClaim -}}
+{{- else -}}
+{{- printf "%s-state" (include "shellfleet-agent.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+{{- end -}}

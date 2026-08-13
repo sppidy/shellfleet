@@ -33,24 +33,62 @@ Signing key fingerprint: `9181 1FCB AB45 B996 B40E AD1E C6E2 9AC2
 The package installs:
 
 - `/usr/bin/shellfleet-agent` — the binary
-- `/lib/systemd/system/shellfleet-agent.service` — the unit
+- `/usr/lib/systemd/system/shellfleet-agent.service` — the primary unit
+- `/usr/sbin/shellfleet-agent-mode` — managed/restricted mode selector
 - `/etc/shellfleet/env.example` — annotated environment template
 
 On first install, `/etc/shellfleet/env` is seeded from the example. Edit it
 to point at your server, then pair:
 
 ```bash
-sudo shellfleet-agent --pair
+sudo shellfleet-agent-pair
 ```
 
 It prints an 8-character code. Paste it at
 `https://dashboard.example.com/device` (or your own deploy) and approve.
-The token is saved at `/etc/shellfleet/agent-token.txt` and survives
-upgrades. Then start the service:
+The helper runs the agent as the unprivileged `shellfleet` account, saves the
+token under `/var/lib/shellfleet-agent`, and restarts the service after
+approval. The token survives upgrades.
+
+## Choose host authority
+
+Native installs and upgrades run in **managed mode by default**. This is
+intentionally root-equivalent: it lets authenticated administrators use
+systemd, apt, config editing, backup/restore, Docker, and root terminals from
+the dashboard instead of SSH.
 
 ```bash
-sudo systemctl restart shellfleet-agent
+sudo shellfleet-agent-mode status
+sudo shellfleet-agent-mode restricted  # capability-free read/delegation plane
+sudo shellfleet-agent-mode managed     # full dashboard host management
 ```
+
+The helper preserves whether the service was running and makes credential
+ownership safe before entering restricted mode. Upgrades preserve an explicitly
+recorded choice; installations with no mode marker select managed.
+
+Only use managed mode with a ShellFleet server and administrators you trust.
+Server authentication, admin RBAC, approvals, validation, and auditing still
+apply, but authorized dashboard operations have root authority on this host.
+
+## Docker and Swarm
+
+Managed mode discovers the normal local Docker socket without extra setup. In
+restricted mode, the agent does not join the root-equivalent `docker` group or
+access `/run/docker.sock` directly. Enable the packaged local proxy if that
+restricted agent still needs Docker/Swarm delegation:
+
+```bash
+sudo shellfleet-docker-proxy enable
+sudo shellfleet-docker-proxy status
+sudo systemctl is-active docker.service shellfleet-docker-proxy.socket shellfleet-agent
+```
+
+The agent advertises `docker` only when the proxy is reachable, and `swarm`
+only when that Docker engine reports an active Swarm. Do not order
+`docker.socket` after NFS, Tailscale, or `remote-fs.target`; that can create a
+systemd boot cycle. If Docker data depends on a remote mount, apply the ordering
+to `docker.service` instead.
 
 ## Updating
 
@@ -58,9 +96,9 @@ sudo systemctl restart shellfleet-agent
 sudo apt update && sudo apt install --only-upgrade shellfleet-agent
 ```
 
-`apt` preserves `/etc/shellfleet/env` and the cached token. The systemd
-unit restarts automatically on upgrade (`restart-after-upgrade` in the
-package metadata).
+`apt` preserves `/etc/shellfleet/env`, credentials, and the recorded runtime
+mode. The systemd unit restarts automatically on upgrade
+(`restart-after-upgrade` in the package metadata).
 
 ## DNS
 
@@ -76,20 +114,14 @@ and a `.nojekyll` marker so apt repo files are served as-is.
 
 ## Bootstrap (one-time, repo owner)
 
-The submodule repos (`shellfleet-agent`, `shellfleet-shared`, ...) are private,
-so the runner needs a PAT with read access.
+The agent and shared crate are ordinary directories in the public ShellFleet
+monorepo. CI uses the normal repository checkout; no submodule token or private
+component PAT is required.
 
-1. Create a [fine-grained PAT](https://github.com/settings/personal-access-tokens/new)
-   - Resource owner: **sppidy**
-   - Repository access: **Only select repositories** → pick `shellfleet`,
-     `shellfleet-agent`, `shellfleet-shared`.
-   - Permissions → **Repository → Contents → Read-only**.
-2. On this repo (`shellfleet`), Settings → Secrets and variables → Actions
-   → New repository secret. Name: `SUBMODULES_PAT`. Value: the PAT.
-3. Push to `main` once so the workflow runs and creates the `gh-pages` branch.
-4. Repo Settings → Pages → Source = **Deploy from a branch** → `gh-pages` /
+1. Push to `main` once so the workflow runs and creates the `gh-pages` branch.
+2. Repo Settings → Pages → Source = **Deploy from a branch** → `gh-pages` /
    `/ (root)`.
-5. Subsequent pushes refresh `dists/stable/main/binary-amd64/Packages.gz` and
+3. Subsequent pushes refresh `dists/stable/main/binary-amd64/Packages.gz` and
    the pool. Tagged releases also attach the `.deb` to the GitHub Release.
 
 Signed apt repo (set up in v12):

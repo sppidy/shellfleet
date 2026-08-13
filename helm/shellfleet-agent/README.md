@@ -20,14 +20,29 @@ kubectl -n shellfleet logs -f deploy/sysmgr-shellfleet-agent
 ```
 
 Paste the printed code at `/device` in the dashboard. The agent
-re-registers with a token and starts answering Kubernetes queries.
+stores its rotating credentials on a PVC and starts answering Kubernetes
+queries. Restarts and chart upgrades reuse that identity without another
+operator approval.
+
+By default the chart provisions a retained 64 MiB `ReadWriteOnce` PVC. To use
+an existing claim, set `persistence.existingClaim`. For an intentionally
+ephemeral install, set `persistence.enabled=false`; Pod replacement will then
+require pairing again unless bootstrap credentials are supplied.
+
+To migrate credentials from a Secret, set `token.existingSecret`. The Secret
+must contain `agent-token.txt` and may also contain `agent-refresh.txt` and
+`agent-token-expiry.txt`. The files are copied only when the state volume is
+uninitialized, so future refresh-token rotations are not reset to stale Secret
+data. Treat the Secret as a one-time migration input, not a backup: after the
+agent connects from the PVC, clear `token.existingSecret` on the next upgrade
+and delete the stale Secret according to your credential-retention policy.
 
 ## RBAC
 
 | flag           | what it grants                                   | default |
 | -------------- | ------------------------------------------------ | ------- |
 | `rbac.read`    | get/list/watch pods, deps, svcs, ingresses, …    | **on**  |
-| `rbac.exec`    | create on pods/exec, attach, portforward         | off     |
+| `rbac.exec`    | create/get on pods/exec and pods/attach          | off     |
 | `rbac.write`   | create/update/patch/delete + scale subresources  | off     |
 
 `exec` is the only knob you'd flip for slice 4 functionality. `write`
@@ -48,7 +63,12 @@ helm upgrade sysmgr ./helm/shellfleet-agent \
   --set image.tag=latest
 ```
 
-## See also
+## Credential cleanup
 
-- `docs/KUBERNETES.md` — operator overview, install paths, limitations.
-- `docs/HELM.md` — every value reference + upgrade / uninstall.
+The chart annotates its PVC with Helm's `keep` policy by default. Uninstalling
+the release therefore does not discard the paired identity. Delete the claim
+explicitly when that is your intent:
+
+```bash
+kubectl -n shellfleet delete pvc <release>-shellfleet-agent-state
+```

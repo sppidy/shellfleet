@@ -1,0 +1,16 @@
+#include <tunables/global>
+
+# The optional proxy is the sole package component allowed to open Docker's
+# root-equivalent API socket. Its systemd unit also restricts it to AF_UNIX.
+profile shellfleet-docker-proxy /lib/systemd/systemd-socket-proxyd flags=(attach_disconnected,mediate_deleted) {
+  #include <abstractions/base>
+
+  /lib/systemd/systemd-socket-proxyd mr,
+  /run/docker.sock rw,
+  /run/shellfleet/docker.sock rw,
+
+  network unix stream,
+
+  deny capability,
+  deny ptrace,
+}

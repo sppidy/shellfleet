@@ -1,0 +1,37 @@
+[Unit]
+Description=ShellFleet local root-operation broker
+After=local-fs.target
+Before=shellfleet-agent.service
+
+[Service]
+Type=simple
+User=root
+Group=shellfleet
+ExecStart=/usr/bin/shellfleet-approval-gate
+Restart=on-failure
+RestartSec=2s
+RuntimeDirectory=shellfleet
+RuntimeDirectoryMode=0750
+# The Docker proxy socket shares this runtime directory. Package upgrades
+# restart the broker, so preserve the directory across that restart instead
+# of silently unlinking the independently managed proxy socket.
+RuntimeDirectoryPreserve=restart
+StateDirectory=shellfleet-gate
+StateDirectoryMode=0700
+UMask=0007
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=read-only
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=true
+RestrictRealtime=true
+LockPersonality=true
+SystemCallArchitectures=native
+AppArmorProfile=-shellfleet-approval-gate
+
+[Install]
+WantedBy=multi-user.target

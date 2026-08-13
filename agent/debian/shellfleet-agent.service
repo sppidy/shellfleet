@@ -1,0 +1,48 @@
+[Unit]
+Description=ShellFleet Agent
+After=network-online.target shellfleet-approval-gate.service
+Wants=network-online.target
+Requires=shellfleet-approval-gate.service
+
+[Service]
+Type=simple
+# Native installs are host-management agents. Managed mode is deliberately
+# root-equivalent so the typed dashboard controls can perform the same work an
+# administrator would otherwise do over SSH. Operators who want an observation
+# plane can switch atomically with `shellfleet-agent-mode restricted`.
+User=root
+Group=root
+Environment=SHELLFLEET_AGENT_MODE=managed
+
+ExecStart=/usr/bin/shellfleet-agent
+
+# State (auth token) lives under /var/lib/shellfleet-agent; read-only fields
+# go in /etc/shellfleet/env. A bind mount of /etc lets the config editor see
+# host configs even on systems with strict ProtectHome/ProtectSystem defaults.
+EnvironmentFile=-/etc/shellfleet/env
+# Created only by `shellfleet-docker-proxy enable`. Restricted mode uses the
+# proxy for explicit Docker delegation; managed mode can use it or the normal
+# local Docker socket.
+EnvironmentFile=-/etc/shellfleet/docker-proxy.env
+
+Restart=on-failure
+RestartSec=5s
+
+# Keep controls that do not contradict package management, config editing,
+# backup/restore, Docker, systemd, or the explicitly authorized root terminal.
+NoNewPrivileges=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+RestrictRealtime=true
+LockPersonality=true
+SystemCallArchitectures=native
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

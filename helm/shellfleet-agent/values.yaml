@@ -37,23 +37,37 @@ server:
 mtls:
   existingSecret: ""
 
-# Pairing token. Two paths, pick one:
+# Pairing credentials. Two paths, pick one:
 #
 #   1. Bootstrap via device-auth (recommended on first install). Leave
-#      `existingSecret` empty and `token` unset — the agent will print a
-#      one-time pairing code on first start. `kubectl logs deploy/<name>`
-#      to read it, then paste at `/device` in the dashboard. The agent
-#      will write the issued token back to /etc/shellfleet/agent-token.txt
-#      inside the container (lost on Pod restart unless you `--from-literal`
-#      it back into the secret on subsequent installs).
+#      `existingSecret` empty. The agent prints a one-time pairing code on
+#      first start; paste it at `/device` in the dashboard. The issued access,
+#      refresh, and expiry files are stored on the state volume below.
 #
-#   2. Pre-existing token. Create a Secret with key `agent-token.txt`, set
-#      `existingSecret` to its name, and the chart will mount it at
-#      /etc/shellfleet/agent-token.txt (read-only) via subPath so it
-#      coexists with the writable /etc/shellfleet directory.
+#   2. Existing credentials. Create a Secret with `agent-token.txt` and,
+#      preferably, `agent-refresh.txt` plus `agent-token-expiry.txt`. The chart
+#      copies recognized files into an empty state volume exactly once. It
+#      never overwrites credentials subsequently rotated by the agent. Remove
+#      the stale bootstrap Secret after confirming the PVC-backed connection.
 token:
-  existingSecret: ""           # name of an existing Secret with key `agent-token.txt`
-  # value: ""                  # ONLY if you accept committing it to values
+  existingSecret: ""           # Secret name; agent-token.txt is required
+
+# Durable agent credentials. Enabled by default because access tokens are
+# short-lived and refresh tokens rotate on every use. An emptyDir would force
+# a new operator-approved pairing after Pod replacement.
+persistence:
+  enabled: true
+  # Use an already-provisioned PVC instead of creating one. When set, the
+  # accessModes, storageClass, size, and retain values below are ignored.
+  existingClaim: ""
+  # Empty uses the cluster's default StorageClass. Set "-" for no class.
+  storageClass: ""
+  accessModes:
+    - ReadWriteOnce
+  size: 64Mi
+  # Keep chart-created credentials on `helm uninstall`. Delete the retained
+  # PVC explicitly when the agent identity should be destroyed.
+  retain: true
 
 # RBAC posture. Read-only is the safety floor — every operator gets
 # this. Flip the toggles below to add capabilities.
@@ -99,30 +113,27 @@ podAnnotations: {}
 extraEnv: []
 extraEnvFrom: []
 
-# Pod-level securityContext. The defaults run the agent as a
-# non-root user (UID 65532, the distroless `nonroot` convention)
-# and let the kubelet chown the /etc/shellfleet emptyDir to that
-# group so the agent can write its pairing token there. Override
-# the whole map if you need a different UID/GID for your image.
+# Pod-level securityContext. UID/GID 10001 matches the published image. The
+# fsGroup owns a freshly provisioned state volume and can read mounted Secret
+# material without granting world-readable credential permissions.
 podSecurityContext:
   runAsNonRoot: true
-  runAsUser: 65532
-  runAsGroup: 65532
-  fsGroup: 65532
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+  fsGroupChangePolicy: OnRootMismatch
   seccompProfile:
     type: RuntimeDefault
 
 # Container-level securityContext. Defaults strip caps and lock
-# the rootfs read-only; the agent only writes to the
-# /etc/shellfleet emptyDir defined in templates/deployment.yaml.
-# If your image bakes in different ownership for /etc/shellfleet,
-# you can flip readOnlyRootFilesystem off here.
+# the rootfs read-only; the agent only writes to the state volume mounted at
+# /var/lib/shellfleet-agent.
 containerSecurityContext:
   allowPrivilegeEscalation: false
   readOnlyRootFilesystem: true
   runAsNonRoot: true
-  runAsUser: 65532
-  runAsGroup: 65532
+  runAsUser: 10001
+  runAsGroup: 10001
   capabilities:
     drop: ["ALL"]
 
