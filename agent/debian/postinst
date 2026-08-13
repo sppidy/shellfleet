@@ -8,6 +8,10 @@ STATE_DIR=/var/lib/shellfleet
 AGENT_STATE_DIR=/var/lib/shellfleet-agent
 GATE_STATE_DIR=/var/lib/shellfleet-gate
 PROBES_DIR="$CONF_DIR/probes.d"
+MODE_FILE="$CONF_DIR/agent-mode"
+MODE_DROPIN_DIR=/etc/systemd/system/shellfleet-agent.service.d
+MODE_DROPIN="$MODE_DROPIN_DIR/20-runtime-mode.conf"
+RESTRICTED_TEMPLATE=/usr/share/shellfleet/agent-modes/restricted.conf
 
 case "$1" in
     configure|reconfigure)
@@ -86,6 +90,44 @@ case "$1" in
             chown root:shellfleet "$ENV_FILE"
             chmod 0640 "$ENV_FILE"
         fi
+
+        # Managed is the native product default. Installs and upgrades that do
+        # not yet have a recorded choice become operational host-management
+        # agents; an explicitly recorded restricted choice is preserved.
+        if [ ! -f "$MODE_FILE" ]; then
+            printf '%s\n' managed > "$MODE_FILE"
+            chown root:root "$MODE_FILE"
+            chmod 0644 "$MODE_FILE"
+        fi
+        agent_mode=$(sed -n '1p' "$MODE_FILE")
+        case "$agent_mode" in
+            managed)
+                rm -f -- "$MODE_DROPIN"
+                rmdir "$MODE_DROPIN_DIR" 2>/dev/null || true
+                ;;
+            restricted)
+                [ -f "$RESTRICTED_TEMPLATE" ] || {
+                    printf '%s\n' "missing runtime-mode template: $RESTRICTED_TEMPLATE" >&2
+                    exit 1
+                }
+                install -d -o root -g root -m 0755 "$MODE_DROPIN_DIR"
+                install -o root -g root -m 0644 "$RESTRICTED_TEMPLATE" "$MODE_DROPIN"
+                # Root-managed rotations may leave root-owned 0600 files. Make
+                # the bounded credential set readable/writable before the
+                # restricted service account starts.
+                for name in agent-token.txt agent-refresh.txt agent-token-expiry.txt; do
+                    credential="$AGENT_STATE_DIR/$name"
+                    if [ -f "$credential" ] && [ ! -L "$credential" ]; then
+                        chown shellfleet:shellfleet "$credential"
+                        chmod 0600 "$credential"
+                    fi
+                done
+                ;;
+            *)
+                printf '%s\n' "invalid ShellFleet agent mode in $MODE_FILE: $agent_mode" >&2
+                exit 1
+                ;;
+        esac
 
         if command -v apparmor_parser >/dev/null 2>&1; then
             apparmor_parser -r /etc/apparmor.d/shellfleet-agent || true

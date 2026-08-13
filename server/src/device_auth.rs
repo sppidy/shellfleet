@@ -134,6 +134,13 @@ async fn poll_device_token(
         .into_response();
     };
 
+    if row.purpose != "agent" {
+        return Json(DeviceTokenResponse::Error {
+            error: "invalid_grant".to_string(),
+        })
+        .into_response();
+    }
+
     if now > row.expires_at {
         let _ = db::delete_pending_device(&state.db, &row.device_code).await;
         return Json(DeviceTokenResponse::Error {
@@ -159,8 +166,9 @@ async fn poll_device_token(
     let access_expires_at = now + ACCESS_TOKEN_TTL_SECS;
     let refresh_expires_at = now + REFRESH_TOKEN_TTL_SECS;
 
-    if let Err(e) = db::insert_token(
+    let consumed = match db::consume_pending_agent_and_insert_token(
         &state.db,
+        &row.device_code,
         &access_token,
         access_expires_at,
         &refresh_token,
@@ -169,13 +177,21 @@ async fn poll_device_token(
     )
     .await
     {
-        tracing::error!(error = %e, "insert token failed");
-        return Json(DeviceTokenResponse::Error {
-            error: "server_error".to_string(),
-        })
-        .into_response();
-    }
-    let _ = db::delete_pending_device(&state.db, &row.device_code).await;
+        Ok(Some(row)) => row,
+        Ok(None) => {
+            return Json(DeviceTokenResponse::Error {
+                error: "invalid_grant".to_string(),
+            })
+            .into_response();
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "consume approved device token failed");
+            return Json(DeviceTokenResponse::Error {
+                error: "server_error".to_string(),
+            })
+            .into_response();
+        }
+    };
 
     db::record_audit(
         &state.db,
@@ -184,7 +200,7 @@ async fn poll_device_token(
         None,
         "device.token.issued",
         true,
-        Some(&format!("user_code={}", row.user_code)),
+        Some(&format!("user_code={}", consumed.user_code)),
     )
     .await;
 

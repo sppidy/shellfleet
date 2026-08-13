@@ -1,0 +1,137 @@
+#!/bin/sh
+# Select whether the native ShellFleet agent manages the host or runs as a
+# restricted observation/delegation process.
+set -eu
+
+UNIT=shellfleet-agent.service
+CONF_DIR=/etc/shellfleet
+MODE_FILE="$CONF_DIR/agent-mode"
+DROPIN_DIR=/etc/systemd/system/shellfleet-agent.service.d
+DROPIN_FILE="$DROPIN_DIR/20-runtime-mode.conf"
+RESTRICTED_TEMPLATE=/usr/share/shellfleet/agent-modes/restricted.conf
+AGENT_STATE_DIR=/var/lib/shellfleet-agent
+mode_tmp=
+was_active=false
+transition_started=false
+
+die() {
+    printf '%s\n' "shellfleet-agent-mode: $*" >&2
+    exit 1
+}
+
+require_root() {
+    [ "$(id -u)" -eq 0 ] || die 'run this command as root (for example: sudo shellfleet-agent-mode status)'
+}
+
+restore_service() {
+    status=$1
+    trap - EXIT HUP INT TERM
+    if [ -n "$mode_tmp" ]; then
+        rm -f -- "$mode_tmp"
+    fi
+    if [ "$transition_started" = true ] && [ "$was_active" = true ] \
+        && ! systemctl is-active --quiet "$UNIT"; then
+        systemctl start "$UNIT" >/dev/null 2>&1 || true
+    fi
+    exit "$status"
+}
+
+write_mode() {
+    mode=$1
+    install -d -o root -g shellfleet -m 0750 "$CONF_DIR"
+    mode_tmp=$(mktemp "$MODE_FILE.XXXXXX")
+    printf '%s\n' "$mode" > "$mode_tmp"
+    chown root:root "$mode_tmp"
+    chmod 0644 "$mode_tmp"
+    mv -f -- "$mode_tmp" "$MODE_FILE"
+    mode_tmp=
+}
+
+normalize_restricted_credentials() {
+    install -d -o shellfleet -g shellfleet -m 0700 "$AGENT_STATE_DIR"
+    for name in agent-token.txt agent-refresh.txt agent-token-expiry.txt; do
+        path="$AGENT_STATE_DIR/$name"
+        [ ! -L "$path" ] || die "$path is a symlink; remove it before entering restricted mode"
+        if [ -f "$path" ]; then
+            chown shellfleet:shellfleet "$path"
+            chmod 0600 "$path"
+        fi
+    done
+}
+
+set_mode() {
+    target=$1
+    [ -f "$RESTRICTED_TEMPLATE" ] \
+        || die "$RESTRICTED_TEMPLATE is missing; reinstall shellfleet-agent"
+    getent passwd shellfleet >/dev/null 2>&1 \
+        || die 'the shellfleet service account is missing; reinstall shellfleet-agent'
+
+    if systemctl is-active --quiet "$UNIT"; then
+        was_active=true
+    fi
+    transition_started=true
+    trap 'restore_service $?' EXIT HUP INT TERM
+    systemctl stop "$UNIT"
+
+    case "$target" in
+        managed)
+            # Commit the operator's trust decision before removing the
+            # restrictive drop-in. A crash between the two leaves the safer
+            # restricted runtime and is reconciled on the next invocation.
+            write_mode managed
+            rm -f -- "$DROPIN_FILE"
+            rmdir "$DROPIN_DIR" 2>/dev/null || true
+            ;;
+        restricted)
+            normalize_restricted_credentials
+            install -d -o root -g root -m 0755 "$DROPIN_DIR"
+            install -o root -g root -m 0644 "$RESTRICTED_TEMPLATE" "$DROPIN_FILE"
+            write_mode restricted
+            ;;
+        *)
+            die 'internal error: unsupported mode'
+            ;;
+    esac
+
+    systemctl daemon-reload
+    if [ "$was_active" = true ]; then
+        systemctl start "$UNIT"
+    fi
+    transition_started=false
+    trap - EXIT HUP INT TERM
+    printf '%s\n' "ShellFleet agent mode set to $target."
+    if [ "$target" = managed ]; then
+        printf '%s\n' 'The dashboard now has root-equivalent authority on this host.'
+    else
+        printf '%s\n' 'Host mutation features may be unavailable in restricted mode.'
+    fi
+}
+
+show_status() {
+    configured=unknown
+    if [ -f "$MODE_FILE" ]; then
+        configured=$(sed -n '1p' "$MODE_FILE")
+    elif [ -f "$DROPIN_FILE" ]; then
+        configured=restricted-legacy
+    fi
+    effective_user=$(systemctl show --property=User --value "$UNIT" 2>/dev/null || true)
+    [ -n "$effective_user" ] || effective_user=root
+    printf 'configured=%s effective_user=%s active=%s\n' \
+        "$configured" "$effective_user" \
+        "$(systemctl is-active "$UNIT" 2>/dev/null || true)"
+}
+
+require_root
+case "${1:-}" in
+    managed|restricted)
+        [ "$#" -eq 1 ] || die 'usage: shellfleet-agent-mode {managed|restricted|status}'
+        set_mode "$1"
+        ;;
+    status)
+        [ "$#" -eq 1 ] || die 'usage: shellfleet-agent-mode {managed|restricted|status}'
+        show_status
+        ;;
+    *)
+        die 'usage: shellfleet-agent-mode {managed|restricted|status}'
+        ;;
+esac

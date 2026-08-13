@@ -37,16 +37,55 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      # Pod-level securityContext. fsGroup makes the emptyDir at
-      # /etc/shellfleet owned by `runAsGroup` so the non-root agent
-      # can write its pairing token there. Override per-deploy via
-      # `.Values.podSecurityContext`.
+      # fsGroup makes fresh persistent volumes writable by the image's
+      # unprivileged UID/GID. Override per-deploy only when using an image
+      # built with a different runtime identity.
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- if .Values.token.existingSecret }}
+      initContainers:
+        - name: bootstrap-credentials
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - /bin/sh
+            - -ec
+            - |
+              if [ ! -s /state/agent-token.txt ]; then
+                test -s /bootstrap/agent-token.txt || {
+                  echo "token.existingSecret must contain agent-token.txt" >&2
+                  exit 1
+                }
+                umask 077
+                for file in agent-refresh.txt agent-token-expiry.txt; do
+                  if [ -f "/bootstrap/${file}" ]; then
+                    cp "/bootstrap/${file}" "/state/.${file}.bootstrap"
+                    chmod 0600 "/state/.${file}.bootstrap"
+                    mv -f "/state/.${file}.bootstrap" "/state/${file}"
+                  else
+                    rm -f "/state/${file}"
+                  fi
+                done
+                cp /bootstrap/agent-token.txt /state/.agent-token.txt.bootstrap
+                chmod 0600 /state/.agent-token.txt.bootstrap
+                mv -f /state/.agent-token.txt.bootstrap /state/agent-token.txt
+              fi
+          args: []
+          volumeMounts:
+            - name: agent-state
+              mountPath: /state
+            - name: bootstrap-credentials
+              mountPath: /bootstrap
+              readOnly: true
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+      {{- end }}
       containers:
         - name: agent
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - --pair-if-needed
           env:
             - name: SERVER_API_URL
               value: {{ .Values.server.apiUrl | quote }}
@@ -71,19 +110,10 @@ spec:
             {{- toYaml . | nindent 12 }}
           {{- end }}
           volumeMounts:
-            # Writable scratch over /etc/shellfleet. With
-            # readOnlyRootFilesystem: true the rest of the rootfs
-            # is read-only; this is where device-auth pairing
-            # writes the issued bearer token (lost on Pod restart
-            # unless promoted into a Secret + existingSecret).
+            # Device-auth access, refresh, and expiry credentials live here.
+            # The default PVC preserves them across restarts and upgrades.
             - name: agent-state
-              mountPath: /etc/shellfleet
-            {{- if .Values.token.existingSecret }}
-            - name: agent-token
-              mountPath: /etc/shellfleet/agent-token.txt
-              subPath: agent-token.txt
-              readOnly: true
-            {{- end }}
+              mountPath: /var/lib/shellfleet-agent
             {{- if .Values.mtls.existingSecret }}
             # Agent client cert + key + server CA for mutual TLS.
             - name: agent-mtls
@@ -101,15 +131,17 @@ spec:
             {{- toYaml .Values.containerSecurityContext | nindent 12 }}
       volumes:
         - name: agent-state
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "shellfleet-agent.stateClaimName" . }}
+          {{- else }}
           emptyDir: {}
+          {{- end }}
         {{- if .Values.token.existingSecret }}
-        - name: agent-token
+        - name: bootstrap-credentials
           secret:
             secretName: {{ .Values.token.existingSecret }}
-            items:
-              - key: agent-token.txt
-                path: agent-token.txt
-                mode: 0400
+            defaultMode: 0440
         {{- end }}
         {{- if .Values.mtls.existingSecret }}
         - name: agent-mtls
@@ -118,13 +150,13 @@ spec:
             items:
               - key: agent.crt
                 path: agent.crt
-                mode: 0400
+                mode: 0440
               - key: agent.key
                 path: agent.key
-                mode: 0400
+                mode: 0440
               - key: server-ca.crt
                 path: server-ca.crt
-                mode: 0400
+                mode: 0440
         {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:

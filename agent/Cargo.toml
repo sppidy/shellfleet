@@ -1,6 +1,6 @@
 [package]
 name = "agent"
-version = "1.1.0"
+version = "1.2.0"
 edition = "2024"
 description = "Agent for ShellFleet: connects a host to a ShellFleet server over WebSocket and exposes systemd service control, terminal, and config editing."
 license = "AGPL-3.0-or-later"
@@ -26,7 +26,7 @@ crossbeam-channel = "0.5.15"
 futures-util = "0.3.32"
 hostname = "0.4.2"
 portable-pty = "0.9.0"
-reqwest = { version = "0.13.2", default-features = false, features = ["json", "native-tls", "stream"] }
+reqwest = { version = "0.13.2", default-features = false, features = ["json", "rustls-no-provider", "stream"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 sha2 = "0.10"
@@ -64,7 +64,7 @@ aws-sdk-s3 = { version = "1", default-features = false, features = ["sigv4a", "h
 
 # Optional — only compiled when `--features kube` (i.e. the
 # shellfleet-agent-k8s package). Uses rustls so we don't drag a second
-# TLS stack in alongside reqwest's native-tls.
+# TLS stack in alongside reqwest's rustls client.
 chrono = { version = "0.4", default-features = false, features = ["clock"], optional = true }
 kube = { version = "1.1", default-features = false, features = ["client", "rustls-tls", "ws"], optional = true }
 # k8s-openapi requires a concrete v1_* feature pinning the API surface
@@ -101,11 +101,13 @@ extended-description = """\
 Agent for ShellFleet. Connects a Linux host to a ShellFleet server over a
 TLS WebSocket and exposes systemd service control, an interactive terminal,
 and remote read/write of configuration files. Pairing happens through the
-server's device-auth flow; the resulting token is cached at
-/var/lib/shellfleet-agent/agent-token.txt."""
+server's device-auth flow; the resulting rotating credential set is cached
+under /var/lib/shellfleet-agent/. Native installs and upgrades without a
+recorded choice use root-equivalent managed mode so host controls work;
+shellfleet-agent-mode can select the capability-free restricted posture."""
 section = "admin"
 priority = "optional"
-depends = "$auto, systemd"
+depends = "$auto, systemd, ca-certificates"
 assets = [
     ["target/release/shellfleet-agent", "usr/bin/shellfleet-agent", "755"],
     ["target/release/shellfleet-approval-gate", "usr/bin/shellfleet-approval-gate", "755"],
@@ -114,6 +116,8 @@ assets = [
     ["debian/shellfleet-docker-proxy.socket", "lib/systemd/system/shellfleet-docker-proxy.socket", "644"],
     ["debian/shellfleet-docker-proxy", "usr/sbin/shellfleet-docker-proxy", "755"],
     ["debian/shellfleet-agent-pair", "usr/sbin/shellfleet-agent-pair", "755"],
+    ["debian/shellfleet-agent-mode", "usr/sbin/shellfleet-agent-mode", "755"],
+    ["debian/shellfleet-agent-restricted.conf", "usr/share/shellfleet/agent-modes/restricted.conf", "644"],
     ["debian/apparmor/shellfleet-agent", "etc/apparmor.d/shellfleet-agent", "644"],
     ["debian/apparmor/shellfleet-approval-gate", "etc/apparmor.d/shellfleet-approval-gate", "644"],
     ["debian/apparmor/shellfleet-docker-proxy", "etc/apparmor.d/shellfleet-docker-proxy", "644"],

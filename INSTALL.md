@@ -33,7 +33,8 @@ Signing key fingerprint: `9181 1FCB AB45 B996 B40E AD1E C6E2 9AC2
 The package installs:
 
 - `/usr/bin/shellfleet-agent` — the binary
-- `/lib/systemd/system/shellfleet-agent.service` — the unit
+- `/usr/lib/systemd/system/shellfleet-agent.service` — the primary unit
+- `/usr/sbin/shellfleet-agent-mode` — managed/restricted mode selector
 - `/etc/shellfleet/env.example` — annotated environment template
 
 On first install, `/etc/shellfleet/env` is seeded from the example. Edit it
@@ -49,11 +50,33 @@ The helper runs the agent as the unprivileged `shellfleet` account, saves the
 token under `/var/lib/shellfleet-agent`, and restarts the service after
 approval. The token survives upgrades.
 
-## Enable Docker and Swarm access (optional)
+## Choose host authority
 
-The agent does not join the root-equivalent `docker` group and does not access
-`/run/docker.sock` directly. On hosts you intend to manage through Docker or
-Swarm, enable the packaged local proxy explicitly:
+Native installs and upgrades run in **managed mode by default**. This is
+intentionally root-equivalent: it lets authenticated administrators use
+systemd, apt, config editing, backup/restore, Docker, and root terminals from
+the dashboard instead of SSH.
+
+```bash
+sudo shellfleet-agent-mode status
+sudo shellfleet-agent-mode restricted  # capability-free read/delegation plane
+sudo shellfleet-agent-mode managed     # full dashboard host management
+```
+
+The helper preserves whether the service was running and makes credential
+ownership safe before entering restricted mode. Upgrades preserve an explicitly
+recorded choice; installations with no mode marker select managed.
+
+Only use managed mode with a ShellFleet server and administrators you trust.
+Server authentication, admin RBAC, approvals, validation, and auditing still
+apply, but authorized dashboard operations have root authority on this host.
+
+## Docker and Swarm
+
+Managed mode discovers the normal local Docker socket without extra setup. In
+restricted mode, the agent does not join the root-equivalent `docker` group or
+access `/run/docker.sock` directly. Enable the packaged local proxy if that
+restricted agent still needs Docker/Swarm delegation:
 
 ```bash
 sudo shellfleet-docker-proxy enable
@@ -73,9 +96,9 @@ to `docker.service` instead.
 sudo apt update && sudo apt install --only-upgrade shellfleet-agent
 ```
 
-`apt` preserves `/etc/shellfleet/env` and the cached token. The systemd
-unit restarts automatically on upgrade (`restart-after-upgrade` in the
-package metadata).
+`apt` preserves `/etc/shellfleet/env`, credentials, and the recorded runtime
+mode. The systemd unit restarts automatically on upgrade
+(`restart-after-upgrade` in the package metadata).
 
 ## DNS
 

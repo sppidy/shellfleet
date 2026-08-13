@@ -41,3 +41,22 @@ pub fn configured_agent_uid() -> Result<u32, String> {
         })
         .ok_or_else(|| "shellfleet service user does not exist".into())
 }
+
+/// The broker serves the packaged agent in both supported runtime modes. UID
+/// 0 is already locally omnipotent; accepting it here does not grant a root
+/// process any authority it does not already have.
+pub const fn authorized_agent_uid(peer_uid: u32, restricted_agent_uid: u32) -> bool {
+    peer_uid == 0 || peer_uid == restricted_agent_uid
+}
+
+#[cfg(test)]
+mod tests {
+    use super::authorized_agent_uid;
+
+    #[test]
+    fn managed_root_and_restricted_service_account_are_authorized() {
+        assert!(authorized_agent_uid(0, 10001));
+        assert!(authorized_agent_uid(10001, 10001));
+        assert!(!authorized_agent_uid(1000, 10001));
+    }
+}

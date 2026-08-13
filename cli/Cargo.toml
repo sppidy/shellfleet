@@ -16,7 +16,8 @@ path = "src/main.rs"
 crossterm = "0.29"
 futures-util = "0.3"
 ratatui = "0.30"
-reqwest = { version = "0.13", default-features = false, features = ["json", "native-tls", "stream"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls-no-provider", "stream"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 shared = { path = "../shared" }

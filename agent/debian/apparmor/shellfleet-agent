@@ -10,6 +10,7 @@ profile shellfleet-agent /usr/bin/shellfleet-agent flags=(attach_disconnected,me
   network unix stream,
 
   /usr/bin/shellfleet-agent mr,
+  /var/lib/shellfleet-agent/ rw,
   /var/lib/shellfleet-agent/** rwk,
   /etc/shellfleet/env r,
   /etc/shellfleet/probes.d/* rix,

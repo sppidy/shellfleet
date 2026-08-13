@@ -15,6 +15,7 @@ use std::{io, time::Duration};
 
 #[tokio::main]
 async fn main() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
     if let Err(error) = run().await {
         eprintln!("shellfleet: {error}");
         std::process::exit(1);

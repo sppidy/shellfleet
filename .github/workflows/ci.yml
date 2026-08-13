@@ -22,14 +22,26 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
+      - name: Package scripts and runtime boundary
+        run: |
+          shellcheck \
+            agent/debian/shellfleet-agent-mode \
+            agent/debian/shellfleet-agent-pair \
+            agent/debian/shellfleet-docker-proxy \
+            agent/debian/postinst \
+            agent/debian/postrm \
+            agent/debian/prerm \
+            agent/tests/package_security.sh \
+            helm/shellfleet-agent/tests/render_test.sh
+          sh agent/tests/package_security.sh
       - name: Clippy (workspace, deny warnings)
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Clippy (agent, kube feature)
-        run: cargo clippy -p agent --all-targets --features kube -- -D warnings
+        run: cargo clippy -p agent --all-targets --features kube --locked -- -D warnings
       - name: Test (workspace)
-        run: cargo test --workspace
+        run: cargo test --workspace --locked
       - name: Test (agent, kube feature)
-        run: cargo test -p agent --features kube
+        run: cargo test -p agent --features kube --locked
 
   web:
     name: web (lint + typecheck + test)
@@ -103,7 +115,5 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: azure/setup-helm@v4
-      - name: Lint chart
-        run: helm lint helm/shellfleet-agent
-      - name: Template smoke test (defaults render)
-        run: helm template sf helm/shellfleet-agent > /dev/null
+      - name: Lint and render matrix
+        run: bash helm/shellfleet-agent/tests/render_test.sh

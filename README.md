@@ -34,21 +34,39 @@ no background polling and sits around 4 MB of RAM when idle.
 3. Sign in with GitHub, open `/device`, and paste the pairing code to approve
    the agent.
 
-### Docker and Swarm (explicit opt-in)
+### Native agent authority
 
-Docker is disabled for a newly installed agent. On a Docker host, an
-administrator can enable ShellFleet's local proxy with:
+Native installs and upgrades use **managed mode by default**: the agent is intentionally
+root-equivalent so the dashboard's systemd, apt, config, backup, Docker, and
+terminal controls work instead of sending you back to SSH. Check or change the
+mode with:
+
+```bash
+sudo shellfleet-agent-mode status
+sudo shellfleet-agent-mode restricted  # observation / delegated access
+sudo shellfleet-agent-mode managed     # full host management
+```
+
+Managed mode means administrators authorized by your trusted ShellFleet control
+plane can act as root on this host. Restricted mode keeps the capability-free,
+read-only systemd/AppArmor sandbox, but host mutation features may be
+unavailable. An explicitly selected restricted mode survives upgrades; when no
+choice has been recorded, managed mode wins.
+
+### Docker and Swarm
+
+Managed mode uses the normal local Docker socket and advertises Docker/Swarm
+when the daemon is available. Restricted mode does not join the root-equivalent
+`docker` group or open `/run/docker.sock`; delegate Docker access through the
+packaged proxy instead:
 
 ```bash
 sudo shellfleet-docker-proxy enable
 ```
 
-This keeps the agent out of the `docker` group and preserves its direct Docker
-socket deny rule. The enabled proxy is root-owned, accepts only the local
-`shellfleet` service account, and is confined to forwarding the local Docker
-socket. Docker API access is root-equivalent on typical hosts, so enable it
-only for a ShellFleet server and administrators you trust. Disable it with
-`sudo shellfleet-docker-proxy disable`.
+The proxy is root-owned, accepts only the local `shellfleet` service account,
+and is confined to forwarding the local Docker socket. Disable it with `sudo
+shellfleet-docker-proxy disable`.
 
 The proxy socket follows `docker.socket`; do not add dependencies from
 `docker.socket` to NFS, Tailscale, or `remote-fs.target`. If Docker data lives
@@ -107,9 +125,10 @@ cd agent && cargo build --release        # build the agent (Linux only)
 cargo build --release --manifest-path cli/Cargo.toml  # build the operator CLI
 ```
 
-To test against a real agent locally, uncomment the `agent:` stanza in
-`docker-compose.yml` — it mounts the host's DBus socket so the in-container
-agent can drive the host's systemd.
+The optional `agent:` stanza in `docker-compose.yml` uses the restricted,
+non-root development image. It is suitable for connectivity and read-path
+testing, but deliberately does not emulate the native package's managed host
+authority.
 
 ## Wire format
 
@@ -133,6 +152,10 @@ allow-list and per-IP rate limiting on the auth surface; a signed apt repo;
 TOTP secrets encrypted at rest; and signed commits required on `main`. The
 Community Edition is the security floor — the Enterprise Edition adds SSO, custom
 RBAC, IP allowlisting, long-retention audit with SIEM streaming, and more.
+
+The native agent's managed mode is root-equivalent by design. Enroll a host
+only into a control plane whose administrators and authentication boundary you
+trust; use `shellfleet-agent-mode restricted` when observation is sufficient.
 
 Report security issues privately: email `sppidytg@gmail.com` with the subject
 `[security] ShellFleet: …`. Please don't open a public issue for them.

@@ -87,6 +87,12 @@ pub async fn init() -> Result<SqlitePool, sqlx::Error> {
     let _ = sqlx::query("ALTER TABLE tokens ADD COLUMN revoked INTEGER NOT NULL DEFAULT 0")
         .execute(&pool)
         .await;
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS tokens_refresh_token \
+         ON tokens(refresh_token) WHERE refresh_token IS NOT NULL",
+    )
+    .execute(&pool)
+    .await?;
 
     // Small key/value store for instance-scoped settings (anonymous
     // telemetry instance id + opt-out toggle, etc.).
@@ -492,30 +498,6 @@ pub async fn upsert_token_seen(
     Ok(())
 }
 
-pub async fn insert_token(
-    pool: &SqlitePool,
-    token: &str,
-    expires_at: i64,
-    refresh_token: &str,
-    refresh_expires_at: i64,
-    now: i64,
-) -> Result<(), sqlx::Error> {
-    sqlx::query(
-        r#"
-        INSERT INTO tokens (token, hostname, created_at, last_seen, expires_at, refresh_token, refresh_expires_at, revoked)
-        VALUES (?1, NULL, ?2, 0, ?3, ?4, ?5, 0)
-        "#,
-    )
-    .bind(token)
-    .bind(now)
-    .bind(expires_at)
-    .bind(refresh_token)
-    .bind(refresh_expires_at)
-    .execute(pool)
-    .await?;
-    Ok(())
-}
-
 /// Single-use refresh-token rotation. Given a presented refresh
 /// token, if it matches a non-revoked, non-expired row, atomically
 /// delete that row and insert a fresh access + refresh pair (preserving
@@ -531,23 +513,21 @@ pub async fn replace_token_on_refresh(
     refresh_expires_at: i64,
     now: i64,
 ) -> Result<Option<String>, sqlx::Error> {
+    let mut tx = pool.begin().await?;
     let row: Option<(Option<String>,)> = sqlx::query_as(
-        "SELECT hostname FROM tokens \
-         WHERE refresh_token = ? AND revoked = 0 AND refresh_expires_at > ?",
+        "DELETE FROM tokens \
+         WHERE refresh_token = ? AND revoked = 0 AND refresh_expires_at > ? \
+         RETURNING hostname",
     )
     .bind(presented_refresh)
     .bind(now)
-    .fetch_optional(pool)
+    .fetch_optional(&mut *tx)
     .await?;
     let Some((hostname,)) = row else {
+        tx.rollback().await?;
         return Ok(None);
     };
 
-    let mut tx = pool.begin().await?;
-    sqlx::query("DELETE FROM tokens WHERE refresh_token = ?")
-        .bind(presented_refresh)
-        .execute(&mut *tx)
-        .await?;
     sqlx::query(
         r#"
         INSERT INTO tokens (token, hostname, created_at, last_seen, expires_at, refresh_token, refresh_expires_at, revoked)
@@ -564,6 +544,55 @@ pub async fn replace_token_on_refresh(
     .await?;
     tx.commit().await?;
     Ok(Some(hostname.unwrap_or_default()))
+}
+
+/// Atomically exchange one approved agent-pairing request for a token pair.
+///
+/// `DELETE ... RETURNING` makes the pending row the transaction's single-use
+/// capability: concurrent pollers cannot both observe and consume it, and the
+/// delete is rolled back if inserting the token pair fails. The purpose guard
+/// prevents a CLI authorization from being exchanged for an agent credential.
+pub async fn consume_pending_agent_and_insert_token(
+    pool: &SqlitePool,
+    device_code: &str,
+    token: &str,
+    expires_at: i64,
+    refresh_token: &str,
+    refresh_expires_at: i64,
+    now: i64,
+) -> Result<Option<PendingDeviceRow>, sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    let row = sqlx::query_as::<_, PendingDeviceRow>(
+        "DELETE FROM pending_devices \
+         WHERE device_code = ? AND purpose = 'agent' AND approved = 1 AND expires_at >= ? \
+         RETURNING device_code, user_code, expires_at, approved, purpose, approved_by",
+    )
+    .bind(device_code)
+    .bind(now)
+    .fetch_optional(&mut *tx)
+    .await?;
+
+    let Some(row) = row else {
+        tx.rollback().await?;
+        return Ok(None);
+    };
+
+    sqlx::query(
+        r#"
+        INSERT INTO tokens (token, hostname, created_at, last_seen, expires_at, refresh_token, refresh_expires_at, revoked)
+        VALUES (?1, NULL, ?2, 0, ?3, ?4, ?5, 0)
+        "#,
+    )
+    .bind(token)
+    .bind(now)
+    .bind(expires_at)
+    .bind(refresh_token)
+    .bind(refresh_expires_at)
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+    Ok(Some(row))
 }
 
 pub async fn list_tokens(pool: &SqlitePool) -> Result<Vec<TokenRow>, sqlx::Error> {
@@ -1705,4 +1734,253 @@ pub async fn delete_invite(pool: &SqlitePool, code: &str) -> Result<bool, sqlx::
         .execute(pool)
         .await?;
     Ok(r.rows_affected() > 0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futures_util::future::join_all;
+    use tempfile::TempDir;
+
+    async fn token_test_pool() -> (TempDir, SqlitePool) {
+        let dir = tempfile::tempdir().expect("create test directory");
+        let options = SqliteConnectOptions::new()
+            .filename(dir.path().join("tokens.sqlite"))
+            .create_if_missing(true)
+            .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
+            .busy_timeout(std::time::Duration::from_secs(5));
+        let pool = SqlitePoolOptions::new()
+            .max_connections(8)
+            .connect_with(options)
+            .await
+            .expect("connect test database");
+
+        sqlx::raw_sql(
+            r#"
+            CREATE TABLE tokens (
+                token TEXT PRIMARY KEY,
+                hostname TEXT,
+                created_at INTEGER NOT NULL DEFAULT 0,
+                last_seen INTEGER NOT NULL DEFAULT 0,
+                expires_at INTEGER NOT NULL DEFAULT 0,
+                refresh_token TEXT,
+                refresh_expires_at INTEGER NOT NULL DEFAULT 0,
+                revoked INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE pending_devices (
+                device_code TEXT PRIMARY KEY,
+                user_code TEXT NOT NULL UNIQUE,
+                expires_at INTEGER NOT NULL,
+                approved INTEGER NOT NULL DEFAULT 0,
+                purpose TEXT NOT NULL DEFAULT 'agent',
+                approved_by TEXT
+            );
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .expect("create token test schema");
+
+        (dir, pool)
+    }
+
+    async fn seed_token(
+        pool: &SqlitePool,
+        token: &str,
+        expires_at: i64,
+        refresh_token: &str,
+        refresh_expires_at: i64,
+        now: i64,
+    ) {
+        sqlx::query(
+            "INSERT INTO tokens \
+             (token, hostname, created_at, last_seen, expires_at, refresh_token, refresh_expires_at, revoked) \
+             VALUES (?1, NULL, ?2, 0, ?3, ?4, ?5, 0)",
+        )
+        .bind(token)
+        .bind(now)
+        .bind(expires_at)
+        .bind(refresh_token)
+        .bind(refresh_expires_at)
+        .execute(pool)
+        .await
+        .expect("seed token");
+    }
+
+    #[tokio::test]
+    async fn concurrent_refresh_consumes_the_old_token_once() {
+        let (_dir, pool) = token_test_pool().await;
+        seed_token(&pool, "old-access", 200, "old-refresh", 300, 100).await;
+        sqlx::query("UPDATE tokens SET hostname = 'agent-1' WHERE token = 'old-access'")
+            .execute(&pool)
+            .await
+            .expect("bind hostname");
+
+        let attempts = (0..16).map(|index| {
+            let pool = pool.clone();
+            async move {
+                let access = format!("access-{index}");
+                let refresh = format!("refresh-{index}");
+                replace_token_on_refresh(&pool, "old-refresh", &access, &refresh, 400, 500, 150)
+                    .await
+            }
+        });
+        let outcomes = join_all(attempts).await;
+        let winners = outcomes
+            .into_iter()
+            .map(|result| result.expect("rotation query succeeds"))
+            .filter(Option::is_some)
+            .count();
+
+        assert_eq!(winners, 1);
+        let rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM tokens")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let hostname: String = sqlx::query_scalar("SELECT hostname FROM tokens")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(rows, 1);
+        assert_eq!(hostname, "agent-1");
+    }
+
+    #[tokio::test]
+    async fn failed_refresh_insert_restores_the_old_token() {
+        let (_dir, pool) = token_test_pool().await;
+        seed_token(&pool, "old-access", 200, "old-refresh", 300, 100).await;
+        seed_token(&pool, "collision", 200, "other-refresh", 300, 100).await;
+
+        let result = replace_token_on_refresh(
+            &pool,
+            "old-refresh",
+            "collision",
+            "new-refresh",
+            400,
+            500,
+            150,
+        )
+        .await;
+
+        assert!(result.is_err());
+        let old_rows: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM tokens WHERE refresh_token = 'old-refresh'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(old_rows, 1);
+    }
+
+    #[tokio::test]
+    async fn concurrent_agent_exchange_mints_one_token_pair() {
+        let (_dir, pool) = token_test_pool().await;
+        sqlx::query(
+            "INSERT INTO pending_devices \
+             (device_code, user_code, expires_at, approved, purpose) \
+             VALUES ('device', 'USER-CODE', 300, 1, 'agent')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let attempts = (0..16).map(|index| {
+            let pool = pool.clone();
+            async move {
+                let access = format!("access-{index}");
+                let refresh = format!("refresh-{index}");
+                consume_pending_agent_and_insert_token(
+                    &pool, "device", &access, 400, &refresh, 500, 200,
+                )
+                .await
+            }
+        });
+        let outcomes = join_all(attempts).await;
+        let winners = outcomes
+            .into_iter()
+            .map(|result| result.expect("exchange query succeeds"))
+            .filter(Option::is_some)
+            .count();
+
+        assert_eq!(winners, 1);
+        let token_rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM tokens")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let pending_rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM pending_devices")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(token_rows, 1);
+        assert_eq!(pending_rows, 0);
+    }
+
+    #[tokio::test]
+    async fn agent_exchange_rejects_cli_authorizations() {
+        let (_dir, pool) = token_test_pool().await;
+        sqlx::query(
+            "INSERT INTO pending_devices \
+             (device_code, user_code, expires_at, approved, purpose) \
+             VALUES ('cli-device', 'CLI-CODE', 300, 1, 'cli')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let consumed = consume_pending_agent_and_insert_token(
+            &pool,
+            "cli-device",
+            "agent-access",
+            400,
+            "agent-refresh",
+            500,
+            200,
+        )
+        .await
+        .unwrap();
+
+        assert!(consumed.is_none());
+        let pending_rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM pending_devices")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let token_rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM tokens")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(pending_rows, 1);
+        assert_eq!(token_rows, 0);
+    }
+
+    #[tokio::test]
+    async fn failed_agent_insert_restores_the_pending_request() {
+        let (_dir, pool) = token_test_pool().await;
+        seed_token(&pool, "collision", 200, "other-refresh", 300, 100).await;
+        sqlx::query(
+            "INSERT INTO pending_devices \
+             (device_code, user_code, expires_at, approved, purpose) \
+             VALUES ('device', 'USER-CODE', 300, 1, 'agent')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let result = consume_pending_agent_and_insert_token(
+            &pool,
+            "device",
+            "collision",
+            400,
+            "new-refresh",
+            500,
+            200,
+        )
+        .await;
+
+        assert!(result.is_err());
+        let pending_rows: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM pending_devices WHERE device_code = 'device'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(pending_rows, 1);
+    }
 }

@@ -15,6 +15,7 @@
 mod apt;
 mod backup;
 mod config;
+mod credentials;
 mod deploy;
 mod docker;
 mod exec;
@@ -35,38 +36,75 @@ mod k8s_logs;
 #[cfg(feature = "kube")]
 mod k8s_exec;
 
-/// Write a secret file to disk with mode 0600 (Unix). The agent state
-/// directory is the sole accepted location: credential persistence must not
-/// silently fall back to a potentially user-writable working directory.
-fn write_secret_file(path: &str, contents: &str) -> std::io::Result<()> {
-    #[cfg(unix)]
-    {
-        use std::io::Write as _;
-        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-        let mut f = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .custom_flags(libc::O_NOFOLLOW)
-            .open(path)?;
-        f.write_all(contents.as_bytes())?;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
-    }
-    #[cfg(not(unix))]
-    {
-        std::fs::write(path, contents)
-    }
-}
-
-/// Write the bearer token to its fixed 0600 state file.
-fn write_token_secure(primary: &str, token: &str) -> std::io::Result<()> {
-    write_secret_file(primary, token)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn runtime_mode_defaults_to_managed_and_allows_explicit_restriction() {
+        assert_eq!(parse_runtime_mode(None).unwrap(), AgentRuntimeMode::Managed);
+        assert_eq!(
+            parse_runtime_mode(Some("restricted")).unwrap(),
+            AgentRuntimeMode::Restricted
+        );
+        assert_eq!(
+            parse_runtime_mode(Some("managed")).unwrap(),
+            AgentRuntimeMode::Managed
+        );
+        assert!(parse_runtime_mode(Some("root")).is_err());
+        assert!(parse_runtime_mode(Some("")).is_err());
+    }
+
+    #[test]
+    fn runtime_contract_keeps_managed_root_only_and_restricted_unprivileged() {
+        assert!(validate_runtime(AgentRuntimeMode::Managed, 0, 0, false).is_ok());
+        assert!(validate_runtime(AgentRuntimeMode::Managed, 10001, 0, false).is_err());
+        assert!(validate_runtime(AgentRuntimeMode::Restricted, 10001, 0, false).is_ok());
+        assert!(validate_runtime(AgentRuntimeMode::Restricted, 0, 0, false).is_err());
+        assert!(validate_runtime(AgentRuntimeMode::Restricted, 10001, 1, false).is_err());
+        assert!(validate_runtime(AgentRuntimeMode::Restricted, 10001, 0, true).is_err());
+    }
+
+    #[test]
+    fn pairing_modes_keep_native_startup_explicit() {
+        assert_eq!(pairing_mode(&[]), PairingMode::RequireExisting);
+        assert_eq!(pairing_mode(&["--pair".into()]), PairingMode::Always);
+        assert_eq!(pairing_mode(&["pair".into()]), PairingMode::Always);
+        assert_eq!(
+            pairing_mode(&["--pair-if-needed".into()]),
+            PairingMode::IfNeeded
+        );
+    }
+
+    #[test]
+    fn automatic_repair_requires_an_unauthorized_response() {
+        assert!(should_pair_after_rejection(
+            PairingMode::IfNeeded,
+            Some(tokio_tungstenite::tungstenite::http::StatusCode::UNAUTHORIZED)
+        ));
+        assert!(!should_pair_after_rejection(
+            PairingMode::IfNeeded,
+            Some(tokio_tungstenite::tungstenite::http::StatusCode::BAD_GATEWAY)
+        ));
+        assert!(!should_pair_after_rejection(
+            PairingMode::RequireExisting,
+            Some(tokio_tungstenite::tungstenite::http::StatusCode::UNAUTHORIZED)
+        ));
+        assert!(!should_pair_after_rejection(PairingMode::IfNeeded, None));
+    }
+
+    #[test]
+    fn reactive_refresh_requires_an_unauthorized_response() {
+        use tokio_tungstenite::tungstenite::http::StatusCode;
+
+        assert!(should_refresh_after_rejection(Some(
+            StatusCode::UNAUTHORIZED
+        )));
+        assert!(!should_refresh_after_rejection(Some(
+            StatusCode::BAD_GATEWAY
+        )));
+        assert!(!should_refresh_after_rejection(None));
+    }
 
     #[tokio::test]
     async fn drift_config_fingerprint_rejects_denied_paths() {
@@ -74,14 +112,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn drift_config_fingerprint_hashes_allowed_paths() {
-        let Some(config) = drift_config_fingerprint("/etc/hostname").await else {
-            panic!("expected /etc/hostname to be readable in the test environment");
-        };
+    async fn drift_config_fingerprint_hashes_a_resolved_file() {
+        use std::io::Write as _;
 
-        assert_eq!(config.path, "/etc/hostname");
-        assert!(!config.hash.is_empty());
-        assert!(config.size > 0);
+        let mut fixture = tempfile::NamedTempFile::new().unwrap();
+        fixture.write_all(b"shellfleet-fixture\n").unwrap();
+        fixture.flush().unwrap();
+        let config = fingerprint_config_file("/etc/example.conf", fixture.path())
+            .await
+            .expect("fingerprint fixture");
+
+        assert_eq!(config.path, "/etc/example.conf");
+        assert_eq!(
+            config.hash,
+            "d601f054795bdd04834ff47a6c4a4d0a34109c4aded931b7f65859fc60b44891"
+        );
+        assert_eq!(config.size, 19);
     }
 }
 
@@ -125,9 +171,6 @@ enum DeviceTokenResponse {
     },
 }
 
-const TOKEN_PATH: &str = "/var/lib/shellfleet-agent/agent-token.txt";
-const REFRESH_TOKEN_PATH: &str = "/var/lib/shellfleet-agent/agent-refresh.txt";
-const TOKEN_EXPIRY_PATH: &str = "/var/lib/shellfleet-agent/agent-token-expiry.txt";
 /// Refresh proactively when the access token has less than this long to
 /// live, so a normal reconnect doesn't pay a 401→refresh round-trip.
 const REFRESH_PROACTIVE_SECS: i64 = 300;
@@ -139,50 +182,6 @@ const MAX_WS_MESSAGE_BYTES: usize = 2 * 1_048_576;
 /// server. A full queue makes the producer drop the message instead of
 /// allocating indefinitely while a peer is slow or unreachable.
 const OUTGOING_QUEUE_CAPACITY: usize = 256;
-
-#[cfg(unix)]
-fn read_secret_file(path: &str) -> std::io::Result<String> {
-    use std::io::Read as _;
-    use std::os::unix::fs::OpenOptionsExt;
-
-    let file = std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(path)?;
-    if !file.metadata()?.file_type().is_file() {
-        return Err(std::io::Error::other(
-            "credential path is not a regular file",
-        ));
-    }
-    let mut value = String::new();
-    file.take(16 * 1024).read_to_string(&mut value)?;
-    Ok(value)
-}
-
-#[cfg(not(unix))]
-fn read_secret_file(path: &str) -> std::io::Result<String> {
-    std::fs::read_to_string(path)
-}
-
-fn read_token() -> Option<String> {
-    read_secret_file(TOKEN_PATH)
-        .ok()
-        .map(|t| t.trim().to_string())
-        .filter(|t| !t.is_empty())
-}
-
-fn read_refresh_token() -> Option<String> {
-    read_secret_file(REFRESH_TOKEN_PATH)
-        .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-}
-
-fn read_token_expiry() -> Option<i64> {
-    read_secret_file(TOKEN_EXPIRY_PATH)
-        .ok()
-        .and_then(|s| s.trim().parse::<i64>().ok())
-}
 
 fn now_unix() -> i64 {
     std::time::SystemTime::now()
@@ -240,25 +239,73 @@ fn build_agent_tls_client_config() -> Option<Arc<rustls::ClientConfig>> {
     Some(Arc::new(config))
 }
 
-#[cfg(unix)]
-fn assert_unprivileged_runtime() {
-    if unsafe { libc::geteuid() } == 0 {
-        eprintln!(
-            "shellfleet-agent refuses to run as root; use the separate approval gate for trusted root operations"
-        );
-        std::process::exit(78);
-    }
-    if let Ok(status) = std::fs::read_to_string("/proc/self/status") {
-        let effective = status
-            .lines()
-            .find_map(|line| line.strip_prefix("CapEff:\t"))
-            .and_then(|hex| u64::from_str_radix(hex.trim(), 16).ok())
-            .unwrap_or(0);
-        if effective != 0 {
-            eprintln!("shellfleet-agent refuses to run with effective Linux capabilities");
-            std::process::exit(78);
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AgentRuntimeMode {
+    Managed,
+    Restricted,
+}
+
+impl AgentRuntimeMode {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Managed => "managed",
+            Self::Restricted => "restricted",
         }
     }
+}
+
+fn parse_runtime_mode(value: Option<&str>) -> Result<AgentRuntimeMode, String> {
+    match value {
+        None | Some("managed") => Ok(AgentRuntimeMode::Managed),
+        Some("restricted") => Ok(AgentRuntimeMode::Restricted),
+        Some(value) => Err(format!(
+            "invalid SHELLFLEET_AGENT_MODE={value:?}; expected managed or restricted"
+        )),
+    }
+}
+
+fn validate_runtime(
+    mode: AgentRuntimeMode,
+    effective_uid: u32,
+    effective_capabilities: u64,
+    in_docker_group: bool,
+) -> Result<(), String> {
+    match mode {
+        AgentRuntimeMode::Managed if effective_uid != 0 => {
+            Err("managed mode requires root; use shellfleet-agent-mode to change modes".into())
+        }
+        AgentRuntimeMode::Managed => Ok(()),
+        AgentRuntimeMode::Restricted if effective_uid == 0 => Err(
+            "restricted mode refuses root; use the packaged managed mode for host administration"
+                .into(),
+        ),
+        AgentRuntimeMode::Restricted if effective_capabilities != 0 => {
+            Err("restricted mode refuses effective Linux capabilities".into())
+        }
+        AgentRuntimeMode::Restricted if in_docker_group => {
+            Err("restricted mode refuses membership in the root-equivalent docker group".into())
+        }
+        AgentRuntimeMode::Restricted => Ok(()),
+    }
+}
+
+#[cfg(unix)]
+fn assert_runtime_mode() -> AgentRuntimeMode {
+    let configured = std::env::var("SHELLFLEET_AGENT_MODE").ok();
+    let mode = parse_runtime_mode(configured.as_deref()).unwrap_or_else(|error| {
+        eprintln!("shellfleet-agent runtime configuration error: {error}");
+        std::process::exit(78);
+    });
+    let effective_uid = unsafe { libc::geteuid() };
+    let effective_capabilities = std::fs::read_to_string("/proc/self/status")
+        .ok()
+        .and_then(|status| {
+            status
+                .lines()
+                .find_map(|line| line.strip_prefix("CapEff:\t"))
+                .and_then(|hex| u64::from_str_radix(hex.trim(), 16).ok())
+        })
+        .unwrap_or(0);
     let docker_gid = std::fs::read_to_string("/etc/group")
         .ok()
         .and_then(|groups| {
@@ -269,28 +316,41 @@ fn assert_unprivileged_runtime() {
                     .flatten()
             })
         });
-    if let Some(docker_gid) = docker_gid {
+    let in_docker_group = docker_gid.is_some_and(|docker_gid| {
         let count = unsafe { libc::getgroups(0, std::ptr::null_mut()) };
-        if count > 0 {
-            let mut groups = vec![0 as libc::gid_t; count as usize];
-            let read = unsafe { libc::getgroups(count, groups.as_mut_ptr()) };
-            if read > 0 && groups[..read as usize].contains(&docker_gid) {
-                eprintln!(
-                    "shellfleet-agent refuses membership in the root-equivalent docker group"
-                );
-                std::process::exit(78);
-            }
+        if count <= 0 {
+            return false;
         }
-    }
+        let mut groups = vec![0 as libc::gid_t; count as usize];
+        let read = unsafe { libc::getgroups(count, groups.as_mut_ptr()) };
+        read > 0 && groups[..read as usize].contains(&docker_gid)
+    });
+    validate_runtime(mode, effective_uid, effective_capabilities, in_docker_group).unwrap_or_else(
+        |error| {
+            eprintln!("shellfleet-agent runtime policy rejected startup: {error}");
+            std::process::exit(78);
+        },
+    );
+    mode
 }
 
 #[cfg(not(unix))]
-fn assert_unprivileged_runtime() {}
+fn assert_runtime_mode() -> AgentRuntimeMode {
+    parse_runtime_mode(std::env::var("SHELLFLEET_AGENT_MODE").ok().as_deref())
+        .unwrap_or_else(|error| panic!("shellfleet-agent runtime configuration error: {error}"))
+}
 
 async fn drift_config_fingerprint(path: &str) -> Option<shared::DriftConfigFile> {
     let safe_path = config::check_read(path).ok()?;
-    let meta = tokio::fs::metadata(&safe_path).await.ok()?;
-    let content = tokio::fs::read(&safe_path).await.ok()?;
+    fingerprint_config_file(path, &safe_path).await
+}
+
+async fn fingerprint_config_file(
+    requested_path: &str,
+    resolved_path: &std::path::Path,
+) -> Option<shared::DriftConfigFile> {
+    let meta = tokio::fs::metadata(resolved_path).await.ok()?;
+    let content = tokio::fs::read(resolved_path).await.ok()?;
     use sha2::Digest;
     let hash = format!("{:x}", sha2::Sha256::digest(&content));
     let mtime = meta
@@ -300,14 +360,14 @@ async fn drift_config_fingerprint(path: &str) -> Option<shared::DriftConfigFile>
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
     Some(shared::DriftConfigFile {
-        path: path.to_string(),
+        path: requested_path.to_string(),
         hash,
         size: meta.len(),
         mtime,
     })
 }
 
-async fn pair(api_url: &str) -> String {
+async fn pair(api_url: &str, credentials: &credentials::CredentialStore) -> String {
     let client = reqwest::Client::new();
 
     println!("Requesting device authorization...");
@@ -344,7 +404,15 @@ async fn pair(api_url: &str) -> String {
                         expires_in,
                     } => {
                         println!("Agent successfully authorized!");
-                        persist_token_triple(&access_token, refresh_token.as_deref(), expires_in);
+                        if let Err(error) = persist_token_triple(
+                            credentials,
+                            &access_token,
+                            refresh_token.as_deref(),
+                            expires_in,
+                        ) {
+                            eprintln!("failed to persist agent credentials: {error}");
+                            std::process::exit(1);
+                        }
                         return access_token;
                     }
                     DeviceTokenResponse::Error { error } => {
@@ -360,31 +428,28 @@ async fn pair(api_url: &str) -> String {
 }
 
 /// Persist the access token, refresh token, and access-token expiry to
-/// their respective 0600 files. The refresh token + expiry are absent on
-/// legacy servers; when missing we simply don't write those files and the
-/// agent falls back to the pre-rotation behaviour for that session.
-fn persist_token_triple(access: &str, refresh: Option<&str>, expires_in: Option<i64>) {
-    if let Err(error) = write_token_secure(TOKEN_PATH, access) {
-        eprintln!("failed to persist agent access token: {error}");
-    }
-    if let Some(refresh) = refresh {
-        if let Err(error) = write_secret_file(REFRESH_TOKEN_PATH, refresh) {
-            eprintln!("failed to persist agent refresh token: {error}");
-        }
-    }
-    if let Some(expires_in) = expires_in {
-        let expiry = now_unix().saturating_add(expires_in);
-        if let Err(error) = write_secret_file(TOKEN_EXPIRY_PATH, &expiry.to_string()) {
-            eprintln!("failed to persist agent token expiry: {error}");
-        }
-    }
+/// their respective 0600 files. A legacy server can omit refresh material; in
+/// that case stale rotation files are removed before committing the access
+/// token.
+fn persist_token_triple(
+    credentials: &credentials::CredentialStore,
+    access: &str,
+    refresh: Option<&str>,
+    expires_in: Option<i64>,
+) -> std::io::Result<()> {
+    let expires_at = expires_in.map(|seconds| now_unix().saturating_add(seconds));
+    credentials.persist(access, refresh, expires_at)
 }
 
 /// Exchange a refresh token for a fresh access + refresh pair.
 /// On success, persists the new triple and returns the new access token.
 /// Returns `None` on any failure (network, `invalid_grant`, missing
 /// refresh token in the response) so the caller can force a re-pair.
-async fn refresh_token_pair(api_url: &str, refresh: &str) -> Option<String> {
+async fn refresh_token_pair(
+    api_url: &str,
+    refresh: &str,
+    credentials: &credentials::CredentialStore,
+) -> Option<String> {
     let client = reqwest::Client::new();
     let res = client
         .post(format!("{}/api/device/refresh", api_url))
@@ -403,10 +468,58 @@ async fn refresh_token_pair(api_url: &str, refresh: &str) -> Option<String> {
             refresh_token,
             expires_in,
         } => {
-            persist_token_triple(&access_token, refresh_token.as_deref(), expires_in);
+            if let Err(error) = persist_token_triple(
+                credentials,
+                &access_token,
+                refresh_token.as_deref(),
+                expires_in,
+            ) {
+                eprintln!("failed to persist refreshed agent credentials: {error}");
+                return None;
+            }
             Some(access_token)
         }
         DeviceTokenResponse::Error { .. } => None,
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PairingMode {
+    RequireExisting,
+    Always,
+    IfNeeded,
+}
+
+fn pairing_mode(args: &[String]) -> PairingMode {
+    if args.iter().any(|arg| arg == "--pair" || arg == "pair") {
+        PairingMode::Always
+    } else if args.iter().any(|arg| arg == "--pair-if-needed") {
+        PairingMode::IfNeeded
+    } else {
+        PairingMode::RequireExisting
+    }
+}
+
+fn should_pair_after_rejection(
+    mode: PairingMode,
+    status: Option<tokio_tungstenite::tungstenite::http::StatusCode>,
+) -> bool {
+    mode == PairingMode::IfNeeded
+        && status == Some(tokio_tungstenite::tungstenite::http::StatusCode::UNAUTHORIZED)
+}
+
+fn should_refresh_after_rejection(
+    status: Option<tokio_tungstenite::tungstenite::http::StatusCode>,
+) -> bool {
+    status == Some(tokio_tungstenite::tungstenite::http::StatusCode::UNAUTHORIZED)
+}
+
+fn websocket_rejection_status(
+    error: &tokio_tungstenite::tungstenite::Error,
+) -> Option<tokio_tungstenite::tungstenite::http::StatusCode> {
+    match error {
+        tokio_tungstenite::tungstenite::Error::Http(response) => Some(response.status()),
+        _ => None,
     }
 }
 
@@ -418,9 +531,19 @@ async fn main() {
     // harmlessly if already installed, hence the ignored result.
     let _ = rustls::crypto::ring::default_provider().install_default();
 
-    let args: Vec<String> = std::env::args().collect();
-    let is_pair = args.iter().any(|a| a == "--pair" || a == "pair");
-    assert_unprivileged_runtime();
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let pairing_mode = pairing_mode(&args);
+    let runtime_mode = assert_runtime_mode();
+    println!("agent runtime mode: {}", runtime_mode.as_str());
+
+    let credentials = credentials::CredentialStore::default();
+    let stored_token = match credentials.access_token() {
+        Ok(token) => token,
+        Err(error) => {
+            eprintln!("Failed to read agent credentials: {error}");
+            std::process::exit(1);
+        }
+    };
 
     let api_url = std::env::var("SERVER_API_URL")
         .unwrap_or_else(|_| "https://dashboard.example.com".to_string());
@@ -429,13 +552,15 @@ async fn main() {
     // is how an operator recovers from revoked credentials; preferring the
     // stale token here would silently start the normal connection path and
     // make `--pair` ineffective.
-    let mut token = if is_pair {
-        pair(&api_url).await
-    } else if let Some(t) = read_token() {
-        t
-    } else {
-        eprintln!("No agent token found. Run `sudo shellfleet-agent-pair` to pair this host.");
-        std::process::exit(1);
+    let (mut token, mut automatic_repair_available) = match (pairing_mode, stored_token) {
+        (PairingMode::Always, _) => (pair(&api_url, &credentials).await, false),
+        (PairingMode::IfNeeded, None) => (pair(&api_url, &credentials).await, false),
+        (PairingMode::IfNeeded, Some(token)) => (token, true),
+        (PairingMode::RequireExisting, Some(token)) => (token, false),
+        (PairingMode::RequireExisting, None) => {
+            eprintln!("No agent token found. Run `sudo shellfleet-agent-pair` to pair this host.");
+            std::process::exit(1);
+        }
     };
 
     // Proactive refresh. If we hold a refresh token and the access
@@ -444,12 +569,18 @@ async fn main() {
     // rotate now so the WS upgrade doesn't fail with a stale token.
     // Refresh failure here is non-fatal: the connect loop below gets one
     // reactive retry before giving up.
-    if let Some(refresh) = read_refresh_token() {
-        let expiry = read_token_expiry();
+    if let Some(refresh) = credentials.refresh_token().unwrap_or_else(|error| {
+        eprintln!("Failed to read agent refresh token: {error}");
+        None
+    }) {
+        let expiry = credentials.token_expiry().unwrap_or_else(|error| {
+            eprintln!("Failed to read agent token expiry: {error}");
+            None
+        });
         let stale = expiry.is_none_or(|e| e - now_unix() < REFRESH_PROACTIVE_SECS);
         if stale {
             println!("Access token near expiry, refreshing before connect...");
-            if let Some(new_token) = refresh_token_pair(&api_url, &refresh).await {
+            if let Some(new_token) = refresh_token_pair(&api_url, &refresh, &credentials).await {
                 token = new_token;
             }
         }
@@ -475,10 +606,10 @@ async fn main() {
     // is only on the upgrade exchange and is dropped from the
     // persistent WS frames that follow.
     //
-    // If the upgrade fails (typically a 401 from an expired access
-    // token), attempt one refresh-token rotation and retry the connect
-    // once. A second failure, or a refresh failure, exits so systemd
-    // restarts us / the operator re-pairs.
+    // If the upgrade fails (typically a 401 from an expired access token),
+    // attempt one refresh-token rotation. Container deployments in
+    // pair-if-needed mode may then repair a rejected credential with one fresh
+    // device authorization; native service startup remains operator-driven.
     let connect_timeout = Duration::from_secs(30);
     let mut refreshed = false;
     let ws_stream = 'connect: loop {
@@ -526,15 +657,32 @@ async fn main() {
         match tokio::time::timeout(connect_timeout, handshake).await {
             Ok(Ok((stream, _))) => break 'connect stream,
             Ok(Err(e)) => {
-                if !refreshed {
-                    if let Some(refresh) = read_refresh_token() {
+                let rejection_status = websocket_rejection_status(&e);
+                if !refreshed && should_refresh_after_rejection(rejection_status) {
+                    if let Some(refresh) = credentials.refresh_token().unwrap_or_else(|error| {
+                        eprintln!("Failed to read agent refresh token: {error}");
+                        None
+                    }) {
                         println!("WS connect failed ({e}); refreshing token and retrying once...");
-                        if let Some(new_token) = refresh_token_pair(&api_url, &refresh).await {
+                        if let Some(new_token) =
+                            refresh_token_pair(&api_url, &refresh, &credentials).await
+                        {
                             token = new_token;
                             refreshed = true;
                             continue 'connect;
                         }
                     }
+                }
+                if automatic_repair_available
+                    && should_pair_after_rejection(pairing_mode, rejection_status)
+                {
+                    println!(
+                        "Stored agent credentials were rejected; requesting fresh device authorization..."
+                    );
+                    automatic_repair_available = false;
+                    token = pair(&api_url, &credentials).await;
+                    refreshed = false;
+                    continue 'connect;
                 }
                 eprintln!(
                     "Failed to connect to server: {e}. Re-pair this agent: sudo shellfleet-agent-pair"

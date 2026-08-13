@@ -116,6 +116,9 @@ jobs:
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             VER="${GITHUB_REF##refs/tags/}"
             DEST+=("${REGISTRY}/${IMAGE_NAME}:${VER}")
+            # Chart.appVersion intentionally omits the conventional leading
+            # `v`, so publish both spellings from the same immutable manifest.
+            DEST+=("${REGISTRY}/${IMAGE_NAME}:${VER#v}")
             DEST+=("${REGISTRY}/${IMAGE_NAME}:latest")
           elif [[ "${GITHUB_REF}" == refs/heads/main ]]; then
             DEST+=("${REGISTRY}/${IMAGE_NAME}:main")

@@ -129,9 +129,9 @@ fn enroll_approver(path: &std::path::Path, id: &str, encoded: &str) -> Result<()
 async fn handle(stream: UnixStream, state: Arc<GateState>) -> Result<(), String> {
     let uid = peer::peer_uid(&stream)?;
     let expected = peer::configured_agent_uid()?;
-    if uid != expected {
+    if !peer::authorized_agent_uid(uid, expected) {
         return Err(format!(
-            "approval-gate peer uid {uid} is not agent uid {expected}"
+            "approval-gate peer uid {uid} is neither managed root nor restricted agent uid {expected}"
         ));
     }
     let (mut reader, mut writer) = stream.into_split();

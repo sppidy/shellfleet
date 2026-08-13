@@ -50,6 +50,7 @@ const DENY_PREFIXES: &[&str] = &[
     "/etc/ssl/private/",
     "/etc/kubernetes/",
     "/etc/shellfleet/agent-token",
+    "/var/lib/shellfleet-agent/",
     "/root/",
     "/home/.ssh/",
     "/proc/",
@@ -372,10 +373,16 @@ mod tests {
 
     #[test]
     fn blocks_agent_token() {
-        assert!(matches!(
-            check("/etc/shellfleet/agent-token.txt"),
-            Err(PathError::BlockedByDenyList(_))
-        ));
+        for path in [
+            "/etc/shellfleet/agent-token.txt",
+            "/var/lib/shellfleet-agent/agent-token.txt",
+            "/var/lib/shellfleet-agent/agent-refresh.txt",
+        ] {
+            assert!(
+                matches!(check(path), Err(PathError::BlockedByDenyList(_))),
+                "should block {path}"
+            );
+        }
     }
 
     #[test]

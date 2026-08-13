@@ -27,6 +27,10 @@ if runuser -u shellfleet -- sh -c '
     set -a
     . /etc/shellfleet/env
     set +a
+    # Pairing deliberately stays unprivileged in both service modes. Do not
+    # let an operator-edited env file override this runtime contract.
+    SHELLFLEET_AGENT_MODE=restricted
+    export SHELLFLEET_AGENT_MODE
     exec /usr/bin/shellfleet-agent --pair
 '; then
     systemctl restart shellfleet-agent.service

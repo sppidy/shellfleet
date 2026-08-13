@@ -6,8 +6,13 @@ Requires=shellfleet-approval-gate.service
 
 [Service]
 Type=simple
-User=shellfleet
-Group=shellfleet
+# Native installs are host-management agents. Managed mode is deliberately
+# root-equivalent so the typed dashboard controls can perform the same work an
+# administrator would otherwise do over SSH. Operators who want an observation
+# plane can switch atomically with `shellfleet-agent-mode restricted`.
+User=root
+Group=root
+Environment=SHELLFLEET_AGENT_MODE=managed
 
 ExecStart=/usr/bin/shellfleet-agent
 
@@ -15,42 +20,29 @@ ExecStart=/usr/bin/shellfleet-agent
 # go in /etc/shellfleet/env. A bind mount of /etc lets the config editor see
 # host configs even on systems with strict ProtectHome/ProtectSystem defaults.
 EnvironmentFile=-/etc/shellfleet/env
-# Created only by `shellfleet-docker-proxy enable`. Keeping this separate from
-# the operator's general configuration makes Docker access an explicit opt-in.
+# Created only by `shellfleet-docker-proxy enable`. Restricted mode uses the
+# proxy for explicit Docker delegation; managed mode can use it or the normal
+# local Docker socket.
 EnvironmentFile=-/etc/shellfleet/docker-proxy.env
 
 Restart=on-failure
 RestartSec=5s
 
+# Keep controls that do not contradict package management, config editing,
+# backup/restore, Docker, systemd, or the explicitly authorized root terminal.
 NoNewPrivileges=true
-CapabilityBoundingSet=
-AmbientCapabilities=
-PrivateTmp=true
-PrivateDevices=true
-# Interactive sessions need a pseudoterminal, but no other host device nodes.
-BindPaths=/dev/pts
-ProtectSystem=strict
-ProtectHome=yes
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectKernelLogs=true
 ProtectControlGroups=true
 ProtectClock=true
 ProtectHostname=true
-ProtectProc=invisible
-# ProcSubset=pid hides /proc/meminfo, loadavg, uptime, and cpuinfo, which
-# are the agent's own host telemetry inputs. ProtectProc still hides other
-# users' processes.
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 RestrictNamespaces=true
 RestrictRealtime=true
-RestrictSUIDSGID=true
 LockPersonality=true
-MemoryDenyWriteExecute=true
 SystemCallArchitectures=native
 UMask=0077
-ReadWritePaths=/var/lib/shellfleet-agent
-AppArmorProfile=-shellfleet-agent
 
 [Install]
 WantedBy=multi-user.target
