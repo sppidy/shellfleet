@@ -1,18 +1,5 @@
 import type { Metadata } from "next";
-import { JetBrains_Mono, Inter } from "next/font/google";
 import "./globals.css";
-
-const jetbrainsMono = JetBrains_Mono({
-  variable: "--font-mono-google",
-  subsets: ["latin"],
-  weight: ["300", "400", "500", "600", "700"],
-});
-
-const inter = Inter({
-  variable: "--font-sans-google",
-  subsets: ["latin"],
-  weight: ["400", "500", "600", "700"],
-});
 
 export const metadata: Metadata = {
   title: "ShellFleet",
@@ -37,7 +24,7 @@ export default function RootLayout({
       data-theme="dark"
       data-accent="green"
       data-density="dense"
-      className={`${jetbrainsMono.variable} ${inter.variable} antialiased`}
+      className="antialiased"
     >
       <body>
         <UiProvider>
