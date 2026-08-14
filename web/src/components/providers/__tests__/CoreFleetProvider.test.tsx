@@ -193,6 +193,27 @@ describe('CoreFleetProvider', () => {
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
+  it('periodically reconciles durable state when an EventSource silently stalls', async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn().mockResolvedValue(fleetResponse([host('node-a-id', 'online')]));
+    vi.stubGlobal('fetch', fetchMock);
+    render(
+      <CoreFleetProvider>
+        <Probe />
+      </CoreFleetProvider>,
+    );
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(fetchMock).toHaveBeenCalledOnce();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it('closes the stream and clears fleet state when the session ends', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(fleetResponse([host('node-a-id')])));
     const view = render(
