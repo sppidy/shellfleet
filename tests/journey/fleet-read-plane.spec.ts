@@ -24,6 +24,17 @@ test('Fleet remains durable across reload, disconnect, SSE loss, and reconnect',
   await expect(hostRow).toContainText('online', { timeout: 30_000 });
   await expect(page.getByText('1 reporting')).toBeVisible({ timeout: 30_000 });
 
+  const fleetShell = page.getByRole('region', { name: 'Fleet Shell' });
+  const shellInput = fleetShell.getByRole('combobox', { name: 'Fleet Shell command' });
+  await expect(fleetShell).toBeVisible();
+  await shellInput.fill('stats');
+  await shellInput.press('Enter');
+  await expect(fleetShell.getByText(/FLEET 1\/1 online/)).toBeVisible();
+  await shellInput.fill('use journey-agent');
+  await shellInput.press('Enter');
+  await expect(fleetShell.getByText('context set to journey-agent')).toBeVisible();
+  await expect(fleetShell.getByText('[journey-agent] $')).toBeVisible();
+
   await page.reload();
   await expect(hostRow).toContainText('online');
   const initialFleet = await page.request.get('/api/core/v1/fleet');
@@ -37,6 +48,9 @@ test('Fleet remains durable across reload, disconnect, SSE loss, and reconnect',
   await expect(hostRow).toContainText('offline', { timeout: 50_000 });
   await expect(hostRow).toContainText('journey-agent');
   await expect(hostRow.getByRole('cell').nth(2)).not.toHaveText('—');
+  await shellInput.fill('stats journey-agent');
+  await shellInput.press('Enter');
+  await expect(fleetShell.getByText(/HOST journey-agent\s+OFFLINE/)).toBeVisible();
 
   await page.route('**/api/core/v1/events', (route) => route.abort('failed'));
   await page.reload();
