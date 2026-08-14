@@ -166,6 +166,15 @@ describe('WebSocketProvider', () => {
     expect(MockWebSocket.instances).toHaveLength(2);
   });
 
+  it('still probes the real transport when navigator.onLine is stale', () => {
+    vi.spyOn(window.navigator, 'onLine', 'get').mockReturnValue(false);
+
+    renderProvider();
+
+    expect(MockWebSocket.instances).toHaveLength(1);
+    expect(MockWebSocket.instances[0].url).toBe('ws://localhost:3000/ui/ws');
+  });
+
   it('ignores late messages from a retired socket generation', () => {
     renderProvider();
     const first = MockWebSocket.instances[0];

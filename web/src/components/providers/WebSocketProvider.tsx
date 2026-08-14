@@ -167,11 +167,7 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
     };
 
     const scheduleReconnect = () => {
-      if (
-        disposed ||
-        reconnectTimer.current !== null ||
-        (typeof navigator !== 'undefined' && navigator.onLine === false)
-      ) {
+      if (disposed || reconnectTimer.current !== null) {
         return;
       }
       const delay = reconnectDelay(reconnectAttempt.current);
@@ -198,10 +194,7 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
     };
 
     const connect = () => {
-      if (
-        disposed ||
-        (typeof navigator !== 'undefined' && navigator.onLine === false)
-      ) {
+      if (disposed) {
         return;
       }
       const current = wsRef.current;
@@ -298,9 +291,7 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
     };
 
     const recoverNow = () => {
-      if (disposed || (typeof navigator !== 'undefined' && navigator.onLine === false)) {
-        return;
-      }
+      if (disposed) return;
       clearReconnectTimer();
       const ws = wsRef.current;
       if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
@@ -319,13 +310,13 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
     const handleVisibility = () => {
       if (document.visibilityState === 'visible') recoverNow();
     };
-    const handleOffline = () => {
-      const ws = wsRef.current;
-      if (ws) retire(ws);
-    };
 
+    // `navigator.onLine` and the corresponding `offline` event are only
+    // connectivity hints. Mobile browsers, VPNs, and captive portals can
+    // report offline while same-origin HTTP is already succeeding. Let the
+    // actual WebSocket handshake decide reachability; failed attempts remain
+    // bounded by the reconnect backoff.
     window.addEventListener('online', recoverNow);
-    window.addEventListener('offline', handleOffline);
     document.addEventListener('visibilitychange', handleVisibility);
 
     connect();
@@ -333,7 +324,6 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
     return () => {
       disposed = true;
       window.removeEventListener('online', recoverNow);
-      window.removeEventListener('offline', handleOffline);
       document.removeEventListener('visibilitychange', handleVisibility);
       clearReconnectTimer();
       clearConnectionTimers();

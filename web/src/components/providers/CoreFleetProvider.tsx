@@ -145,9 +145,10 @@ export function CoreFleetProvider({ children }: { children: React.ReactNode }) {
     // A low-frequency reconciliation bounds stale fleet state even when no
     // `error` event is delivered. Active SSE updates remain coalesced by load().
     const fallbackPoll = setInterval(load, FALLBACK_POLL_INTERVAL_MS);
-    const recoverNow = () => {
-      if (typeof navigator === 'undefined' || navigator.onLine !== false) load();
-    };
+    // `navigator.onLine` is advisory and is known to be stale on some mobile
+    // and VPN paths. A real same-origin fetch is the reliable reachability
+    // probe, and load() already coalesces overlapping attempts.
+    const recoverNow = () => load();
     const handleVisibility = () => {
       if (document.visibilityState === 'visible') recoverNow();
     };

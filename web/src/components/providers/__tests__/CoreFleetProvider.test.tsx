@@ -214,6 +214,23 @@ describe('CoreFleetProvider', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it('refreshes on visibility recovery even when navigator.onLine is stale', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(fleetResponse([host('node-a-id', 'online')]));
+    vi.stubGlobal('fetch', fetchMock);
+    vi.spyOn(window.navigator, 'onLine', 'get').mockReturnValue(false);
+    render(
+      <CoreFleetProvider>
+        <Probe />
+      </CoreFleetProvider>,
+    );
+
+    expect(await screen.findByText('node-a-id:online')).toBeInTheDocument();
+    vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+    act(() => document.dispatchEvent(new Event('visibilitychange')));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+  });
+
   it('closes the stream and clears fleet state when the session ends', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(fleetResponse([host('node-a-id')])));
     const view = render(
