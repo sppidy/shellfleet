@@ -153,6 +153,12 @@ The browser uses:
 
 SSE disconnection shows stale-state age and reconnect status but does not clear displayed data. A page refresh always reconstructs the product from REST and SQLite.
 
+Transport liveness is established by actual REST, SSE, and WebSocket outcomes.
+Browser connectivity hints such as `navigator.onLine` may accelerate recovery,
+but must never suppress a connection attempt; mobile radios, VPNs, and captive
+portals can report stale connectivity state while the application origin is
+already reachable.
+
 ### 7.4 Agent transport and identity
 
 The agent makes one outbound connection to the canonical public HTTPS origin. No inbound host port is required.
