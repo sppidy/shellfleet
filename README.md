@@ -144,6 +144,11 @@ uses `/ui/ws` only for interactive control and streaming operations. A transient
 browser WebSocket failure therefore does not erase the fleet or hide Docker and
 Swarm capabilities.
 
+When the dashboard is proxied through Cloudflare, keep WebSockets enabled and
+disable Rocket Loader (or any equivalent script-order rewriter) for the
+ShellFleet application hostname. Next.js owns module execution order; rewriting
+those scripts can prevent authenticated transport providers from starting.
+
 ## Security
 
 GitHub OAuth with optional per-user TOTP 2FA; two roles (admin / viewer)
