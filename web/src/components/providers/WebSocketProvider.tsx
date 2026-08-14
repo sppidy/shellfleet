@@ -20,6 +20,8 @@ type AgentMessageHandler = (msg: AgentMessagePayload) => void;
 
 interface WebSocketContextValue {
   agents: string[];
+  /** Agents currently reachable through the interactive WebSocket. */
+  liveAgents: string[];
   /**
    * agent_id → capability list. Empty list means a pre-v15 agent that
    * registered before capability advertisement was added; the dashboard
@@ -212,6 +214,7 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
     <WebSocketContext.Provider
       value={{
         agents: directory.agents,
+        liveAgents: socketAgents,
         agentCapabilities: directory.capabilities,
         isConnected,
         sendMessage,

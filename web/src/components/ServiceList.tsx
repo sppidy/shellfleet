@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useWebSocket } from './providers/WebSocketProvider';
+import { useCoreFleet } from './providers/CoreFleetProvider';
 import { useCanWrite } from './providers/SessionProvider';
 import { ServiceInfo } from '@/lib/types';
 import { Loader2Icon } from 'lucide-react';
@@ -14,9 +15,10 @@ const REFRESH_INTERVAL_MS = 15_000;
 const REQUEST_TIMEOUT_MS = 10_000;
 
 export default function ServiceList({ agentId }: { agentId: string }) {
-  const { sendToAgent, onAgentMessage, isConnected } = useWebSocket();
+  const { sendToAgent, onAgentMessage, isConnected, liveAgents } = useWebSocket();
+  const { snapshots } = useCoreFleet();
   const canWrite = useCanWrite();
-  const [services, setServices] = useState<ServiceInfo[] | null>(null);
+  const [liveServices, setLiveServices] = useState<ServiceInfo[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState('');
   const [stateFilter, setStateFilter] = useState<'all' | 'active' | 'failed' | 'inactive'>('all');
@@ -25,19 +27,29 @@ export default function ServiceList({ agentId }: { agentId: string }) {
   const [logUnit, setLogUnit] = useState<string | null>(null);
 
   const requestTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const durableServices = snapshots[agentId]?.services ?? null;
+  const services = liveServices ?? durableServices;
+  const hasDurableServices = durableServices !== null;
+  const isAgentLive = isConnected && liveAgents.includes(agentId);
 
   const requestList = useCallback(() => {
+    if (!isAgentLive) {
+      setError(null);
+      return;
+    }
     setError(null);
     sendToAgent(agentId, { type: 'ListServicesRequest' });
     if (requestTimer.current) clearTimeout(requestTimer.current);
     requestTimer.current = setTimeout(() => {
-      setError('Agent did not respond in time. Retrying…');
+      setError(hasDurableServices
+        ? 'Live refresh timed out. Showing the latest durable service snapshot.'
+        : 'Agent did not respond in time. Retrying…');
       sendToAgent(agentId, { type: 'ListServicesRequest' });
     }, REQUEST_TIMEOUT_MS);
-  }, [agentId, sendToAgent]);
+  }, [agentId, hasDurableServices, isAgentLive, sendToAgent]);
 
   useEffect(() => {
-    setServices(null);
+    setLiveServices(null);
     setError(null);
     setPending({});
 
@@ -47,7 +59,7 @@ export default function ServiceList({ agentId }: { agentId: string }) {
           clearTimeout(requestTimer.current);
           requestTimer.current = null;
         }
-        setServices(msg.payload.services);
+        setLiveServices(msg.payload.services);
         setError(null);
       } else if (msg.type === 'ControlServiceResponse') {
         const { name, success, error: err } = msg.payload;
@@ -65,6 +77,8 @@ export default function ServiceList({ agentId }: { agentId: string }) {
       }
     });
 
+    if (!isAgentLive) return unsubscribe;
+
     requestList();
     const interval = setInterval(requestList, REFRESH_INTERVAL_MS);
 
@@ -76,7 +90,7 @@ export default function ServiceList({ agentId }: { agentId: string }) {
         requestTimer.current = null;
       }
     };
-  }, [agentId, onAgentMessage, requestList]);
+  }, [agentId, isAgentLive, onAgentMessage, requestList]);
 
   useEffect(() => {
     if (!toast) return;
@@ -85,6 +99,7 @@ export default function ServiceList({ agentId }: { agentId: string }) {
   }, [toast]);
 
   const handleControl = (name: string, action: Action) => {
+    if (!isAgentLive) return;
     setPending((prev) => ({ ...prev, [name]: action }));
     sendToAgent(agentId, {
       type: 'ControlServiceRequest',
@@ -151,11 +166,19 @@ export default function ServiceList({ agentId }: { agentId: string }) {
               </button>
             ))}
           </div>
-          <button className="btn sm" onClick={requestList} disabled={!isConnected}>
+          <button className="btn sm" onClick={requestList} disabled={!isAgentLive}>
             ↻
           </button>
         </div>
       </div>
+
+      {!isAgentLive && (
+        <div className="live-data-note" role="status">
+          {hasDurableServices
+            ? 'Showing the latest durable service snapshot. Live controls are reconnecting.'
+            : 'Live services are reconnecting. No durable service snapshot is available yet.'}
+        </div>
+      )}
 
       {error && (
         <div
@@ -212,31 +235,32 @@ export default function ServiceList({ agentId }: { agentId: string }) {
                     <td className="actions" style={{ width: 130 }}>
                       <button
                         className="btn sm icon"
-                        title={!canWrite ? 'viewer role: read-only' : 'Start'}
-                        disabled={!!p || !canWrite}
+                        title={!isAgentLive ? 'Live controls are reconnecting' : !canWrite ? 'viewer role: read-only' : 'Start'}
+                        disabled={!!p || !canWrite || !isAgentLive}
                         onClick={() => handleControl(s.name, 'start')}
                       >
                         {p === 'start' ? '…' : '▶'}
                       </button>
                       <button
                         className="btn sm icon"
-                        title={!canWrite ? 'viewer role: read-only' : 'Stop'}
-                        disabled={!!p || !canWrite}
+                        title={!isAgentLive ? 'Live controls are reconnecting' : !canWrite ? 'viewer role: read-only' : 'Stop'}
+                        disabled={!!p || !canWrite || !isAgentLive}
                         onClick={() => handleControl(s.name, 'stop')}
                       >
                         {p === 'stop' ? '…' : '■'}
                       </button>
                       <button
                         className="btn sm icon"
-                        title={!canWrite ? 'viewer role: read-only' : 'Restart'}
-                        disabled={!!p || !canWrite}
+                        title={!isAgentLive ? 'Live controls are reconnecting' : !canWrite ? 'viewer role: read-only' : 'Restart'}
+                        disabled={!!p || !canWrite || !isAgentLive}
                         onClick={() => handleControl(s.name, 'restart')}
                       >
                         {p === 'restart' ? '…' : '↻'}
                       </button>
                       <button
                         className="btn sm icon"
-                        title="journalctl -fu"
+                        title={isAgentLive ? 'journalctl -fu' : 'Live controls are reconnecting'}
+                        disabled={!isAgentLive}
                         onClick={() => setLogUnit(s.name)}
                       >
                         ≡

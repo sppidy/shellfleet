@@ -1,6 +1,6 @@
 'use client';
 
-import { Suspense, useEffect, useState } from 'react';
+import { Suspense, useEffect, useMemo, useState } from 'react';
 import { apiFetch } from '@/lib/api';
 import {
   dockerAvailable as capDockerAvailable,
@@ -102,19 +102,19 @@ export default function Home() {
 function HomeBody() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { isConnected, agents, agentCapabilities } = useWebSocket();
+  const { isConnected, agents, liveAgents, agentCapabilities } = useWebSocket();
   const { user, role, mfaEnabled, status, logout } = useSession();
 
   const agentFromUrl = searchParams.get('agent');
   const tabFromUrl = searchParams.get('tab');
   const dockerFromUrl = searchParams.get('docker');
   const k8sFromUrl = searchParams.get('k8s');
-  const initialAgent =
-    agentFromUrl && agents.includes(agentFromUrl)
-      ? agentFromUrl
-      : agentFromUrl && agents.includes(`${agentFromUrl}-id`)
-        ? `${agentFromUrl}-id`
-        : null;
+  const resolvedAgentFromUrl = useMemo(() => {
+    if (!agentFromUrl) return null;
+    if (agents.includes(agentFromUrl)) return agentFromUrl;
+    const suffixedAgent = `${agentFromUrl}-id`;
+    return agents.includes(suffixedAgent) ? suffixedAgent : null;
+  }, [agentFromUrl, agents]);
   // Resolve `?tab=` against current tabs; redirect legacy docker subtabs
   // (containers/images/...) to the new `docker` parent + the right
   // subtab below.
@@ -133,7 +133,7 @@ function HomeBody() {
     ? (k8sFromUrl as K8sSubtab)
     : 'pods';
 
-  const [selectedAgent, setSelectedAgent] = useState<string | null>(initialAgent);
+  const [selectedAgent, setSelectedAgent] = useState<string | null>(resolvedAgentFromUrl);
   const [activeTab, setActiveTab] = useState<Tab>(initialTab);
   const [dockerSubtab, setDockerSubtab] = useState<DockerSubtab>(initialDockerSub);
   const [k8sSubtab, setK8sSubtab] = useState<K8sSubtab>(initialK8sSub);
@@ -260,16 +260,7 @@ function HomeBody() {
   }, []);
 
   useEffect(() => {
-    if (agentFromUrl === null) {
-      setSelectedAgent(null);
-    } else {
-      const candidate = agents.includes(agentFromUrl)
-        ? agentFromUrl
-        : agents.includes(`${agentFromUrl}-id`)
-          ? `${agentFromUrl}-id`
-          : null;
-      setSelectedAgent(candidate);
-    }
+    setSelectedAgent(agentFromUrl === null ? null : resolvedAgentFromUrl);
     const legacy = tabFromUrl && LEGACY_DOCKER_TABS[tabFromUrl];
     if (legacy) {
       setActiveTab('docker');
@@ -285,8 +276,7 @@ function HomeBody() {
     if (k8sFromUrl && K8S_SUBTABS.includes(k8sFromUrl as K8sSubtab)) {
       setK8sSubtab(k8sFromUrl as K8sSubtab);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [agentFromUrl, tabFromUrl, dockerFromUrl, k8sFromUrl, agents.length]);
+  }, [agentFromUrl, resolvedAgentFromUrl, tabFromUrl, dockerFromUrl, k8sFromUrl]);
 
   useEffect(() => {
     if (status === 'guest') {
@@ -303,6 +293,19 @@ function HomeBody() {
   }, [agents, selectedAgent]);
 
   useEffect(() => {
+    // Preserve a fresh host deep-link until the durable directory has loaded.
+    // Otherwise the initial empty provider state rewrites `/?agent=…` to `/`
+    // before the URL-to-state effect gets a chance to resolve the hostname.
+    if (
+      !selectedAgent &&
+      agentFromUrl &&
+      (
+        agents.length === 0 ||
+        resolvedAgentFromUrl !== null
+      )
+    ) {
+      return;
+    }
     const params = new URLSearchParams();
     if (selectedAgent) {
       params.set('agent', selectedAgent.replace(/-id$/, ''));
@@ -323,7 +326,7 @@ function HomeBody() {
       router.replace(next ? `/?${next}` : '/', { scroll: false });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedAgent, activeTab, dockerSubtab, k8sSubtab]);
+  }, [selectedAgent, activeTab, dockerSubtab, k8sSubtab, agentFromUrl, agents.length, resolvedAgentFromUrl]);
 
   if (status !== 'authed') {
     return (
@@ -334,6 +337,9 @@ function HomeBody() {
   }
 
   const agentLabel = selectedAgent?.replace(/-id$/, '');
+  const selectedAgentLive = selectedAgent
+    ? isConnected && liveAgents.includes(selectedAgent)
+    : false;
   const tabsToShow = TAB_DEFS.filter((t) => {
     if (t.id === 'backups' && !backupsEnabled) return false;
     if (t.id === 'docker' && !dockerAvailable) return false;
@@ -384,9 +390,12 @@ function HomeBody() {
             <div className="brand-name">
               <span className="tilde">~/</span>shellfleet
             </div>
-            <span className={`pill ${isConnected ? 'live' : 'err'}`}>
+            <span
+              className={`pill ${isConnected ? 'live' : 'warn'}`}
+              title={isConnected ? 'Live control channel connected' : 'Live control channel is reconnecting; durable snapshots remain available'}
+            >
               <span className={`dot ${isConnected ? 'pulse' : ''}`} />
-              {isConnected ? 'LIVE' : 'OFFLINE'}
+              {isConnected ? 'LIVE LINK' : 'RECONNECTING'}
             </span>
           </div>
           <div className="brand-meta">
@@ -661,9 +670,12 @@ function HomeBody() {
                   <span className="at">@</span>
                   <span className="host">{agentLabel}</span>
                 </h2>
-                <span className="pill live">
-                  <span className="dot pulse" />
-                  connected
+                <span
+                  className={`pill ${selectedAgentLive ? 'live' : 'warn'}`}
+                  title={selectedAgentLive ? 'Agent is reachable for live controls' : 'Showing durable data while the live control channel reconnects'}
+                >
+                  <span className={`dot ${selectedAgentLive ? 'pulse' : ''}`} />
+                  {selectedAgentLive ? 'connected' : 'snapshot'}
                 </span>
                 <div className="label-row" style={{ marginLeft: 8 }}>
                   <AgentLabels agentId={selectedAgent} />
@@ -685,7 +697,7 @@ function HomeBody() {
               </div>
             </div>
 
-            <div className="scroll" style={{ display: 'flex', flexDirection: 'column' }}>
+            <div className="scroll agent-dashboard-scroll">
               {activeTab === 'dashboard' ? (
                 <HSplitter
                   storageKey="shellfleet.agent-overview.split"
@@ -694,26 +706,18 @@ function HomeBody() {
                   maxLeftPct={80}
                   left={
                     <>
-                      <div style={{ padding: 'var(--pad)', borderBottom: '1px solid var(--line)' }}>
+                      <div className="agent-overview-stats">
                         <SystemStats agentId={selectedAgent} />
                       </div>
                       {systemdAvailable && (
-                        <div style={{ flex: 1, padding: 'var(--pad)', overflowY: 'auto' }}>
+                        <div className="agent-overview-services">
                           <ServiceList agentId={selectedAgent} />
                         </div>
                       )}
                     </>
                   }
                   right={
-                    <div
-                      style={{
-                        display: 'flex',
-                        flexDirection: 'column',
-                        flex: 1,
-                        minHeight: 0,
-                        background: '#06090b',
-                      }}
-                    >
+                    <div className="agent-overview-terminal">
                       <Terminal agentId={selectedAgent} />
                     </div>
                   }
@@ -765,13 +769,6 @@ function HomeBody() {
 
       <CommandPalette onSelectAgent={setSelectedAgent} />
 
-      <style jsx>{`
-        @media (max-width: 900px) {
-          .agent-overview-grid {
-            grid-template-columns: 1fr !important;
-          }
-        }
-      `}</style>
     </div>
   );
 }

@@ -111,12 +111,14 @@ body {
   display: grid;
   grid-template-columns: 240px 1fr;
   height: 100vh;
-  width: 100vw;
+  height: 100dvh;
+  width: 100%;
   overflow: hidden;
 }
 .center-screen {
   width: 100vw;
   height: 100vh;
+  height: 100dvh;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -140,6 +142,63 @@ body {
   flex: 1;
   overflow: auto;
   min-height: 0;
+  -webkit-overflow-scrolling: touch;
+}
+
+.agent-dashboard-scroll {
+  display: flex;
+  flex-direction: column;
+}
+
+/* Desktop selected-host split. The same structure becomes a vertical,
+   document-scrolling workspace at compact and mobile widths below. */
+.h-splitter {
+  display: flex;
+  flex: 1;
+  flex-direction: row;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+.h-splitter-pane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+}
+.h-splitter-pane-right { flex: 1; }
+.h-splitter-handle {
+  position: relative;
+  width: 4px;
+  flex-shrink: 0;
+  cursor: col-resize;
+  background: var(--line);
+  outline: 0;
+}
+.h-splitter-handle:hover,
+.h-splitter-handle:focus-visible { background: var(--accent); }
+.h-splitter-handle > span {
+  position: absolute;
+  inset: 0 -4px;
+}
+.agent-overview-stats {
+  padding: var(--pad);
+  border-bottom: 1px solid var(--line);
+}
+.agent-overview-services {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  padding: var(--pad);
+  overflow-y: auto;
+}
+.agent-overview-terminal {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  background: #06090b;
 }
 
 /* ============== Sidebar ============== */
@@ -567,6 +626,30 @@ body {
   grid-template-columns: repeat(4, 1fr);
   gap: var(--gap);
 }
+.system-stats {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.system-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+.live-data-note {
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--warn-bd);
+  background: var(--warn-bg);
+  color: var(--warn);
+  font-family: var(--mono);
+  font-size: 10.5px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.system-stats > .live-data-note {
+  border: 1px solid var(--warn-bd);
+  border-radius: var(--r);
+}
 @media (max-width: 1100px) {
   .stat-grid { grid-template-columns: repeat(2, 1fr); }
 }
@@ -708,6 +791,19 @@ body {
   animation: sm-blink 1s steps(2) infinite;
   margin-left: 2px;
 }
+.terminal-link-state {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 24px;
+  color: #aab3bd;
+  font-family: var(--mono);
+  font-size: 12px;
+  text-align: center;
+}
 @keyframes sm-blink { 50% { opacity: 0; } }
 
 /* ============== Fleet snapshot shell ============== */
@@ -814,6 +910,11 @@ body {
   color: var(--fg-3);
   font-family: var(--mono);
   font-size: 10px;
+}
+.fleet-shell-completions [role="option"][aria-selected="true"] {
+  border-color: var(--accent-bd);
+  background: var(--accent-bg);
+  color: var(--accent);
 }
 @media (max-width: 700px) {
   .fleet-shell .panel-head { align-items: flex-start; }
@@ -1029,17 +1130,41 @@ body {
 .prog .pct { width: 44px; text-align: right; color: var(--fg-2); }
 
 /* ============== Mobile ============== */
-@media (max-width: 900px) {
+@media (max-width: 1100px) {
   .app-shell { grid-template-columns: 1fr; }
   .sidebar {
     position: fixed; inset-y: 0;
     top: 0; bottom: 0; left: 0;
-    width: 280px;
+    width: min(320px, 88vw);
+    height: 100vh;
+    height: 100dvh;
     z-index: 40;
     transform: translateX(-100%);
     transition: transform 0.2s ease;
+    overflow-y: auto;
+    overscroll-behavior: contain;
   }
   .sidebar.open { transform: translateX(0); }
+  .sidebar .brand {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background: var(--bg-1);
+  }
+  .sidebar .nav-item,
+  .sidebar .agent-row { min-height: 36px; }
+  .sidebar .nav-item { font-size: 13px; }
+  .sidebar .agents-list {
+    flex: none;
+    min-height: auto;
+    overflow: visible;
+  }
+  .sidebar .user-bar {
+    position: sticky;
+    bottom: 0;
+    z-index: 1;
+    background: var(--bg-1);
+  }
   .sidebar-backdrop {
     position: fixed; inset: 0;
     background: rgba(0,0,0,0.55);
@@ -1047,10 +1172,89 @@ body {
     z-index: 30;
   }
   .cmd { display: none; }
+
+  .h-splitter {
+    flex: none;
+    flex-direction: column;
+    overflow: visible;
+  }
+  .h-splitter-pane {
+    width: 100% !important;
+    flex: none;
+    overflow: visible;
+  }
+  .h-splitter-handle { display: none; }
+  .h-splitter-pane-right {
+    height: clamp(360px, 60dvh, 620px);
+    min-height: 360px;
+    overflow: hidden;
+    border-top: 1px solid var(--line);
+  }
+  .agent-overview-services {
+    flex: none;
+    height: clamp(360px, 52dvh, 560px);
+    overflow: hidden;
+  }
+  .system-stats-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
-@media (min-width: 901px) {
+@media (min-width: 1101px) {
   .sidebar-backdrop { display: none; }
   .mobile-only { display: none !important; }
+}
+
+@media (max-width: 700px) {
+  .topbar {
+    height: 48px;
+    padding: 0 8px;
+    gap: 8px;
+  }
+  .topbar .icon-btn {
+    width: 32px;
+    height: 32px;
+  }
+  .topbar-actions { gap: 4px; }
+  .agent-header { padding: 10px 12px 0; }
+  .agent-title { gap: 8px; }
+  .agent-title h2 {
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
+    font-size: 15px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .tabs {
+    margin-left: -12px;
+    margin-right: -12px;
+    padding: 0 12px;
+    scroll-snap-type: x proximity;
+  }
+  .tab { scroll-snap-align: start; }
+  .agent-overview-stats,
+  .agent-overview-services { padding: 10px; }
+  .agent-overview-services .panel-head {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .agent-overview-services .panel-actions { width: 100%; }
+  .agent-overview-services .search-input {
+    width: 100% !important;
+    height: 34px !important;
+  }
+  .agent-overview-services .search-input input,
+  .fleet-shell-form input { font-size: 16px; }
+  .agent-overview-services .seg {
+    max-width: calc(100% - 30px);
+    overflow-x: auto;
+  }
+  .agent-overview-services .seg button {
+    min-width: max-content;
+    height: 32px;
+  }
+  .h-splitter-pane-right {
+    height: max(360px, 58dvh);
+    min-height: 360px;
+  }
 }
 
 /* ============== Legacy Tailwind compat ============== */

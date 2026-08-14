@@ -36,8 +36,9 @@ export default function Terminal({
   sessionId,
   visible = true,
 }: TerminalProps) {
-  const { sendToAgent, onAgentMessage } = useWebSocket();
+  const { sendToAgent, onAgentMessage, isConnected, liveAgents } = useWebSocket();
   const canWrite = useCanWrite();
+  const isAgentLive = isConnected && liveAgents.includes(agentId);
   const wrapperRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<XTerm | null>(null);
@@ -54,6 +55,7 @@ export default function Terminal({
 
   useEffect(() => {
     if (!canWrite) return;
+    if (!isAgentLive) return;
     if (!terminalRef.current) return;
 
     const term = new XTerm({
@@ -164,7 +166,7 @@ export default function Terminal({
       }
       term.dispose();
     };
-  }, [agentId, sendToAgent, onAgentMessage, containerId, shell, canWrite]);
+  }, [agentId, sendToAgent, onAgentMessage, containerId, shell, canWrite, isAgentLive]);
 
   // Refit + refocus whenever the pane becomes visible again. Used by
   // the multiplexer when the operator switches tabs.
@@ -260,6 +262,12 @@ export default function Terminal({
           viewer role: interactive shells are admin-only.
           <br />
           ask an admin to promote you at <code>/admin</code>.
+        </div>
+      ) : !isAgentLive ? (
+        <div className="terminal-link-state" role="status">
+          <span className="pill warn"><span className="dot" /> reconnecting</span>
+          <span>Live root shell is unavailable while the control link reconnects.</span>
+          <span className="muted">Durable stats and services remain available in the overview.</span>
         </div>
       ) : (
         <div ref={terminalRef} style={{ flex: 1, overflow: 'hidden', padding: 8 }} />
