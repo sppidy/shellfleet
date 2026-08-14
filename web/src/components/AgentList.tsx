@@ -1,14 +1,7 @@
 'use client';
 
-import { useEffect, useState } from 'react';
 import { useWebSocket } from './providers/WebSocketProvider';
 import { useCoreFleet } from './providers/CoreFleetProvider';
-import { apiFetch } from '@/lib/api';
-
-interface TokenInfo {
-  hostname: string | null;
-  last_seen: number;
-}
 
 export default function AgentList({
   selectedAgent,
@@ -18,27 +11,15 @@ export default function AgentList({
   onSelectAgent: (agentId: string) => void;
 }) {
   const { agents } = useWebSocket();
-  const { snapshots } = useCoreFleet();
-  const [knownHosts, setKnownHosts] = useState<TokenInfo[]>([]);
-
-  useEffect(() => {
-    let cancelled = false;
-    apiFetch('/api/tokens')
-      .then((r) => r.json())
-      .then((rows: TokenInfo[]) => {
-        if (!cancelled) setKnownHosts(rows);
-      })
-      .catch(() => {});
-    return () => { cancelled = true; };
-  }, [agents.length]);
+  const { hosts, snapshots } = useCoreFleet();
 
   const onlineSet = new Set(agents);
-  const offlineHosts = knownHosts
-    .filter((t) => t.hostname && !onlineSet.has(`${t.hostname}-id`))
-    .map((t) => ({
-      id: `${t.hostname}-id`,
-      label: t.hostname!,
-      lastSeen: t.last_seen,
+  const offlineHosts = hosts
+    .filter((host) => host.status === 'offline' && !onlineSet.has(host.agent_id))
+    .map((host) => ({
+      id: host.agent_id,
+      label: host.hostname,
+      lastSeen: host.last_seen_at,
     }));
 
   if (agents.length === 0 && offlineHosts.length === 0) {
@@ -109,7 +90,7 @@ export default function AgentList({
 }
 
 function formatAgo(epochSecs: number): string {
-  const diff = Math.floor(Date.now() / 1000) - epochSecs;
+  const diff = Math.max(0, Math.floor(Date.now() / 1000) - epochSecs);
   if (diff < 60) return 'just now';
   if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
   if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;

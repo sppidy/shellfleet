@@ -31,6 +31,7 @@ type CoreFleetContextValue = {
 const CoreFleetContext = createContext<CoreFleetContextValue | null>(null);
 const SSE_REFRESH_DELAY_MS = 1_000;
 const SSE_REFRESH_MIN_INTERVAL_MS = 10_000;
+const FALLBACK_POLL_INTERVAL_MS = 30_000;
 
 function errorMessage(error: unknown): string {
   if (error instanceof FleetApiError) return error.code;
@@ -139,8 +140,25 @@ export function CoreFleetProvider({ children }: { children: React.ReactNode }) {
       }, delay);
     });
 
+    // EventSource normally reconnects itself, but mobile radios and suspended
+    // tabs can leave the browser believing a half-open stream is still usable.
+    // A low-frequency reconciliation bounds stale fleet state even when no
+    // `error` event is delivered. Active SSE updates remain coalesced by load().
+    const fallbackPoll = setInterval(load, FALLBACK_POLL_INTERVAL_MS);
+    const recoverNow = () => {
+      if (typeof navigator === 'undefined' || navigator.onLine !== false) load();
+    };
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') recoverNow();
+    };
+    window.addEventListener('online', recoverNow);
+    document.addEventListener('visibilitychange', handleVisibility);
+
     return () => {
       generationRef.current += 1;
+      clearInterval(fallbackPoll);
+      window.removeEventListener('online', recoverNow);
+      document.removeEventListener('visibilitychange', handleVisibility);
       abortRef.current?.abort();
       eventSourceRef.current?.close();
       if (eventRefreshTimerRef.current !== null) {

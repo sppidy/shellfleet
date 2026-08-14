@@ -36,6 +36,9 @@ interface WebSocketContextValue {
 }
 
 const WebSocketContext = createContext<WebSocketContextValue | null>(null);
+const CONNECT_TIMEOUT_MS = 12_000;
+const DIRECTORY_SYNC_INTERVAL_MS = 15_000;
+const DIRECTORY_STALE_AFTER_MS = 45_000;
 
 // Resolve the WS URL once on import. Order of precedence:
 //   1. NEXT_PUBLIC_WS_URL — explicit override baked at build time, used
@@ -73,8 +76,9 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
   const [isConnected, setIsConnected] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const connectTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const directorySyncTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const reconnectAttempt = useRef(0);
-  const stoppedRef = useRef(false);
   // Subscribers stored in a ref so message dispatch never races with React's
   // render cycle. The previous implementation kept the "last message" in
   // useState, which dropped events when several messages arrived in the
@@ -123,43 +127,156 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
       setSocketCapabilities({});
       return;
     }
-    stoppedRef.current = false;
+    let disposed = false;
+    let lastDirectoryResponseAt = 0;
+    reconnectAttempt.current = 0;
 
-    const connect = () => {
-      const ws = new WebSocket(WS_URL);
-      wsRef.current = ws;
+    const clearReconnectTimer = () => {
+      if (reconnectTimer.current !== null) {
+        clearTimeout(reconnectTimer.current);
+        reconnectTimer.current = null;
+      }
+    };
 
-      ws.onopen = () => {
-        reconnectAttempt.current = 0;
-        setIsConnected(true);
+    const clearConnectionTimers = () => {
+      if (connectTimeout.current !== null) {
+        clearTimeout(connectTimeout.current);
+        connectTimeout.current = null;
+      }
+      if (directorySyncTimer.current !== null) {
+        clearInterval(directorySyncTimer.current);
+        directorySyncTimer.current = null;
+      }
+    };
+
+    const resetSocketState = () => {
+      setIsConnected(false);
+      setSocketAgents([]);
+      setSocketCapabilities({});
+    };
+
+    const requestDirectory = (ws: WebSocket) => {
+      if (ws.readyState !== WebSocket.OPEN) return false;
+      try {
         ws.send(JSON.stringify({ type: 'ListAgentsRequest' } satisfies UiMessage));
-      };
+        return true;
+      } catch {
+        retire(ws);
+        return false;
+      }
+    };
 
-      ws.onclose = () => {
-        setIsConnected(false);
-        setSocketAgents([]);
-        setSocketCapabilities({});
-        if (stoppedRef.current) return;
-        // Exponential backoff capped at 15s. The provider auto-reconnects so
-        // momentary network blips don't leave the dashboard stuck.
-        const delay = reconnectDelay(reconnectAttempt.current);
-        reconnectAttempt.current += 1;
-        reconnectTimer.current = setTimeout(connect, delay);
-      };
+    const scheduleReconnect = () => {
+      if (
+        disposed ||
+        reconnectTimer.current !== null ||
+        (typeof navigator !== 'undefined' && navigator.onLine === false)
+      ) {
+        return;
+      }
+      const delay = reconnectDelay(reconnectAttempt.current);
+      reconnectAttempt.current += 1;
+      reconnectTimer.current = setTimeout(() => {
+        reconnectTimer.current = null;
+        connect();
+      }, delay);
+    };
 
-      ws.onerror = () => {
-        // onclose will fire too; just close to be sure.
+    const retire = (ws: WebSocket, closeSocket = true) => {
+      if (wsRef.current !== ws) return;
+      wsRef.current = null;
+      clearConnectionTimers();
+      resetSocketState();
+      if (closeSocket) {
         try {
           ws.close();
         } catch {
-          /* ignore */
+          /* the browser can throw while a socket is still being created */
         }
+      }
+      scheduleReconnect();
+    };
+
+    const connect = () => {
+      if (
+        disposed ||
+        (typeof navigator !== 'undefined' && navigator.onLine === false)
+      ) {
+        return;
+      }
+      const current = wsRef.current;
+      if (
+        current &&
+        (current.readyState === WebSocket.CONNECTING || current.readyState === WebSocket.OPEN)
+      ) {
+        return;
+      }
+
+      let ws: WebSocket;
+      try {
+        ws = new WebSocket(WS_URL);
+      } catch (error) {
+        console.error('[shellfleet] failed to create UI WebSocket:', error);
+        scheduleReconnect();
+        return;
+      }
+      wsRef.current = ws;
+      lastDirectoryResponseAt = 0;
+
+      connectTimeout.current = setTimeout(() => {
+        if (wsRef.current === ws && ws.readyState === WebSocket.CONNECTING) {
+          retire(ws);
+        }
+      }, CONNECT_TIMEOUT_MS);
+
+      ws.onopen = () => {
+        if (disposed || wsRef.current !== ws) {
+          try {
+            ws.close();
+          } catch {
+            /* ignore a stale socket */
+          }
+          return;
+        }
+        if (connectTimeout.current !== null) {
+          clearTimeout(connectTimeout.current);
+          connectTimeout.current = null;
+        }
+        reconnectAttempt.current = 0;
+        lastDirectoryResponseAt = Date.now();
+        if (!requestDirectory(ws)) return;
+        directorySyncTimer.current = setInterval(() => {
+          if (wsRef.current !== ws) return;
+          if (
+            ws.readyState !== WebSocket.OPEN ||
+            Date.now() - lastDirectoryResponseAt >= DIRECTORY_STALE_AFTER_MS
+          ) {
+            retire(ws);
+            return;
+          }
+          // This existing request/response pair doubles as an application-level
+          // heartbeat that browser JavaScript can observe. Protocol-level Pong
+          // frames are handled internally by the browser and cannot detect a
+          // half-open connection from this provider.
+          requestDirectory(ws);
+        }, DIRECTORY_SYNC_INTERVAL_MS);
+      };
+
+      ws.onclose = () => {
+        if (!disposed) retire(ws, false);
+      };
+
+      ws.onerror = () => {
+        retire(ws);
       };
 
       ws.onmessage = (event) => {
+        if (disposed || wsRef.current !== ws) return;
         try {
           const msg = JSON.parse(event.data) as UiMessage;
           if (msg.type === 'ListAgentsResponse') {
+            lastDirectoryResponseAt = Date.now();
+            setIsConnected(true);
             setSocketAgents(msg.payload.agents);
             setSocketCapabilities(msg.payload.capabilities ?? {});
           } else if (msg.type === 'AgentMessage') {
@@ -180,18 +297,69 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
       };
     };
 
+    const recoverNow = () => {
+      if (disposed || (typeof navigator !== 'undefined' && navigator.onLine === false)) {
+        return;
+      }
+      clearReconnectTimer();
+      const ws = wsRef.current;
+      if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
+        connect();
+        return;
+      }
+      if (ws.readyState === WebSocket.OPEN) {
+        if (Date.now() - lastDirectoryResponseAt >= DIRECTORY_STALE_AFTER_MS) {
+          retire(ws);
+        } else {
+          requestDirectory(ws);
+        }
+      }
+    };
+
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') recoverNow();
+    };
+    const handleOffline = () => {
+      const ws = wsRef.current;
+      if (ws) retire(ws);
+    };
+
+    window.addEventListener('online', recoverNow);
+    window.addEventListener('offline', handleOffline);
+    document.addEventListener('visibilitychange', handleVisibility);
+
     connect();
 
     return () => {
-      stoppedRef.current = true;
-      if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
-      wsRef.current?.close();
+      disposed = true;
+      window.removeEventListener('online', recoverNow);
+      window.removeEventListener('offline', handleOffline);
+      document.removeEventListener('visibilitychange', handleVisibility);
+      clearReconnectTimer();
+      clearConnectionTimers();
+      const ws = wsRef.current;
+      wsRef.current = null;
+      try {
+        ws?.close();
+      } catch {
+        /* ignore cleanup errors */
+      }
     };
   }, [dispatch, status]);
 
   const sendMessage = useCallback((msg: UiMessage) => {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify(msg));
+      try {
+        wsRef.current.send(JSON.stringify(msg));
+      } catch {
+        // The liveness loop owns reconnecting. A send can race with a network
+        // transition between the readyState check and the browser write.
+        try {
+          wsRef.current.close();
+        } catch {
+          /* ignore */
+        }
+      }
     }
   }, []);
 
