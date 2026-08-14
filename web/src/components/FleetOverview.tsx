@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useCoreFleet } from './providers/CoreFleetProvider';
 import type { CoreAgentSnapshot, FleetHost } from '@/lib/coreFleet';
 import type { HealthSnapshotRow } from '@/lib/types';
+import FleetShell from './FleetShell';
 
 function formatBytes(kib: number): string {
   const bytes = kib * 1024;
@@ -312,6 +313,17 @@ export default function FleetOverview({
           </div>
         </div>
       </div>
+
+      <FleetShell
+        hosts={hosts}
+        snapshots={snapshots}
+        healthByAgent={healthByAgent}
+        liveStatus={liveStatus}
+        loading={loading}
+        nowSeconds={nowSeconds}
+        refresh={refresh}
+        onSelectAgent={onSelectAgent}
+      />
 
       <div className="panel">
         <div className="panel-head">

@@ -4,6 +4,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import FleetOverview from '../FleetOverview';
 
 const refresh = vi.fn();
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({ push: vi.fn() }),
+}));
+
 const durableFleet = {
   hosts: [
     {
@@ -129,5 +133,6 @@ describe('FleetOverview', () => {
     expect(screen.getAllByText('DOCKER')).toHaveLength(2);
     expect(screen.getAllByText('SWARM')).toHaveLength(2);
     expect(screen.getByText(/live updates disconnected/i)).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Fleet Shell' })).toBeInTheDocument();
   });
 });
