@@ -1,6 +1,6 @@
 'use client';
 
-import { Suspense, useEffect, useState } from 'react';
+import { Suspense, useEffect, useMemo, useState } from 'react';
 import { apiFetch } from '@/lib/api';
 import {
   dockerAvailable as capDockerAvailable,
@@ -109,12 +109,12 @@ function HomeBody() {
   const tabFromUrl = searchParams.get('tab');
   const dockerFromUrl = searchParams.get('docker');
   const k8sFromUrl = searchParams.get('k8s');
-  const initialAgent =
-    agentFromUrl && agents.includes(agentFromUrl)
-      ? agentFromUrl
-      : agentFromUrl && agents.includes(`${agentFromUrl}-id`)
-        ? `${agentFromUrl}-id`
-        : null;
+  const resolvedAgentFromUrl = useMemo(() => {
+    if (!agentFromUrl) return null;
+    if (agents.includes(agentFromUrl)) return agentFromUrl;
+    const suffixedAgent = `${agentFromUrl}-id`;
+    return agents.includes(suffixedAgent) ? suffixedAgent : null;
+  }, [agentFromUrl, agents]);
   // Resolve `?tab=` against current tabs; redirect legacy docker subtabs
   // (containers/images/...) to the new `docker` parent + the right
   // subtab below.
@@ -133,7 +133,7 @@ function HomeBody() {
     ? (k8sFromUrl as K8sSubtab)
     : 'pods';
 
-  const [selectedAgent, setSelectedAgent] = useState<string | null>(initialAgent);
+  const [selectedAgent, setSelectedAgent] = useState<string | null>(resolvedAgentFromUrl);
   const [activeTab, setActiveTab] = useState<Tab>(initialTab);
   const [dockerSubtab, setDockerSubtab] = useState<DockerSubtab>(initialDockerSub);
   const [k8sSubtab, setK8sSubtab] = useState<K8sSubtab>(initialK8sSub);
@@ -260,16 +260,7 @@ function HomeBody() {
   }, []);
 
   useEffect(() => {
-    if (agentFromUrl === null) {
-      setSelectedAgent(null);
-    } else {
-      const candidate = agents.includes(agentFromUrl)
-        ? agentFromUrl
-        : agents.includes(`${agentFromUrl}-id`)
-          ? `${agentFromUrl}-id`
-          : null;
-      setSelectedAgent(candidate);
-    }
+    setSelectedAgent(agentFromUrl === null ? null : resolvedAgentFromUrl);
     const legacy = tabFromUrl && LEGACY_DOCKER_TABS[tabFromUrl];
     if (legacy) {
       setActiveTab('docker');
@@ -285,8 +276,7 @@ function HomeBody() {
     if (k8sFromUrl && K8S_SUBTABS.includes(k8sFromUrl as K8sSubtab)) {
       setK8sSubtab(k8sFromUrl as K8sSubtab);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [agentFromUrl, tabFromUrl, dockerFromUrl, k8sFromUrl, agents.length]);
+  }, [agentFromUrl, resolvedAgentFromUrl, tabFromUrl, dockerFromUrl, k8sFromUrl]);
 
   useEffect(() => {
     if (status === 'guest') {
@@ -311,8 +301,7 @@ function HomeBody() {
       agentFromUrl &&
       (
         agents.length === 0 ||
-        agents.includes(agentFromUrl) ||
-        agents.includes(`${agentFromUrl}-id`)
+        resolvedAgentFromUrl !== null
       )
     ) {
       return;
@@ -337,7 +326,7 @@ function HomeBody() {
       router.replace(next ? `/?${next}` : '/', { scroll: false });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedAgent, activeTab, dockerSubtab, k8sSubtab, agentFromUrl, agents.length]);
+  }, [selectedAgent, activeTab, dockerSubtab, k8sSubtab, agentFromUrl, agents.length, resolvedAgentFromUrl]);
 
   if (status !== 'authed') {
     return (
