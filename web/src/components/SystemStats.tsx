@@ -1,12 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
-import { useWebSocket } from './providers/WebSocketProvider';
 import { useCoreFleet } from './providers/CoreFleetProvider';
-import { SystemStatsPayload } from '@/lib/types';
-
-const STATS_INTERVAL_MS = 5_000;
-const STATS_TIMEOUT_MS = 10_000;
 
 function formatBytes(kib: number): string {
   const bytes = kib * 1024;
@@ -45,74 +39,22 @@ function bar(pct: number, opts: { hideOver100?: boolean } = {}) {
 }
 
 export default function SystemStats({ agentId }: { agentId: string }) {
-  const { sendToAgent, onAgentMessage, isConnected, liveAgents } = useWebSocket();
-  const { snapshots } = useCoreFleet();
-  const [stats, setStats] = useState<SystemStatsPayload | null>(null);
-  const [unsupported, setUnsupported] = useState(false);
-  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const durableStats = snapshots[agentId]?.stats ?? null;
-  const isAgentLive = isConnected && liveAgents.includes(agentId);
-  const displayedStats = stats ?? durableStats;
-
-  useEffect(() => {
-    setStats(null);
-    setUnsupported(false);
-
-    const unsubscribe = onAgentMessage(agentId, (msg) => {
-      if (msg.type === 'SystemStatsResponse') {
-        if (timeoutRef.current) {
-          clearTimeout(timeoutRef.current);
-          timeoutRef.current = null;
-        }
-        setUnsupported(false);
-        setStats(msg.payload);
-      }
-    });
-
-    if (!isAgentLive) return unsubscribe;
-
-    const request = () => sendToAgent(agentId, { type: 'SystemStatsRequest' });
-    request();
-    timeoutRef.current = setTimeout(() => setUnsupported(true), STATS_TIMEOUT_MS);
-    const interval = setInterval(request, STATS_INTERVAL_MS);
-
-    return () => {
-      unsubscribe();
-      clearInterval(interval);
-      if (timeoutRef.current) clearTimeout(timeoutRef.current);
-    };
-  }, [agentId, isAgentLive, sendToAgent, onAgentMessage]);
-
-  if (unsupported && !displayedStats) {
-    return (
-      <div
-        style={{
-          padding: 10,
-          background: 'var(--warn-bg)',
-          border: '1px solid var(--warn-bd)',
-          borderRadius: 'var(--r)',
-          color: 'var(--warn)',
-          fontFamily: 'var(--mono)',
-          fontSize: 11,
-        }}
-      >
-        ⚠ This live agent doesn&apos;t expose system stats. Upgrade with{' '}
-        <code style={{ background: 'rgba(0,0,0,0.2)', padding: '0 4px', borderRadius: 2 }}>
-          apt install --only-upgrade shellfleet-agent
-        </code>
-        .
-      </div>
-    );
-  }
+  const { snapshots, liveStatus } = useCoreFleet();
+  const snapshot = snapshots[agentId];
+  const displayedStats = snapshot?.stats ?? null;
+  const isAgentOnline = snapshot?.status === 'online';
+  const dataIsLive = isAgentOnline && liveStatus === 'live';
 
   if (!displayedStats) {
     return (
       <div className="system-stats">
-        {!isAgentLive && (
-          <div className="live-data-note" role="status">
-            Live stats are reconnecting. No durable system snapshot is available yet.
-          </div>
-        )}
+        <div className="live-data-note" role="status">
+          {isAgentOnline
+            ? liveStatus === 'live'
+              ? 'Waiting for the next live system update.'
+              : 'Live system updates are reconnecting. No durable snapshot is available yet.'
+            : 'This agent is offline. No durable system snapshot is available yet.'}
+        </div>
         <div className="system-stats-grid">
           {[0, 1, 2, 3].map((i) => (
             <div
@@ -139,11 +81,11 @@ export default function SystemStats({ agentId }: { agentId: string }) {
 
   return (
     <div className="system-stats">
-      {(!isAgentLive || (unsupported && !stats)) && (
+      {!dataIsLive && (
         <div className="live-data-note" role="status">
-          {!isAgentLive
-            ? 'Showing the latest durable system snapshot while live stats reconnect.'
-            : 'Live refresh timed out. Showing the latest durable system snapshot.'}
+          {isAgentOnline
+            ? 'Live system updates are reconnecting. Showing the latest durable snapshot.'
+            : 'This agent is offline. Showing its last durable system snapshot.'}
         </div>
       )}
       <div className="system-stats-grid">

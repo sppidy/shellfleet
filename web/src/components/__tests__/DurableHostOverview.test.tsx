@@ -1,5 +1,5 @@
 import '@testing-library/jest-dom/vitest';
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import ServiceList from '../ServiceList';
 import SystemStats from '../SystemStats';
@@ -7,6 +7,12 @@ import SystemStats from '../SystemStats';
 const socket = vi.hoisted(() => ({
   sendToAgent: vi.fn(),
   onAgentMessage: vi.fn(() => vi.fn()),
+}));
+const core = vi.hoisted(() => ({
+  liveStatus: 'live' as 'live' | 'connecting' | 'degraded',
+  loading: false,
+  refresh: vi.fn(),
+  serviceActiveState: 'active',
 }));
 
 vi.mock('../providers/WebSocketProvider', () => ({
@@ -24,6 +30,9 @@ vi.mock('../providers/SessionProvider', () => ({
 
 vi.mock('../providers/CoreFleetProvider', () => ({
   useCoreFleet: () => ({
+    liveStatus: core.liveStatus,
+    loading: core.loading,
+    refresh: core.refresh,
     snapshots: {
       'node-a-id': {
         agentId: 'node-a-id',
@@ -50,7 +59,7 @@ vi.mock('../providers/CoreFleetProvider', () => ({
             name: 'sshd.service',
             description: 'OpenSSH server',
             load_state: 'loaded',
-            active_state: 'active',
+            active_state: core.serviceActiveState,
             sub_state: 'running',
           },
         ],
@@ -64,25 +73,51 @@ describe('durable selected-host overview', () => {
     cleanup();
     socket.sendToAgent.mockClear();
     socket.onAgentMessage.mockClear();
+    core.liveStatus = 'live';
+    core.loading = false;
+    core.serviceActiveState = 'active';
+    core.refresh.mockClear();
   });
 
-  it('renders durable system stats instead of an agent-upgrade warning when the live link is down', () => {
+  it('renders SSE-backed system stats as live when the interactive socket is down', () => {
     render(<SystemStats agentId="node-a-id" />);
 
     expect(screen.getByText('0.50')).toBeInTheDocument();
-    expect(screen.getByText(/latest durable system snapshot/i)).toBeInTheDocument();
+    expect(screen.queryByText(/durable.*snapshot/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/upgrade with/i)).not.toBeInTheDocument();
     expect(socket.sendToAgent).not.toHaveBeenCalled();
   });
 
-  it('renders durable services and disables live controls while reconnecting', () => {
+  it('keeps service data live and refreshable while interactive controls reconnect', () => {
     render(<ServiceList agentId="node-a-id" />);
 
     expect(screen.getByText('sshd.service')).toBeInTheDocument();
-    expect(screen.getByText(/latest durable service snapshot/i)).toBeInTheDocument();
+    expect(screen.getByText(/service data is live.*controls are reconnecting/i)).toBeInTheDocument();
     for (const control of screen.getAllByTitle('Live controls are reconnecting')) {
       expect(control).toBeDisabled();
     }
+    fireEvent.click(screen.getByTitle('Refresh service state'));
+    expect(core.refresh).toHaveBeenCalledOnce();
+    expect(socket.sendToAgent).not.toHaveBeenCalled();
+  });
+
+  it('labels durable state as stale only when the fleet event stream is degraded', () => {
+    core.liveStatus = 'degraded';
+
+    render(<SystemStats agentId="node-a-id" />);
+
+    expect(screen.getByText(/live system updates are reconnecting/i)).toBeInTheDocument();
+    expect(screen.getByText(/latest durable snapshot/i)).toBeInTheDocument();
+  });
+
+  it('renders newer durable service samples instead of masking them with component state', () => {
+    const view = render(<ServiceList agentId="node-a-id" />);
+    expect(within(screen.getByRole('row')).getByText('active')).toBeInTheDocument();
+
+    core.serviceActiveState = 'failed';
+    view.rerender(<ServiceList agentId="node-a-id" />);
+
+    expect(within(screen.getByRole('row')).getByText('failed')).toBeInTheDocument();
     expect(socket.sendToAgent).not.toHaveBeenCalled();
   });
 });

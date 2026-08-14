@@ -159,6 +159,21 @@ but must never suppress a connection attempt; mobile radios, VPNs, and captive
 portals can report stale connectivity state while the application origin is
 already reachable.
 
+During the transition from the legacy browser-wide WebSocket, the product keeps
+data-plane and control-plane health separate:
+
+- Host presence, system statistics, services, containers, and Swarm state are
+  rendered from the durable REST model and refreshed by SSE invalidations.
+- A failed interactive WebSocket may disable controls and byte streams, but it
+  must not relabel a healthy online host or healthy SSE-backed data as offline,
+  reconnecting, or snapshot-only.
+- Browser components do not keep a private live-read cache that can mask newer
+  durable snapshots. Direct read requests may accelerate a post-operation
+  refresh, but their responses flow through server persistence and SSE.
+- CDN script optimizers and third-party script rewriters are disabled on the
+  application origin. They may change module execution order and invalidate the
+  lifecycle guarantees on which authenticated transport providers depend.
+
 ### 7.4 Agent transport and identity
 
 The agent makes one outbound connection to the canonical public HTTPS origin. No inbound host port is required.

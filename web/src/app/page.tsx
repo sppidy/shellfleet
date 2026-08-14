@@ -10,6 +10,7 @@ import {
 } from '@/lib/capabilities';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useWebSocket } from '@/components/providers/WebSocketProvider';
+import { useCoreFleet } from '@/components/providers/CoreFleetProvider';
 import { useSession } from '@/components/providers/SessionProvider';
 import AgentList from '@/components/AgentList';
 import ServiceList from '@/components/ServiceList';
@@ -103,6 +104,7 @@ function HomeBody() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { isConnected, agents, liveAgents, agentCapabilities } = useWebSocket();
+  const { hosts, liveStatus, loading: fleetLoading } = useCoreFleet();
   const { user, role, mfaEnabled, status, logout } = useSession();
 
   const agentFromUrl = searchParams.get('agent');
@@ -337,9 +339,20 @@ function HomeBody() {
   }
 
   const agentLabel = selectedAgent?.replace(/-id$/, '');
-  const selectedAgentLive = selectedAgent
+  const selectedHost = selectedAgent
+    ? hosts.find((host) => host.agent_id === selectedAgent)
+    : undefined;
+  const selectedAgentOnline = selectedAgent
+    ? selectedHost?.status === 'online' || liveAgents.includes(selectedAgent)
+    : false;
+  const selectedAgentControlsLive = selectedAgent
     ? isConnected && liveAgents.includes(selectedAgent)
     : false;
+  const fleetStatusLabel = liveStatus === 'live'
+    ? 'LIVE DATA'
+    : liveStatus === 'degraded'
+      ? 'STALE DATA'
+      : 'SYNCING';
   const tabsToShow = TAB_DEFS.filter((t) => {
     if (t.id === 'backups' && !backupsEnabled) return false;
     if (t.id === 'docker' && !dockerAvailable) return false;
@@ -391,11 +404,11 @@ function HomeBody() {
               <span className="tilde">~/</span>shellfleet
             </div>
             <span
-              className={`pill ${isConnected ? 'live' : 'warn'}`}
-              title={isConnected ? 'Live control channel connected' : 'Live control channel is reconnecting; durable snapshots remain available'}
+              className={`pill ${liveStatus === 'live' ? 'live' : liveStatus === 'degraded' ? 'err' : 'warn'}`}
+              title={liveStatus === 'live' ? 'Fleet data is updating through the durable event stream' : 'Fleet event stream is reconnecting; durable state remains available'}
             >
-              <span className={`dot ${isConnected ? 'pulse' : ''}`} />
-              {isConnected ? 'LIVE LINK' : 'RECONNECTING'}
+              <span className={`dot ${liveStatus === 'live' ? 'pulse' : ''}`} />
+              {fleetStatusLabel}
             </span>
           </div>
           <div className="brand-meta">
@@ -671,11 +684,15 @@ function HomeBody() {
                   <span className="host">{agentLabel}</span>
                 </h2>
                 <span
-                  className={`pill ${selectedAgentLive ? 'live' : 'warn'}`}
-                  title={selectedAgentLive ? 'Agent is reachable for live controls' : 'Showing durable data while the live control channel reconnects'}
+                  className={`pill ${selectedAgentOnline ? 'live' : 'warn'}`}
+                  title={selectedAgentOnline
+                    ? selectedAgentControlsLive
+                      ? 'Agent is online; live data and interactive controls are available'
+                      : 'Agent is online; live data is available while interactive controls reconnect'
+                    : 'Agent is offline; showing its last durable state'}
                 >
-                  <span className={`dot ${selectedAgentLive ? 'pulse' : ''}`} />
-                  {selectedAgentLive ? 'connected' : 'snapshot'}
+                  <span className={`dot ${selectedAgentOnline ? 'pulse' : ''}`} />
+                  {selectedAgentOnline ? 'online' : 'offline'}
                 </span>
                 <div className="label-row" style={{ marginLeft: 8 }}>
                   <AgentLabels agentId={selectedAgent} />
@@ -711,7 +728,7 @@ function HomeBody() {
                       </div>
                       {systemdAvailable && (
                         <div className="agent-overview-services">
-                          <ServiceList agentId={selectedAgent} />
+                          <ServiceList key={selectedAgent} agentId={selectedAgent} />
                         </div>
                       )}
                     </>
@@ -758,7 +775,7 @@ function HomeBody() {
           </>
         ) : (
           <div className="scroll">
-            {!isConnected && agents.length === 0 ? (
+            {hosts.length === 0 && (fleetLoading || liveStatus === 'connecting') ? (
               <ReconnectingState />
             ) : (
               <FleetOverview onSelectAgent={setSelectedAgent} />
