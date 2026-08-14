@@ -26,7 +26,9 @@ It is intentionally not a second PTY implementation. ShellFleet's existing `/ter
 | `containers [all\|running\|stopped] [host]` | Filter durable Docker container rows |
 | `health [host]` | Health-probe rollups by host |
 | `find <text>` | Search host identity/capabilities, service name/description, and container name/image/id |
-| `open [host] <view>` | Open a validated live host view or fixed dashboard destination |
+| `open <destination>` | Open `overview`, `terminal`, `activity`, or `notifications` |
+| `open <host> [view]` | Open a validated live host view; the view defaults to `dashboard` |
+| `open <view>` | Open a view for the current `use <host>` context |
 | `terminal` | Open the separate admin multi-host root terminal |
 | `refresh` | Ask the existing Core Fleet provider for a fresh durable snapshot |
 | `history`, `clear`, `help [command]` | Local shell utilities |

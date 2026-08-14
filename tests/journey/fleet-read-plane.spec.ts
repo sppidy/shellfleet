@@ -66,4 +66,19 @@ test('Fleet remains durable across reload, disconnect, SSE loss, and reconnect',
   const finalPayload = await finalFleet.json();
   expect(finalPayload.hosts).toHaveLength(1);
   expect(finalPayload.hosts[0].agent_id).toBe('journey-agent-id');
+
+  // Android browsers can expose a desktop-class CSS viewport near 930px.
+  // Keep navigation off-canvas and stack the selected-host panes throughout
+  // that compact range instead of squeezing two dashboards side-by-side.
+  await page.setViewportSize({ width: 930, height: 1_800 });
+  await page.goto('/?agent=journey-agent');
+  await expect(page.getByRole('button', { name: 'Open menu' })).toBeVisible();
+  await expect(page.locator('.h-splitter')).toHaveCSS('flex-direction', 'column');
+  const sidebarBox = await page.locator('.sidebar').boundingBox();
+  expect(sidebarBox).not.toBeNull();
+  expect((sidebarBox?.x ?? 0) + (sidebarBox?.width ?? 0)).toBeLessThanOrEqual(1);
+
+  await page.setViewportSize({ width: 1_440, height: 900 });
+  await expect(page.getByRole('button', { name: 'Open menu' })).toBeHidden();
+  await expect(page.locator('.h-splitter')).toHaveCSS('flex-direction', 'row');
 });

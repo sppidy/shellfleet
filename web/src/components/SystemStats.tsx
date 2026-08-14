@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useWebSocket } from './providers/WebSocketProvider';
+import { useCoreFleet } from './providers/CoreFleetProvider';
 import { SystemStatsPayload } from '@/lib/types';
 
 const STATS_INTERVAL_MS = 5_000;
@@ -44,10 +45,14 @@ function bar(pct: number, opts: { hideOver100?: boolean } = {}) {
 }
 
 export default function SystemStats({ agentId }: { agentId: string }) {
-  const { sendToAgent, onAgentMessage } = useWebSocket();
+  const { sendToAgent, onAgentMessage, isConnected, liveAgents } = useWebSocket();
+  const { snapshots } = useCoreFleet();
   const [stats, setStats] = useState<SystemStatsPayload | null>(null);
   const [unsupported, setUnsupported] = useState(false);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const durableStats = snapshots[agentId]?.stats ?? null;
+  const isAgentLive = isConnected && liveAgents.includes(agentId);
+  const displayedStats = stats ?? durableStats;
 
   useEffect(() => {
     setStats(null);
@@ -64,6 +69,8 @@ export default function SystemStats({ agentId }: { agentId: string }) {
       }
     });
 
+    if (!isAgentLive) return unsubscribe;
+
     const request = () => sendToAgent(agentId, { type: 'SystemStatsRequest' });
     request();
     timeoutRef.current = setTimeout(() => setUnsupported(true), STATS_TIMEOUT_MS);
@@ -74,9 +81,9 @@ export default function SystemStats({ agentId }: { agentId: string }) {
       clearInterval(interval);
       if (timeoutRef.current) clearTimeout(timeoutRef.current);
     };
-  }, [agentId, sendToAgent, onAgentMessage]);
+  }, [agentId, isAgentLive, sendToAgent, onAgentMessage]);
 
-  if (unsupported && !stats) {
+  if (unsupported && !displayedStats) {
     return (
       <div
         style={{
@@ -89,7 +96,7 @@ export default function SystemStats({ agentId }: { agentId: string }) {
           fontSize: 11,
         }}
       >
-        ⚠ This agent doesn&apos;t expose system stats. Upgrade with{' '}
+        ⚠ This live agent doesn&apos;t expose system stats. Upgrade with{' '}
         <code style={{ background: 'rgba(0,0,0,0.2)', padding: '0 4px', borderRadius: 2 }}>
           apt install --only-upgrade shellfleet-agent
         </code>
@@ -98,101 +105,121 @@ export default function SystemStats({ agentId }: { agentId: string }) {
     );
   }
 
-  if (!stats) {
+  if (!displayedStats) {
     return (
-      <div className="grid-2" style={{ gridTemplateColumns: 'repeat(4, 1fr)', gap: 12 }}>
-        {[0, 1, 2, 3].map((i) => (
-          <div
-            key={i}
-            className="panel"
-            style={{ height: 88, opacity: 0.5 }}
-          />
-        ))}
+      <div className="system-stats">
+        {!isAgentLive && (
+          <div className="live-data-note" role="status">
+            Live stats are reconnecting. No durable system snapshot is available yet.
+          </div>
+        )}
+        <div className="system-stats-grid">
+          {[0, 1, 2, 3].map((i) => (
+            <div
+              key={i}
+              className="panel"
+              style={{ height: 88, opacity: 0.5 }}
+            />
+          ))}
+        </div>
       </div>
     );
   }
 
-  const memUsed = stats.mem_total_kb - stats.mem_available_kb;
-  const memPct = stats.mem_total_kb > 0 ? (memUsed / stats.mem_total_kb) * 100 : 0;
+  const memUsed = displayedStats.mem_total_kb - displayedStats.mem_available_kb;
+  const memPct = displayedStats.mem_total_kb > 0 ? (memUsed / displayedStats.mem_total_kb) * 100 : 0;
   const diskPct =
-    stats.root_disk_total_kb > 0 ? (stats.root_disk_used_kb / stats.root_disk_total_kb) * 100 : 0;
-  const loadPct = stats.cpu_count > 0 ? (stats.load_1 / stats.cpu_count) * 100 : 0;
-  const swapUsed = stats.swap_total_kb - stats.swap_free_kb;
+    displayedStats.root_disk_total_kb > 0
+      ? (displayedStats.root_disk_used_kb / displayedStats.root_disk_total_kb) * 100
+      : 0;
+  const loadPct = displayedStats.cpu_count > 0
+    ? (displayedStats.load_1 / displayedStats.cpu_count) * 100
+    : 0;
+  const swapUsed = displayedStats.swap_total_kb - displayedStats.swap_free_kb;
 
   return (
-    <div className="grid-2" style={{ gridTemplateColumns: 'repeat(4, 1fr)', gap: 12 }}>
-      <div className="panel">
-        <div className="panel-head">
-          <div className="panel-title">
-            <span className="ico">⌬</span> LOAD
+    <div className="system-stats">
+      {(!isAgentLive || (unsupported && !stats)) && (
+        <div className="live-data-note" role="status">
+          {!isAgentLive
+            ? 'Showing the latest durable system snapshot while live stats reconnect.'
+            : 'Live refresh timed out. Showing the latest durable system snapshot.'}
+        </div>
+      )}
+      <div className="system-stats-grid">
+        <div className="panel">
+          <div className="panel-head">
+            <div className="panel-title">
+              <span className="ico">⌬</span> LOAD
+            </div>
+          </div>
+          <div className="panel-body" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <div className="stat-value">
+              {displayedStats.load_1.toFixed(2)}
+              <span className="unit"> / {displayedStats.cpu_count}</span>
+            </div>
+            {bar(loadPct, { hideOver100: true })}
+            <div className="muted" style={{ fontSize: 10.5 }}>
+              5m {displayedStats.load_5.toFixed(2)} · 15m {displayedStats.load_15.toFixed(2)}
+            </div>
           </div>
         </div>
-        <div className="panel-body" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          <div className="stat-value">
-            {stats.load_1.toFixed(2)}
-            <span className="unit"> / {stats.cpu_count}</span>
-          </div>
-          {bar(loadPct, { hideOver100: true })}
-          <div className="muted" style={{ fontSize: 10.5 }}>
-            5m {stats.load_5.toFixed(2)} · 15m {stats.load_15.toFixed(2)}
-          </div>
-        </div>
-      </div>
 
-      <div className="panel">
-        <div className="panel-head">
-          <div className="panel-title">
-            <span className="ico">▦</span> MEM
+        <div className="panel">
+          <div className="panel-head">
+            <div className="panel-title">
+              <span className="ico">▦</span> MEM
+            </div>
+          </div>
+          <div className="panel-body" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <div className="stat-value">
+              {memPct.toFixed(0)}
+              <span className="unit">%</span>
+            </div>
+            {bar(memPct)}
+            <div className="muted" style={{ fontSize: 10.5 }}>
+              {formatBytes(memUsed)} / {formatBytes(displayedStats.mem_total_kb)}
+              {displayedStats.swap_total_kb > 0 && (
+                <>
+                  {' · swap '}
+                  {formatBytes(swapUsed)} / {formatBytes(displayedStats.swap_total_kb)}
+                </>
+              )}
+            </div>
           </div>
         </div>
-        <div className="panel-body" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          <div className="stat-value">
-            {memPct.toFixed(0)}
-            <span className="unit">%</span>
-          </div>
-          {bar(memPct)}
-          <div className="muted" style={{ fontSize: 10.5 }}>
-            {formatBytes(memUsed)} / {formatBytes(stats.mem_total_kb)}
-            {stats.swap_total_kb > 0 && (
-              <>
-                {' · swap '}
-                {formatBytes(swapUsed)} / {formatBytes(stats.swap_total_kb)}
-              </>
-            )}
-          </div>
-        </div>
-      </div>
 
-      <div className="panel">
-        <div className="panel-head">
-          <div className="panel-title">
-            <span className="ico">▰</span> DISK
+        <div className="panel">
+          <div className="panel-head">
+            <div className="panel-title">
+              <span className="ico">▰</span> DISK
+            </div>
+          </div>
+          <div className="panel-body" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <div className="stat-value">
+              {diskPct.toFixed(0)}
+              <span className="unit">%</span>
+            </div>
+            {bar(diskPct)}
+            <div className="muted" style={{ fontSize: 10.5 }}>
+              {formatBytes(displayedStats.root_disk_used_kb)} / {formatBytes(displayedStats.root_disk_total_kb)}
+            </div>
           </div>
         </div>
-        <div className="panel-body" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          <div className="stat-value">
-            {diskPct.toFixed(0)}
-            <span className="unit">%</span>
-          </div>
-          {bar(diskPct)}
-          <div className="muted" style={{ fontSize: 10.5 }}>
-            {formatBytes(stats.root_disk_used_kb)} / {formatBytes(stats.root_disk_total_kb)}
-          </div>
-        </div>
-      </div>
 
-      <div className="panel">
-        <div className="panel-head">
-          <div className="panel-title">
-            <span className="ico">⏲</span> UPTIME
+        <div className="panel">
+          <div className="panel-head">
+            <div className="panel-title">
+              <span className="ico">⏲</span> UPTIME
+            </div>
           </div>
-        </div>
-        <div className="panel-body" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          <div className="stat-value" style={{ fontSize: 18 }}>
-            {formatUptime(stats.uptime_secs)}
-          </div>
-          <div className="muted" style={{ fontSize: 10.5 }}>
-            kernel {stats.kernel}
+          <div className="panel-body" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <div className="stat-value" style={{ fontSize: 18 }}>
+              {formatUptime(displayedStats.uptime_secs)}
+            </div>
+            <div className="muted" style={{ fontSize: 10.5 }}>
+              kernel {displayedStats.kernel}
+            </div>
           </div>
         </div>
       </div>

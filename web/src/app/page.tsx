@@ -102,7 +102,7 @@ export default function Home() {
 function HomeBody() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { isConnected, agents, agentCapabilities } = useWebSocket();
+  const { isConnected, agents, liveAgents, agentCapabilities } = useWebSocket();
   const { user, role, mfaEnabled, status, logout } = useSession();
 
   const agentFromUrl = searchParams.get('agent');
@@ -303,6 +303,20 @@ function HomeBody() {
   }, [agents, selectedAgent]);
 
   useEffect(() => {
+    // Preserve a fresh host deep-link until the durable directory has loaded.
+    // Otherwise the initial empty provider state rewrites `/?agent=…` to `/`
+    // before the URL-to-state effect gets a chance to resolve the hostname.
+    if (
+      !selectedAgent &&
+      agentFromUrl &&
+      (
+        agents.length === 0 ||
+        agents.includes(agentFromUrl) ||
+        agents.includes(`${agentFromUrl}-id`)
+      )
+    ) {
+      return;
+    }
     const params = new URLSearchParams();
     if (selectedAgent) {
       params.set('agent', selectedAgent.replace(/-id$/, ''));
@@ -323,7 +337,7 @@ function HomeBody() {
       router.replace(next ? `/?${next}` : '/', { scroll: false });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedAgent, activeTab, dockerSubtab, k8sSubtab]);
+  }, [selectedAgent, activeTab, dockerSubtab, k8sSubtab, agentFromUrl, agents.length]);
 
   if (status !== 'authed') {
     return (
@@ -334,6 +348,9 @@ function HomeBody() {
   }
 
   const agentLabel = selectedAgent?.replace(/-id$/, '');
+  const selectedAgentLive = selectedAgent
+    ? isConnected && liveAgents.includes(selectedAgent)
+    : false;
   const tabsToShow = TAB_DEFS.filter((t) => {
     if (t.id === 'backups' && !backupsEnabled) return false;
     if (t.id === 'docker' && !dockerAvailable) return false;
@@ -384,9 +401,12 @@ function HomeBody() {
             <div className="brand-name">
               <span className="tilde">~/</span>shellfleet
             </div>
-            <span className={`pill ${isConnected ? 'live' : 'err'}`}>
+            <span
+              className={`pill ${isConnected ? 'live' : 'warn'}`}
+              title={isConnected ? 'Live control channel connected' : 'Live control channel is reconnecting; durable snapshots remain available'}
+            >
               <span className={`dot ${isConnected ? 'pulse' : ''}`} />
-              {isConnected ? 'LIVE' : 'OFFLINE'}
+              {isConnected ? 'LIVE LINK' : 'RECONNECTING'}
             </span>
           </div>
           <div className="brand-meta">
@@ -661,9 +681,12 @@ function HomeBody() {
                   <span className="at">@</span>
                   <span className="host">{agentLabel}</span>
                 </h2>
-                <span className="pill live">
-                  <span className="dot pulse" />
-                  connected
+                <span
+                  className={`pill ${selectedAgentLive ? 'live' : 'warn'}`}
+                  title={selectedAgentLive ? 'Agent is reachable for live controls' : 'Showing durable data while the live control channel reconnects'}
+                >
+                  <span className={`dot ${selectedAgentLive ? 'pulse' : ''}`} />
+                  {selectedAgentLive ? 'connected' : 'snapshot'}
                 </span>
                 <div className="label-row" style={{ marginLeft: 8 }}>
                   <AgentLabels agentId={selectedAgent} />
@@ -685,7 +708,7 @@ function HomeBody() {
               </div>
             </div>
 
-            <div className="scroll" style={{ display: 'flex', flexDirection: 'column' }}>
+            <div className="scroll agent-dashboard-scroll">
               {activeTab === 'dashboard' ? (
                 <HSplitter
                   storageKey="shellfleet.agent-overview.split"
@@ -694,26 +717,18 @@ function HomeBody() {
                   maxLeftPct={80}
                   left={
                     <>
-                      <div style={{ padding: 'var(--pad)', borderBottom: '1px solid var(--line)' }}>
+                      <div className="agent-overview-stats">
                         <SystemStats agentId={selectedAgent} />
                       </div>
                       {systemdAvailable && (
-                        <div style={{ flex: 1, padding: 'var(--pad)', overflowY: 'auto' }}>
+                        <div className="agent-overview-services">
                           <ServiceList agentId={selectedAgent} />
                         </div>
                       )}
                     </>
                   }
                   right={
-                    <div
-                      style={{
-                        display: 'flex',
-                        flexDirection: 'column',
-                        flex: 1,
-                        minHeight: 0,
-                        background: '#06090b',
-                      }}
-                    >
+                    <div className="agent-overview-terminal">
                       <Terminal agentId={selectedAgent} />
                     </div>
                   }
@@ -765,13 +780,6 @@ function HomeBody() {
 
       <CommandPalette onSelectAgent={setSelectedAgent} />
 
-      <style jsx>{`
-        @media (max-width: 900px) {
-          .agent-overview-grid {
-            grid-template-columns: 1fr !important;
-          }
-        }
-      `}</style>
     </div>
   );
 }

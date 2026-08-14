@@ -93,6 +93,7 @@ export default function FleetShell({
   const [history, setHistory] = useState<string[]>([]);
   const [historyCursor, setHistoryCursor] = useState<number | null>(null);
   const [historyDraft, setHistoryDraft] = useState('');
+  const [activeCompletionIndex, setActiveCompletionIndex] = useState(-1);
   const [transcript, setTranscript] = useState<TranscriptEntry[]>(INITIAL_TRANSCRIPT);
   const nextEntryId = useRef(1);
   const outputRef = useRef<HTMLDivElement>(null);
@@ -116,6 +117,8 @@ export default function FleetShell({
     () => input.trim() ? fleetShellCompletions(input, context) : [],
     [context, input],
   );
+  const visibleCompletions = completions.slice(0, 6);
+  const activeCompletion = visibleCompletions[activeCompletionIndex];
 
   useEffect(() => {
     const output = outputRef.current;
@@ -156,6 +159,7 @@ export default function FleetShell({
     setHistory(nextHistory);
     setHistoryCursor(null);
     setHistoryDraft('');
+    setActiveCompletionIndex(-1);
     setInput('');
     if (result.clear) {
       setTranscript([]);
@@ -204,6 +208,27 @@ export default function FleetShell({
   }
 
   function handleKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+    if (event.key === 'ArrowDown' && historyCursor === null && visibleCompletions.length > 0) {
+      event.preventDefault();
+      setActiveCompletionIndex((current) => Math.min(visibleCompletions.length - 1, current + 1));
+      return;
+    }
+    if (
+      event.key === 'ArrowUp' &&
+      historyCursor === null &&
+      visibleCompletions.length > 0 &&
+      activeCompletionIndex >= 0
+    ) {
+      event.preventDefault();
+      setActiveCompletionIndex((current) => Math.max(0, current - 1));
+      return;
+    }
+    if (event.key === 'Enter' && activeCompletion) {
+      event.preventDefault();
+      setInput(`${activeCompletion} `);
+      setActiveCompletionIndex(-1);
+      return;
+    }
     if (event.key === 'ArrowUp') {
       event.preventDefault();
       recallHistory(-1);
@@ -216,13 +241,19 @@ export default function FleetShell({
     }
     if (event.key === 'Tab' && completions.length > 0) {
       event.preventDefault();
-      const completion = completions.length === 1 ? completions[0] : commonPrefix(completions);
+      const completion = activeCompletion
+        ? activeCompletion
+        : completions.length === 1
+          ? completions[0]
+          : commonPrefix(completions);
       if (completion.length > input.trimStart().length) setInput(`${completion} `);
+      setActiveCompletionIndex(-1);
       return;
     }
     if (event.key === 'Escape') {
       setInput('');
       setHistoryCursor(null);
+      setActiveCompletionIndex(-1);
     }
   }
 
@@ -286,6 +317,7 @@ export default function FleetShell({
           onChange={(event) => {
             setInput(event.target.value);
             setHistoryCursor(null);
+            setActiveCompletionIndex(-1);
           }}
           onKeyDown={handleKeyDown}
           placeholder="type a command…"
@@ -294,8 +326,9 @@ export default function FleetShell({
           spellCheck={false}
           role="combobox"
           aria-autocomplete="list"
-          aria-controls="fleet-shell-completions"
+          aria-controls={visibleCompletions.length > 0 ? 'fleet-shell-completions' : undefined}
           aria-expanded={completions.length > 0}
+          aria-activedescendant={activeCompletion ? `fleet-shell-completion-${activeCompletionIndex}` : undefined}
         />
         <button type="submit" className="fleet-shell-run" disabled={!input.trim()} aria-label="Run command">
           run ↵
@@ -303,16 +336,31 @@ export default function FleetShell({
       </form>
 
       {completions.length > 0 && (
-        <div id="fleet-shell-completions" className="fleet-shell-completions" aria-label="Command completions">
-          {completions.slice(0, 6).map((completion) => (
-            <button type="button" key={completion} onClick={() => {
-              setInput(`${completion} `);
-              inputRef.current?.focus();
-            }}>
+        <div
+          id="fleet-shell-completions"
+          className="fleet-shell-completions"
+          role="listbox"
+          aria-label="Command completions"
+        >
+          {visibleCompletions.map((completion, index) => (
+            <button
+              type="button"
+              role="option"
+              id={`fleet-shell-completion-${index}`}
+              aria-selected={activeCompletionIndex === index}
+              tabIndex={-1}
+              key={completion}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => {
+                setInput(`${completion} `);
+                setActiveCompletionIndex(-1);
+                inputRef.current?.focus();
+              }}
+            >
               {completion}
             </button>
           ))}
-          {completions.length > 6 && <span>+{completions.length - 6} more</span>}
+          {completions.length > 6 && <span role="presentation">+{completions.length - 6} more</span>}
         </div>
       )}
     </section>

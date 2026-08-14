@@ -164,8 +164,21 @@ describe('Fleet Shell command engine', () => {
       view: 'metrics',
     });
     expect(runFleetShellCommand('terminal', context).effect).toEqual({ type: 'navigate', target: 'terminal' });
+    expect(runFleetShellCommand('open overview', context).effect).toEqual({ type: 'navigate', target: 'overview' });
+    expect(runFleetShellCommand('open onic1', context).effect).toEqual({
+      type: 'open-host',
+      agentId: 'onic1-id',
+      view: 'dashboard',
+    });
     expect(runFleetShellCommand('open worker-1 docker', context).effect).toBeUndefined();
     expect(output('open worker-1 docker')).toContain('is offline');
+  });
+
+  it('documents every supported open form in help and usage errors', () => {
+    const usage = 'open <destination> | open <host> [view] | open <view>';
+    expect(output('help open')).toContain(usage);
+    expect(output('open')).toContain(usage);
+    expect(output('open')).toContain('destinations: overview, terminal, activity, notifications');
   });
 
   it('rejects arbitrary OS commands and points operators to the explicit terminal', () => {

@@ -35,6 +35,8 @@ describe('FleetShell', () => {
     expect(screen.getByText(/FLEET 0\/0 online/)).toBeInTheDocument();
     fireEvent.keyDown(input, { key: 'ArrowUp' });
     expect(input).toHaveValue('stats');
+    fireEvent.keyDown(input, { key: 'ArrowDown' });
+    expect(input).toHaveValue('');
   });
 
   it('runs quick commands and routes only through typed effects', () => {
@@ -55,5 +57,25 @@ describe('FleetShell', () => {
     fireEvent.submit(screen.getByRole('form', { name: 'Run Fleet Shell command' }));
     expect(props.refresh).toHaveBeenCalledOnce();
     expect(push).not.toHaveBeenCalled();
+  });
+
+  it('exposes completions as a keyboard-navigable ARIA listbox', () => {
+    render(<FleetShell {...props} />);
+    const input = screen.getByLabelText('Fleet Shell command');
+    fireEvent.change(input, { target: { value: 'st' } });
+
+    const listbox = screen.getByRole('listbox', { name: 'Command completions' });
+    const option = screen.getByRole('option', { name: 'stats' });
+    expect(input).toHaveAttribute('aria-controls', listbox.id);
+    expect(input).toHaveAttribute('aria-expanded', 'true');
+    expect(option).toHaveAttribute('aria-selected', 'false');
+
+    fireEvent.keyDown(input, { key: 'ArrowDown' });
+    expect(input).toHaveAttribute('aria-activedescendant', option.id);
+    expect(option).toHaveAttribute('aria-selected', 'true');
+
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(input).toHaveValue('stats ');
+    expect(screen.queryByRole('listbox', { name: 'Command completions' })).not.toBeInTheDocument();
   });
 });

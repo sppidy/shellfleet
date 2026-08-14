@@ -62,7 +62,7 @@ const COMMAND_HELP: CommandHelp[] = [
   { command: 'containers', usage: 'containers [all|running|stopped] [host]', summary: 'list Docker containers' },
   { command: 'health', usage: 'health [host]', summary: 'show health-probe rollups' },
   { command: 'find', usage: 'find <text>', summary: 'search hosts, services, and containers' },
-  { command: 'open', usage: 'open [host] <view>', summary: 'open a host view or a dashboard destination' },
+  { command: 'open', usage: 'open <destination> | open <host> [view] | open <view>', summary: 'open a dashboard destination or host view' },
   { command: 'terminal', usage: 'terminal', summary: 'open the admin multi-host root terminal' },
   { command: 'refresh', usage: 'refresh', summary: 'request a new durable fleet snapshot' },
   { command: 'history', usage: 'history', summary: 'show recent Fleet Shell commands' },
@@ -538,7 +538,13 @@ function runUse(args: string[], context: FleetShellContext): FleetShellResult {
 
 function runOpen(args: string[], context: FleetShellContext): FleetShellResult {
   if (args.length === 0 || args.length > 2) {
-    return { lines: [line('usage: open [host] <view>', 'error'), line('views: dashboard, docker, k8s, metrics, journal, updates, health, config', 'dim')] };
+    return {
+      lines: [
+        line('usage: open <destination> | open <host> [view] | open <view>', 'error'),
+        line('destinations: overview, terminal, activity, notifications', 'dim'),
+        line('views: dashboard, docker, k8s, metrics, journal, updates, health, config', 'dim'),
+      ],
+    };
   }
   const first = args[0].toLowerCase();
   if (args.length === 1 && GLOBAL_DESTINATIONS.includes(first as (typeof GLOBAL_DESTINATIONS)[number])) {

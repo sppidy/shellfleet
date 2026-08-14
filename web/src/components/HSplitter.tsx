@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react';
 
 /**
  * Draggable horizontal splitter. Two children, the left one's width
@@ -47,6 +47,23 @@ export default function HSplitter({
     document.body.style.userSelect = 'none';
   }, []);
 
+  const onKeyDown = useCallback((event: KeyboardEvent<HTMLDivElement>) => {
+    const step = event.shiftKey ? 10 : 2;
+    if (event.key === 'ArrowLeft') {
+      event.preventDefault();
+      setLeftPct((current) => Math.max(minLeftPct, current - step));
+    } else if (event.key === 'ArrowRight') {
+      event.preventDefault();
+      setLeftPct((current) => Math.min(maxLeftPct, current + step));
+    } else if (event.key === 'Home') {
+      event.preventDefault();
+      setLeftPct(minLeftPct);
+    } else if (event.key === 'End') {
+      event.preventDefault();
+      setLeftPct(maxLeftPct);
+    }
+  }, [maxLeftPct, minLeftPct]);
+
   useEffect(() => {
     const onMove = (e: MouseEvent) => {
       if (!draggingRef.current || !containerRef.current) return;
@@ -72,59 +89,32 @@ export default function HSplitter({
   }, [minLeftPct, maxLeftPct]);
 
   return (
-    <div
-      ref={containerRef}
-      style={{
-        display: 'flex',
-        flexDirection: 'row',
-        flex: 1,
-        minHeight: 0,
-        minWidth: 0,
-        overflow: 'hidden',
-      }}
-    >
+    <div ref={containerRef} className="h-splitter">
       <div
+        className="h-splitter-pane h-splitter-pane-left"
         style={{
           width: `${leftPct}%`,
-          minWidth: 0,
-          display: 'flex',
-          flexDirection: 'column',
-          overflow: 'hidden',
         }}
       >
         {left}
       </div>
       <div
         onMouseDown={onMouseDown}
+        onKeyDown={onKeyDown}
+        className="h-splitter-handle"
+        role="separator"
+        aria-label="Resize overview and root shell panes"
+        aria-orientation="vertical"
+        aria-valuemin={minLeftPct}
+        aria-valuemax={maxLeftPct}
+        aria-valuenow={Math.round(leftPct)}
+        tabIndex={0}
         title="drag to resize"
-        style={{
-          width: 4,
-          flexShrink: 0,
-          cursor: 'col-resize',
-          background: 'var(--line)',
-          position: 'relative',
-        }}
       >
         {/* Wider hit-target around the visual line. */}
-        <span
-          style={{
-            position: 'absolute',
-            left: -4,
-            right: -4,
-            top: 0,
-            bottom: 0,
-          }}
-        />
+        <span />
       </div>
-      <div
-        style={{
-          flex: 1,
-          minWidth: 0,
-          display: 'flex',
-          flexDirection: 'column',
-          overflow: 'hidden',
-        }}
-      >
+      <div className="h-splitter-pane h-splitter-pane-right">
         {right}
       </div>
     </div>
