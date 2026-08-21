@@ -429,16 +429,8 @@ mod tests {
     #[test]
     fn response_signature_binds_request_nonce_status_and_body() {
         let key = key("response", 11);
-        let request_nonce =
-            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(new_nonce());
-        let response = sign_response(
-            &key,
-            Direction::EeToCe,
-            &request_nonce,
-            200,
-            b"ok",
-        )
-        .unwrap();
+        let request_nonce = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(new_nonce());
+        let response = sign_response(&key, Direction::EeToCe, &request_nonce, 200, b"ok").unwrap();
 
         assert!(
             verify_response(
