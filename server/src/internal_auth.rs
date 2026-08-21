@@ -453,9 +453,14 @@ pub(crate) async fn send_json<T: serde::Serialize + ?Sized>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
     fn keyring(byte: u8) -> String {
         let secret = data_encoding::BASE64.encode(&[byte; 32]);
         format!(r#"{{"active":"{secret}"}}"#)
+    }
+
+    fn nonce() -> String {
+        data_encoding::BASE64URL_NOPAD.encode(&shared::internal_auth::new_nonce())
     }
 
     #[test]
@@ -463,7 +468,7 @@ mod tests {
         let ce = keyring(1);
         let ee = keyring(2);
         let config = Config::from_values(&ce, "active", &ee, "active").unwrap();
-        let nonce = [3; 32];
+        let nonce = shared::internal_auth::new_nonce();
         let ce_signature = shared::internal_auth::sign_request(
             &config.ce_to_ee[0],
             Direction::CeToEe,
@@ -498,14 +503,15 @@ mod tests {
     async fn nonce_is_consumed_once_and_persists_in_sqlite() {
         let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
         init_nonce_schema(&pool).await.unwrap();
+        let nonce = nonce();
 
         assert!(
-            consume_nonce(&pool, Direction::EeToCe, "k1", "nonce", 100)
+            consume_nonce(&pool, Direction::EeToCe, "k1", &nonce, 100)
                 .await
                 .is_ok()
         );
         assert!(matches!(
-            consume_nonce(&pool, Direction::EeToCe, "k1", "nonce", 101).await,
+            consume_nonce(&pool, Direction::EeToCe, "k1", &nonce, 101).await,
             Err(Error::Replay)
         ));
     }
@@ -514,7 +520,8 @@ mod tests {
     async fn expired_nonce_is_pruned_before_insert() {
         let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
         init_nonce_schema(&pool).await.unwrap();
-        consume_nonce(&pool, Direction::EeToCe, "k1", "nonce", 100)
+        let nonce = nonce();
+        consume_nonce(&pool, Direction::EeToCe, "k1", &nonce, 100)
             .await
             .unwrap();
         assert!(
@@ -522,7 +529,7 @@ mod tests {
                 &pool,
                 Direction::EeToCe,
                 "k1",
-                "nonce",
+                &nonce,
                 100 + NONCE_TTL_SECS + 1,
             )
             .await
