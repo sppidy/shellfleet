@@ -3,7 +3,10 @@ use std::fmt;
 
 use base64::Engine;
 use hmac::{Hmac, Mac};
-use rand::RngCore;
+use rand::{
+    distributions::{Distribution, Standard},
+    rngs::OsRng,
+};
 use sha2::Sha256;
 use zeroize::Zeroizing;
 
@@ -214,9 +217,8 @@ fn validate_nonce(encoded: &str) -> Result<(), AuthError> {
 }
 
 pub fn new_nonce() -> [u8; 32] {
-    let mut nonce = [0u8; 32];
-    rand::rngs::OsRng.fill_bytes(&mut nonce);
-    nonce
+    let mut rng = OsRng;
+    Standard.sample(&mut rng)
 }
 
 pub fn parse_keyring(json: &str) -> Result<Vec<InternalKey>, AuthError> {
@@ -362,11 +364,12 @@ mod tests {
     #[test]
     fn request_signature_binds_body_path_identity_and_direction() {
         let key = key("k1", 7);
+        let nonce = new_nonce();
         let signed = sign_request(
             &key,
             Direction::CeToEe,
             100,
-            &[9; 32],
+            &nonce,
             "POST",
             "/api/ee/acl?x=1",
             br#"{"a":1}"#,
@@ -426,10 +429,12 @@ mod tests {
     #[test]
     fn response_signature_binds_request_nonce_status_and_body() {
         let key = key("response", 11);
+        let request_nonce =
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(new_nonce());
         let response = sign_response(
             &key,
             Direction::EeToCe,
-            "CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQk",
+            &request_nonce,
             200,
             b"ok",
         )
@@ -461,11 +466,12 @@ mod tests {
     #[test]
     fn request_rejects_stale_timestamp_and_malformed_nonce() {
         let key = key("k1", 7);
+        let nonce = new_nonce();
         let mut signed = sign_request(
             &key,
             Direction::CeToEe,
             100,
-            &[9; 32],
+            &nonce,
             "GET",
             "/api/ee/audit",
             b"",
@@ -521,5 +527,10 @@ mod tests {
             parse_keyring("{}"),
             Err(AuthError::InvalidKeyring)
         ));
+    }
+
+    #[test]
+    fn new_nonce_returns_fresh_values() {
+        assert_ne!(new_nonce(), new_nonce());
     }
 }
