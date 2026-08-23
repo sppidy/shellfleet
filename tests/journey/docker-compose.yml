@@ -62,9 +62,32 @@ services:
       SERVER_WS_URL: ws://server:8080/agent/ws
     volumes:
       - ./agent-token.txt:/var/lib/shellfleet-agent/agent-token.txt:ro
+      - gate-run:/run/shellfleet
     depends_on:
       server:
         condition: service_healthy
+      gate:
+        condition: service_healthy
+    networks:
+      - journey
+
+  gate:
+    build:
+      context: ../..
+      dockerfile: Dockerfile.agent
+    user: "0:10001"
+    command: ["/app/gate"]
+    restart: unless-stopped
+    environment:
+      SHELLFLEET_AGENT_UID: "10001"
+    volumes:
+      - gate-run:/run/shellfleet
+    healthcheck:
+      test: ["CMD-SHELL", "test -S /run/shellfleet/approval-gate.sock"]
+      interval: 1s
+      timeout: 1s
+      retries: 30
+      start_period: 1s
     networks:
       - journey
 
@@ -96,4 +119,5 @@ networks:
     driver: bridge
 
 volumes:
+  gate-run:
   server-data:

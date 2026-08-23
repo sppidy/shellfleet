@@ -56,14 +56,14 @@ mod webhook;
 pub const CE_USER_LIMIT: usize = 3;
 
 use axum::{
-    Router,
+    Json, Router,
     extract::{
         DefaultBodyLimit, Query, State,
         ws::{Message as WsMessage, WebSocket, WebSocketUpgrade},
     },
-    http::StatusCode,
+    http::{StatusCode, header},
     response::IntoResponse,
-    routing::get,
+    routing::{get, post},
 };
 use axum_extra::extract::cookie::CookieJar;
 use futures_util::{SinkExt, StreamExt};
@@ -85,12 +85,18 @@ use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
 type AgentTx = mpsc::UnboundedSender<Message>;
 type UiTx = mpsc::UnboundedSender<UiMessage>;
+type UiCommandTx = mpsc::UnboundedSender<UiMessage>;
+type UiHttpRx = Arc<Mutex<mpsc::UnboundedReceiver<UiMessage>>>;
 
 pub struct UiClient {
     tx: UiTx,
+    command_tx: UiCommandTx,
     login: String,
     client_ip: String,
     agent_access: AgentAccess,
+    http_receiver: Option<UiHttpRx>,
+    http_token: Option<String>,
+    last_seen: Arc<AtomicU64>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -586,6 +592,14 @@ async fn main() {
         .nest("/metrics", metrics::routes())
         .nest("/telemetry", telemetry::routes())
         .nest("/core/v1", core::routes())
+        // HTTP control tunnel used only when the browser cannot establish a
+        // WebSocket through its network/edge path. It carries the exact same
+        // UiMessage protocol and is protected by cookie auth, CSRF, RBAC, ACLs,
+        // approval gates, and operation ownership below.
+        .route("/ui/connect", post(ui_http_connect_handler))
+        .route("/ui/disconnect", post(ui_http_disconnect_handler))
+        .route("/ui/poll", post(ui_http_poll_handler))
+        .route("/ui/send", post(ui_http_send_handler))
         .route("/me", get(me_handler))
         .route("/healthz", get(healthz))
         .route("/audit", get(audit_handler))
@@ -1759,6 +1773,317 @@ async fn handle_agent_socket(socket: WebSocket, state: Arc<AppState>, token: Str
     }
 }
 
+const UI_HTTP_POLL_WAIT: std::time::Duration = std::time::Duration::from_secs(20);
+const UI_HTTP_IDLE_TTL_SECS: u64 = 90;
+const UI_HTTP_MAX_BATCH: usize = 128;
+const UI_HTTP_MAX_SESSIONS_PER_USER: usize = 8;
+
+struct RegisteredUiClient {
+    client_id: u64,
+    command_tx: UiCommandTx,
+    outbound_rx: UiHttpRx,
+}
+
+#[derive(Debug, Deserialize)]
+struct UiHttpClientRequest {
+    client_id: u64,
+    client_token: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct UiHttpSendRequest {
+    client_id: u64,
+    client_token: String,
+    messages: Vec<UiMessage>,
+}
+
+#[derive(Serialize)]
+struct UiHttpConnectResponse {
+    client_id: u64,
+    client_token: String,
+    messages: Vec<UiMessage>,
+}
+
+#[derive(Serialize)]
+struct UiHttpMessagesResponse {
+    messages: Vec<UiMessage>,
+}
+
+async fn register_ui_client(
+    state: Arc<AppState>,
+    login: String,
+    initial_role: auth::Role,
+    token_iat: i64,
+    client_ip: String,
+    http_token: Option<String>,
+) -> Result<RegisteredUiClient, ()> {
+    let (initial_agents, initial_capabilities) = {
+        let map = state.agents.lock().await;
+        let agents = map.keys().cloned().collect::<Vec<_>>();
+        let capabilities = map
+            .iter()
+            .map(|(id, entry)| (id.clone(), entry.capabilities.clone()))
+            .collect::<HashMap<_, _>>();
+        (agents, capabilities)
+    };
+    let agent_access = if initial_role == auth::Role::Admin {
+        AgentAccess::Unrestricted
+    } else {
+        ee_fetch_agent_access(&login, &client_ip, &initial_agents).await
+    };
+    let (tx, rx) = mpsc::unbounded_channel::<UiMessage>();
+    let outbound_rx = Arc::new(Mutex::new(rx));
+    let (command_tx, command_rx) = mpsc::unbounded_channel::<UiMessage>();
+    let client_id = state.ui_id_counter.fetch_add(1, Ordering::Relaxed);
+    let last_seen = Arc::new(AtomicU64::new(now_unix().max(0) as u64));
+    let mut clients = state.ui_clients.lock().await;
+    // Admission and insertion share one lock so concurrent connect requests
+    // cannot race past the per-user bound.
+    if http_token.is_some()
+        && clients
+            .values()
+            .filter(|client| client.login == login && client.http_token.is_some())
+            .count()
+            >= UI_HTTP_MAX_SESSIONS_PER_USER
+    {
+        return Err(());
+    }
+    clients.insert(
+        client_id,
+        UiClient {
+            tx: tx.clone(),
+            command_tx: command_tx.clone(),
+            login: login.clone(),
+            client_ip: client_ip.clone(),
+            agent_access: agent_access.clone(),
+            http_receiver: http_token.as_ref().map(|_| outbound_rx.clone()),
+            http_token: http_token.clone(),
+            last_seen: last_seen.clone(),
+        },
+    );
+    drop(clients);
+
+    let (initial_agents, initial_capabilities) =
+        ee_filter_agent_list(initial_agents, initial_capabilities, &agent_access);
+    let _ = tx.send(UiMessage::ListAgentsResponse {
+        agents: initial_agents,
+        capabilities: initial_capabilities,
+    });
+
+    let process_state = state.clone();
+    tokio::spawn(async move {
+        process_ui_messages(
+            command_rx,
+            process_state,
+            login,
+            token_iat,
+            client_ip,
+            tx,
+            client_id,
+        )
+        .await;
+    });
+
+    if http_token.is_some() {
+        let reap_state = state.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(std::time::Duration::from_secs(30));
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            tick.tick().await;
+            loop {
+                tick.tick().await;
+                let seen = last_seen.load(Ordering::Relaxed);
+                let now = now_unix().max(0) as u64;
+                if now.saturating_sub(seen) <= UI_HTTP_IDLE_TTL_SECS {
+                    continue;
+                }
+                let removed = reap_state
+                    .ui_clients
+                    .lock()
+                    .await
+                    .remove(&client_id)
+                    .is_some();
+                if removed {
+                    tracing::info!(client_id, "idle HTTP UI client expired");
+                }
+                break;
+            }
+        });
+    }
+
+    Ok(RegisteredUiClient {
+        client_id,
+        command_tx,
+        outbound_rx,
+    })
+}
+
+fn no_store_json<T: Serialize>(value: T) -> axum::response::Response {
+    ([(header::CACHE_CONTROL, "private, no-store")], Json(value)).into_response()
+}
+
+fn http_control_token_matches(expected: &str, actual: &str) -> bool {
+    subtle::ConstantTimeEq::ct_eq(expected.as_bytes(), actual.as_bytes()).into()
+}
+
+fn is_http_client_message(message: &UiMessage) -> bool {
+    matches!(
+        message,
+        UiMessage::ListAgentsRequest | UiMessage::SendToAgent { .. }
+    )
+}
+
+async fn receive_http_messages(
+    receiver: &mut mpsc::UnboundedReceiver<UiMessage>,
+) -> Vec<UiMessage> {
+    let mut messages = Vec::new();
+    if let Ok(Some(first)) = tokio::time::timeout(UI_HTTP_POLL_WAIT, receiver.recv()).await {
+        messages.push(first);
+    }
+    while messages.len() < UI_HTTP_MAX_BATCH {
+        match receiver.try_recv() {
+            Ok(message) => messages.push(message),
+            Err(_) => break,
+        }
+    }
+    messages
+}
+
+async fn authenticate_http_ui_client(
+    state: &AppState,
+    jar: &CookieJar,
+    request: &UiHttpClientRequest,
+) -> Result<(UiCommandTx, UiHttpRx), (StatusCode, &'static str)> {
+    let claims = auth::current_user(jar, &state.db).await?;
+    let clients = state.ui_clients.lock().await;
+    let Some(client) = clients.get(&request.client_id) else {
+        return Err((StatusCode::GONE, "control session expired"));
+    };
+    let Some(expected_token) = client.http_token.as_deref() else {
+        return Err((StatusCode::GONE, "not an HTTP control session"));
+    };
+    let token_matches = http_control_token_matches(expected_token, &request.client_token);
+    if client.login != claims.sub || !token_matches {
+        return Err((StatusCode::FORBIDDEN, "control session mismatch"));
+    }
+    let Some(receiver) = client.http_receiver.clone() else {
+        return Err((StatusCode::GONE, "control session unavailable"));
+    };
+    client
+        .last_seen
+        .store(now_unix().max(0) as u64, Ordering::Relaxed);
+    Ok((client.command_tx.clone(), receiver))
+}
+
+async fn ui_http_connect_handler(
+    jar: CookieJar,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<SocketAddr>,
+    State(state): State<Arc<AppState>>,
+) -> axum::response::Response {
+    let claims = match auth::current_user(&jar, &state.db).await {
+        Ok(claims) => claims,
+        Err((status, reason)) => return (status, reason).into_response(),
+    };
+    let client_ip = throttle::real_client_ip(&headers, Some(peer.ip()));
+    let client_token = uuid::Uuid::new_v4().to_string();
+    let registered = match register_ui_client(
+        state,
+        claims.sub,
+        auth::Role::parse(&claims.role),
+        claims.iat,
+        client_ip,
+        Some(client_token.clone()),
+    )
+    .await
+    {
+        Ok(registered) => registered,
+        Err(()) => {
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                "too many HTTP control sessions",
+            )
+                .into_response();
+        }
+    };
+    let messages = {
+        let mut receiver = registered.outbound_rx.lock().await;
+        receive_http_messages(&mut receiver).await
+    };
+    tracing::info!(
+        client_id = registered.client_id,
+        "new HTTP UI control connection"
+    );
+    no_store_json(UiHttpConnectResponse {
+        client_id: registered.client_id,
+        client_token,
+        messages,
+    })
+}
+
+async fn ui_http_poll_handler(
+    jar: CookieJar,
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<UiHttpClientRequest>,
+) -> axum::response::Response {
+    let (_, receiver) = match authenticate_http_ui_client(&state, &jar, &request).await {
+        Ok(client) => client,
+        Err(error) => return error.into_response(),
+    };
+    // Only one long poll may wait on a control session at once. Returning a
+    // conflict instead of queuing arbitrary concurrent requests bounds origin
+    // tasks even if a client or extension retries too aggressively.
+    let Ok(mut receiver) = receiver.try_lock() else {
+        return (StatusCode::CONFLICT, "control poll already active").into_response();
+    };
+    no_store_json(UiHttpMessagesResponse {
+        messages: receive_http_messages(&mut receiver).await,
+    })
+}
+
+async fn ui_http_disconnect_handler(
+    jar: CookieJar,
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<UiHttpClientRequest>,
+) -> axum::response::Response {
+    if let Err(error) = authenticate_http_ui_client(&state, &jar, &request).await {
+        return error.into_response();
+    }
+    state.ui_clients.lock().await.remove(&request.client_id);
+    no_store_json(serde_json::json!({ "ok": true }))
+}
+
+async fn ui_http_send_handler(
+    jar: CookieJar,
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<UiHttpSendRequest>,
+) -> axum::response::Response {
+    if request.messages.is_empty() || request.messages.len() > UI_HTTP_MAX_BATCH {
+        return (StatusCode::BAD_REQUEST, "invalid control message batch").into_response();
+    }
+    if request
+        .messages
+        .iter()
+        .any(|message| !is_http_client_message(message))
+    {
+        return (StatusCode::BAD_REQUEST, "invalid client UI message").into_response();
+    }
+    let client_request = UiHttpClientRequest {
+        client_id: request.client_id,
+        client_token: request.client_token,
+    };
+    let (command_tx, _) = match authenticate_http_ui_client(&state, &jar, &client_request).await {
+        Ok(client) => client,
+        Err(error) => return error.into_response(),
+    };
+    for message in request.messages {
+        if command_tx.send(message).is_err() {
+            return (StatusCode::GONE, "control session closed").into_response();
+        }
+    }
+    no_store_json(serde_json::json!({ "ok": true }))
+}
+
 async fn handle_ui_socket(
     socket: WebSocket,
     state: Arc<AppState>,
@@ -1769,45 +2094,22 @@ async fn handle_ui_socket(
 ) {
     tracing::info!(%login, "new ui websocket connection");
     let (mut sender, mut receiver) = socket.split();
-
-    let (initial_agents, initial_capabilities) = {
-        let map = state.agents.lock().await;
-        let agents = map.keys().cloned().collect::<Vec<_>>();
-        let capabilities = map
-            .iter()
-            .map(|(id, entry)| (id.clone(), entry.capabilities.clone()))
-            .collect::<HashMap<_, _>>();
-        (agents, capabilities)
-    };
-    let mut agent_access = if initial_role == auth::Role::Admin {
-        AgentAccess::Unrestricted
-    } else {
-        ee_fetch_agent_access(&login, &client_ip, &initial_agents).await
-    };
-    let (tx, mut rx) = mpsc::unbounded_channel::<UiMessage>();
-    let client_id = state.ui_id_counter.fetch_add(1, Ordering::Relaxed);
-    state.ui_clients.lock().await.insert(
-        client_id,
-        UiClient {
-            tx: tx.clone(),
-            login: login.clone(),
-            client_ip: client_ip.clone(),
-            agent_access: agent_access.clone(),
-        },
-    );
-
-    // Terminal sessions this client opened, so recordings are stopped if the
-    // socket drops without an explicit StopTerminalRequest.
-    let mut rec_sessions: std::collections::HashSet<String> = std::collections::HashSet::new();
-
-    let (initial_agents, initial_capabilities) =
-        ee_filter_agent_list(initial_agents, initial_capabilities, &agent_access);
-    let _ = tx.send(UiMessage::ListAgentsResponse {
-        agents: initial_agents,
-        capabilities: initial_capabilities,
-    });
+    let registered = register_ui_client(
+        state.clone(),
+        login,
+        initial_role,
+        token_iat,
+        client_ip,
+        None,
+    )
+    .await
+    .expect("WebSocket UI clients are not subject to the HTTP session cap");
+    let client_id = registered.client_id;
+    let command_tx = registered.command_tx;
+    let outbound_rx = registered.outbound_rx;
 
     let send_task = tokio::spawn(async move {
+        let mut rx = outbound_rx.lock().await;
         let mut hb = tokio::time::interval(std::time::Duration::from_secs(25));
         hb.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         hb.tick().await;
@@ -1853,281 +2155,297 @@ async fn handle_ui_socket(
             tracing::warn!(error = %e, "dropped un-parseable UI message");
         }
         if let Ok(parsed_msg) = parsed {
-            match parsed_msg {
-                UiMessage::ListAgentsRequest => {
-                    let (agents, capabilities) = {
-                        let map = state.agents.lock().await;
-                        let agents = map.keys().cloned().collect::<Vec<_>>();
-                        let capabilities = map
-                            .iter()
-                            .map(|(id, entry)| (id.clone(), entry.capabilities.clone()))
-                            .collect::<HashMap<_, _>>();
-                        (agents, capabilities)
-                    };
-                    agent_access = ui_agent_access(&state, &login, &client_ip, &agents).await;
-                    if let Some(client) = state.ui_clients.lock().await.get_mut(&client_id) {
-                        client.agent_access = agent_access.clone();
-                    }
-                    let (agents, capabilities) =
-                        ee_filter_agent_list(agents, capabilities, &agent_access);
-                    let _ = tx.send(UiMessage::ListAgentsResponse {
-                        agents,
-                        capabilities,
-                    });
+            if command_tx.send(parsed_msg).is_err() {
+                break;
+            }
+        }
+    }
+
+    send_task.abort();
+    // Dropping the map's command sender lets process_ui_messages perform the
+    // shared ownership/recording cleanup for both transports.
+    state.ui_clients.lock().await.remove(&client_id);
+}
+
+async fn process_ui_messages(
+    mut command_rx: mpsc::UnboundedReceiver<UiMessage>,
+    state: Arc<AppState>,
+    login: String,
+    token_iat: i64,
+    client_ip: String,
+    tx: UiTx,
+    client_id: u64,
+) {
+    // Terminal sessions this client opened, so recordings are stopped if the
+    // control transport disappears without an explicit StopTerminalRequest.
+    let mut rec_sessions: std::collections::HashSet<String> = std::collections::HashSet::new();
+    while let Some(parsed_msg) = command_rx.recv().await {
+        match parsed_msg {
+            UiMessage::ListAgentsRequest => {
+                let (agents, capabilities) = {
+                    let map = state.agents.lock().await;
+                    let agents = map.keys().cloned().collect::<Vec<_>>();
+                    let capabilities = map
+                        .iter()
+                        .map(|(id, entry)| (id.clone(), entry.capabilities.clone()))
+                        .collect::<HashMap<_, _>>();
+                    (agents, capabilities)
+                };
+                let agent_access = ui_agent_access(&state, &login, &client_ip, &agents).await;
+                if let Some(client) = state.ui_clients.lock().await.get_mut(&client_id) {
+                    client.agent_access = agent_access.clone();
                 }
-                UiMessage::SendToAgent { agent_id, message } => {
-                    let target_access = ui_agent_access(
-                        &state,
-                        &login,
-                        &client_ip,
-                        std::slice::from_ref(&agent_id),
-                    )
-                    .await;
-                    if let Some(client) = state.ui_clients.lock().await.get_mut(&client_id) {
-                        merge_exact_agent_access(
-                            &mut client.agent_access,
-                            &agent_id,
-                            &target_access,
+                let (agents, capabilities) =
+                    ee_filter_agent_list(agents, capabilities, &agent_access);
+                let _ = tx.send(UiMessage::ListAgentsResponse {
+                    agents,
+                    capabilities,
+                });
+            }
+            UiMessage::SendToAgent { agent_id, message } => {
+                let target_access =
+                    ui_agent_access(&state, &login, &client_ip, std::slice::from_ref(&agent_id))
+                        .await;
+                if let Some(client) = state.ui_clients.lock().await.get_mut(&client_id) {
+                    merge_exact_agent_access(&mut client.agent_access, &agent_id, &target_access);
+                }
+                if !agent_allowed_by_access(&agent_id, &target_access) {
+                    let _ = tx.send(UiMessage::PermissionDenied {
+                        agent_id: agent_id.clone(),
+                        variant_type: "agent_access".to_string(),
+                        reason: "not in your allowed agents".to_string(),
+                    });
+                    continue;
+                }
+                let variant_type = serde_json::to_value(&message)
+                    .ok()
+                    .and_then(|v| v.get("type").and_then(|t| t.as_str().map(String::from)))
+                    .unwrap_or_else(|| "unknown".into());
+                // Session-epoch guard: a revoked session (logout /
+                // role-change / MFA-disable) must not keep issuing
+                // mutating commands over an already-open control session.
+                // The HTTP tunnel is authenticated per request too, but this
+                // shared check keeps WebSocket and HTTP processing identical.
+                if !auth::is_dev_mode() {
+                    let session_reason = match crate::db::get_user(&state.db, &login).await {
+                        Ok(Some(row)) if token_iat >= row.session_epoch => None,
+                        Ok(Some(_)) => Some("session revoked — please sign in again"),
+                        Ok(None) => Some("session no longer exists"),
+                        Err(error) => {
+                            tracing::error!(%error, %login, "ui control: session verification failed");
+                            Some("session verification unavailable")
+                        }
+                    };
+                    if let Some(reason) = session_reason {
+                        tracing::warn!(
+                            %login, %agent_id, %variant_type, %reason,
+                            "ui control session failed session validation"
                         );
-                    }
-                    if !agent_allowed_by_access(&agent_id, &target_access) {
                         let _ = tx.send(UiMessage::PermissionDenied {
                             agent_id: agent_id.clone(),
-                            variant_type: "agent_access".to_string(),
-                            reason: "not in your allowed agents".to_string(),
+                            variant_type: "session_revoked".to_string(),
+                            reason: reason.to_string(),
+                        });
+                        break;
+                    }
+                }
+                let security = match message.ui_request_security() {
+                    Ok(security) => security,
+                    Err(error) => {
+                        tracing::warn!(
+                            %login,
+                            %agent_id,
+                            variant = %variant_type,
+                            ?error,
+                            "ui control: rejected invalid or non-request message"
+                        );
+                        let _ = tx.send(UiMessage::PermissionDenied {
+                            agent_id: agent_id.clone(),
+                            variant_type,
+                            reason: "message is not an allowed UI request".to_string(),
                         });
                         continue;
                     }
-                    let variant_type = serde_json::to_value(&message)
-                        .ok()
-                        .and_then(|v| v.get("type").and_then(|t| t.as_str().map(String::from)))
-                        .unwrap_or_else(|| "unknown".into());
-                    // Session-epoch guard: a revoked session (logout /
-                    // role-change / MFA-disable) must not keep issuing
-                    // mutating commands over an already-open WebSocket.
-                    // The HTTP rbac middleware checks this on every
-                    // request; the WS plane bypasses that middleware, so
-                    // re-check here. A mismatch closes the socket.
-                    if !auth::is_dev_mode() {
-                        let session_reason = match crate::db::get_user(&state.db, &login).await {
-                            Ok(Some(row)) if token_iat >= row.session_epoch => None,
-                            Ok(Some(_)) => Some("session revoked — please sign in again"),
-                            Ok(None) => Some("session no longer exists"),
-                            Err(error) => {
-                                tracing::error!(%error, %login, "ui ws: session verification failed");
-                                Some("session verification unavailable")
-                            }
-                        };
-                        if let Some(reason) = session_reason {
-                            tracing::warn!(
-                                %login, %agent_id, %variant_type, %reason,
-                                "ui ws: closing socket after failed session validation"
-                            );
-                            let _ = tx.send(UiMessage::PermissionDenied {
-                                agent_id: agent_id.clone(),
-                                variant_type: "session_revoked".to_string(),
-                                reason: reason.to_string(),
-                            });
-                            break;
-                        }
-                    }
-                    let security = match message.ui_request_security() {
-                        Ok(security) => security,
-                        Err(error) => {
-                            tracing::warn!(
-                                %login,
-                                %agent_id,
-                                variant = %variant_type,
-                                ?error,
-                                "ui ws: rejected invalid or non-request message"
-                            );
-                            let _ = tx.send(UiMessage::PermissionDenied {
-                                agent_id: agent_id.clone(),
-                                variant_type,
-                                reason: "message is not an allowed UI request".to_string(),
-                            });
-                            continue;
-                        }
-                    };
-                    // EE ACL enforcement (skip for admins)
-                    if ee::ee_active() && !auth::is_dev_mode() {
-                        let is_admin = matches!(
-                            crate::db::get_user(&state.db, &login).await,
-                            Ok(Some(row)) if row.role == "admin"
-                        );
-                        if !is_admin {
-                            if let Some(action) = security.action {
-                                if !ee_check_permission(
-                                    &login,
-                                    action,
-                                    &agent_id,
-                                    Some(client_ip.as_str()),
-                                )
-                                .await
-                                {
-                                    let _ = tx.send(UiMessage::PermissionDenied {
-                                        agent_id: agent_id.clone(),
-                                        variant_type: action.to_string(),
-                                        reason: format!("denied: {action}"),
-                                    });
-                                    continue;
-                                }
-                            }
-                        }
-                    }
-                    // CE RBAC over the WebSocket plane. The HTTP rbac
-                    // middleware doesn't run here — without this gate
-                    // a viewer with a verified session could
-                    // ControlServiceRequest, AptUpgradeRequest,
-                    // DockerContainerActionRequest, send terminal
-                    // keystrokes, etc., bypassing the entire role
-                    // model. Re-resolve the role from the DB on every
-                    // mutating message so a freshly-demoted admin is
-                    // blocked immediately.
-                    if !auth::is_dev_mode() && security.class.requires_admin() {
-                        let role_str = match crate::db::get_user(&state.db, &login).await {
-                            Ok(Some(row)) => row.role,
-                            _ => "viewer".to_string(),
-                        };
-                        if auth::Role::parse(&role_str) != auth::Role::Admin {
-                            tracing::warn!(
-                                %login, %agent_id, variant = %variant_type,
-                                "ui ws: rejected mutating message from non-admin"
-                            );
-                            crate::db::record_audit(
-                                &state.db,
-                                now_unix(),
-                                Some(&login),
-                                Some(&agent_id),
-                                "ws.send_to_agent.denied",
-                                false,
-                                Some(&format!("role={role_str} variant={variant_type}")),
+                };
+                // EE ACL enforcement (skip for admins)
+                if ee::ee_active() && !auth::is_dev_mode() {
+                    let is_admin = matches!(
+                        crate::db::get_user(&state.db, &login).await,
+                        Ok(Some(row)) if row.role == "admin"
+                    );
+                    if !is_admin {
+                        if let Some(action) = security.action {
+                            if !ee_check_permission(
+                                &login,
+                                action,
+                                &agent_id,
+                                Some(client_ip.as_str()),
                             )
-                            .await;
-                            // Tell the UI the request was rejected so the
-                            // calling panel doesn't sit in "waiting for
-                            // output…" forever. Best-effort; if the send
-                            // fails the client is already gone.
-                            let _ = tx.send(UiMessage::PermissionDenied {
-                                agent_id: agent_id.clone(),
-                                variant_type,
-                                reason: "admin only".to_string(),
-                            });
-                            continue;
-                        }
-                    }
-                    // EE command-approval gate (dual control). A discrete action
-                    // that matches an approval rule is HELD: we stash the
-                    // serialized message in EE and tell the UI it's pending — a
-                    // second admin approves in the Approvals tab, then EE calls
-                    // back to /internal/execute-approved to run it. Interactive
-                    // Interactive streams and reads are never approval-held.
-                    if ee::ee_active() && !auth::is_dev_mode() {
-                        if security.class.requires_approval() {
-                            let Some(action) = security.action else {
+                            .await
+                            {
                                 let _ = tx.send(UiMessage::PermissionDenied {
                                     agent_id: agent_id.clone(),
-                                    variant_type: variant_type.clone(),
-                                    reason: "request has no approval action mapping".to_string(),
+                                    variant_type: action.to_string(),
+                                    reason: format!("denied: {action}"),
                                 });
                                 continue;
-                            };
-                            let payload = serde_json::to_string(&message).unwrap_or_default();
-                            match ee_check_approval(&login, action, &agent_id, &payload).await {
-                                Ok(None) => { /* no rule matched — run it now */ }
-                                Ok(Some(req_id)) => {
-                                    crate::db::record_audit(
-                                        &state.db,
-                                        now_unix(),
-                                        Some(&login),
-                                        Some(&agent_id),
-                                        "ws.approval.held",
-                                        true,
-                                        Some(&format!("action={action} request={req_id}")),
-                                    )
-                                    .await;
-                                    let _ = tx.send(UiMessage::PermissionDenied {
+                            }
+                        }
+                    }
+                }
+                // CE RBAC over both interactive transports. Without this gate
+                // a viewer with a verified session could
+                // ControlServiceRequest, AptUpgradeRequest,
+                // DockerContainerActionRequest, send terminal
+                // keystrokes, etc., bypassing the entire role
+                // model. Re-resolve the role from the DB on every
+                // mutating message so a freshly-demoted admin is
+                // blocked immediately.
+                if !auth::is_dev_mode() && security.class.requires_admin() {
+                    let role_str = match crate::db::get_user(&state.db, &login).await {
+                        Ok(Some(row)) => row.role,
+                        _ => "viewer".to_string(),
+                    };
+                    if auth::Role::parse(&role_str) != auth::Role::Admin {
+                        tracing::warn!(
+                            %login, %agent_id, variant = %variant_type,
+                            "ui control: rejected mutating message from non-admin"
+                        );
+                        crate::db::record_audit(
+                            &state.db,
+                            now_unix(),
+                            Some(&login),
+                            Some(&agent_id),
+                            "ws.send_to_agent.denied",
+                            false,
+                            Some(&format!("role={role_str} variant={variant_type}")),
+                        )
+                        .await;
+                        // Tell the UI the request was rejected so the
+                        // calling panel doesn't sit in "waiting for
+                        // output…" forever. Best-effort; if the send
+                        // fails the client is already gone.
+                        let _ = tx.send(UiMessage::PermissionDenied {
+                            agent_id: agent_id.clone(),
+                            variant_type,
+                            reason: "admin only".to_string(),
+                        });
+                        continue;
+                    }
+                }
+                // EE command-approval gate (dual control). A discrete action
+                // that matches an approval rule is HELD: we stash the
+                // serialized message in EE and tell the UI it's pending — a
+                // second admin approves in the Approvals tab, then EE calls
+                // back to /internal/execute-approved to run it. Interactive
+                // Interactive streams and reads are never approval-held.
+                if ee::ee_active() && !auth::is_dev_mode() {
+                    if security.class.requires_approval() {
+                        let Some(action) = security.action else {
+                            let _ = tx.send(UiMessage::PermissionDenied {
+                                agent_id: agent_id.clone(),
+                                variant_type: variant_type.clone(),
+                                reason: "request has no approval action mapping".to_string(),
+                            });
+                            continue;
+                        };
+                        let payload = serde_json::to_string(&message).unwrap_or_default();
+                        match ee_check_approval(&login, action, &agent_id, &payload).await {
+                            Ok(None) => { /* no rule matched — run it now */ }
+                            Ok(Some(req_id)) => {
+                                crate::db::record_audit(
+                                    &state.db,
+                                    now_unix(),
+                                    Some(&login),
+                                    Some(&agent_id),
+                                    "ws.approval.held",
+                                    true,
+                                    Some(&format!("action={action} request={req_id}")),
+                                )
+                                .await;
+                                let _ = tx.send(UiMessage::PermissionDenied {
                                         agent_id: agent_id.clone(),
                                         variant_type: "approval_pending".to_string(),
                                         reason: format!(
                                             "held for approval — request #{req_id}; a second admin must approve it in the Approvals tab"
                                         ),
                                     });
-                                    continue;
-                                }
-                                Err(()) => {
-                                    let _ = tx.send(UiMessage::PermissionDenied {
-                                        agent_id: agent_id.clone(),
-                                        variant_type: "approval_unavailable".to_string(),
-                                        reason: "approval system unavailable — action blocked (fail-closed)".to_string(),
-                                    });
-                                    continue;
-                                }
+                                continue;
+                            }
+                            Err(()) => {
+                                let _ = tx.send(UiMessage::PermissionDenied {
+                                    agent_id: agent_id.clone(),
+                                    variant_type: "approval_unavailable".to_string(),
+                                    reason:
+                                        "approval system unavailable — action blocked (fail-closed)"
+                                            .to_string(),
+                                });
+                                continue;
                             }
                         }
-                    }
-                    if let Some(operation) = operation_routing::ui_operation(&message) {
-                        use operation_routing::UiOperation;
-                        let allowed = {
-                            let mut owners = state.operation_owners.lock().await;
-                            match &operation {
-                                UiOperation::Start(key) => {
-                                    owners.claim(&agent_id, key.clone(), client_id)
-                                }
-                                UiOperation::Use(key) => {
-                                    owners.owner(&agent_id, key) == Some(client_id)
-                                }
-                                UiOperation::Stop(key) => owners.release(&agent_id, key, client_id),
-                            }
-                        };
-                        if !allowed {
-                            let _ = tx.send(UiMessage::PermissionDenied {
-                                agent_id: agent_id.clone(),
-                                variant_type: variant_type.clone(),
-                                reason: "operation is owned by another client".to_string(),
-                            });
-                            continue;
-                        }
-                    }
-                    // Recording tap: terminal session lifecycle + INPUT (user→agent).
-                    match &message {
-                        Message::StartTerminalRequest { session_id } => {
-                            state
-                                .recorder
-                                .start(session_id, &agent_id, &login, "host")
-                                .await;
-                            rec_sessions.insert(session_id.clone());
-                        }
-                        Message::TerminalData { session_id, data } => {
-                            state.recorder.frame(session_id, "i", data).await;
-                        }
-                        Message::StopTerminalRequest { session_id } => {
-                            state.recorder.stop(session_id).await;
-                            rec_sessions.remove(session_id);
-                        }
-                        _ => {}
-                    }
-                    if let Some(entry) = state.agents.lock().await.get(&agent_id) {
-                        let _ = entry.tx.send(message);
                     }
                 }
-                _ => {}
+                if let Some(operation) = operation_routing::ui_operation(&message) {
+                    use operation_routing::UiOperation;
+                    let allowed = {
+                        let mut owners = state.operation_owners.lock().await;
+                        match &operation {
+                            UiOperation::Start(key) => {
+                                owners.claim(&agent_id, key.clone(), client_id)
+                            }
+                            UiOperation::Use(key) => {
+                                owners.owner(&agent_id, key) == Some(client_id)
+                            }
+                            UiOperation::Stop(key) => owners.release(&agent_id, key, client_id),
+                        }
+                    };
+                    if !allowed {
+                        let _ = tx.send(UiMessage::PermissionDenied {
+                            agent_id: agent_id.clone(),
+                            variant_type: variant_type.clone(),
+                            reason: "operation is owned by another client".to_string(),
+                        });
+                        continue;
+                    }
+                }
+                // Recording tap: terminal session lifecycle + INPUT (user→agent).
+                match &message {
+                    Message::StartTerminalRequest { session_id } => {
+                        state
+                            .recorder
+                            .start(session_id, &agent_id, &login, "host")
+                            .await;
+                        rec_sessions.insert(session_id.clone());
+                    }
+                    Message::TerminalData { session_id, data } => {
+                        state.recorder.frame(session_id, "i", data).await;
+                    }
+                    Message::StopTerminalRequest { session_id } => {
+                        state.recorder.stop(session_id).await;
+                        rec_sessions.remove(session_id);
+                    }
+                    _ => {}
+                }
+                if let Some(entry) = state.agents.lock().await.get(&agent_id) {
+                    let _ = entry.tx.send(message);
+                }
             }
+            _ => {}
         }
     }
 
-    send_task.abort();
+    // Removing an already-removed entry is harmless. WebSocket teardown and
+    // the HTTP idle reaper deliberately race this cleanup path.
     state.ui_clients.lock().await.remove(&client_id);
     state
         .operation_owners
         .lock()
         .await
         .release_client(client_id);
-    // Close any recordings still open for this client (abrupt disconnect).
     for sid in rec_sessions {
         state.recorder.stop(&sid).await;
     }
-    tracing::info!(client_id, "ui client disconnected");
+    tracing::info!(client_id, "ui control client disconnected");
 }
 
 pub(crate) async fn ee_fetch_agent_access(
@@ -2401,5 +2719,35 @@ mod tests {
         assert!(ui_websocket_session_allowed(false, true));
         assert!(!ui_websocket_session_allowed(true, true));
         assert!(!ui_websocket_session_allowed(false, false));
+    }
+
+    #[test]
+    fn http_control_tokens_require_an_exact_match() {
+        assert!(http_control_token_matches(
+            "random-session-token",
+            "random-session-token"
+        ));
+        assert!(!http_control_token_matches(
+            "random-session-token",
+            "other-session-token"
+        ));
+        assert!(!http_control_token_matches("random-session-token", ""));
+    }
+
+    #[test]
+    fn http_control_accepts_only_client_originated_ui_variants() {
+        assert!(is_http_client_message(&UiMessage::ListAgentsRequest));
+        assert!(is_http_client_message(&UiMessage::SendToAgent {
+            agent_id: "node-a-id".into(),
+            message: Message::SystemStatsRequest,
+        }));
+        assert!(!is_http_client_message(&UiMessage::ListAgentsResponse {
+            agents: Vec::new(),
+            capabilities: HashMap::new(),
+        }));
+        assert!(!is_http_client_message(&UiMessage::AgentMessage {
+            agent_id: "node-a-id".into(),
+            message: Message::SystemStatsRequest,
+        }));
     }
 }

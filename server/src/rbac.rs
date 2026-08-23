@@ -26,6 +26,13 @@ fn is_api_keys_path(path: &str) -> bool {
     path == "/ee/keys" || path.starts_with("/ee/keys/")
 }
 
+fn is_ui_transport_path(path: &str) -> bool {
+    matches!(
+        path,
+        "/ui/connect" | "/ui/disconnect" | "/ui/poll" | "/ui/send"
+    )
+}
+
 fn is_mutating(method: &Method) -> bool {
     matches!(
         *method,
@@ -140,7 +147,12 @@ pub async fn middleware(
     // keys. EE scopes every mutation by the CE-injected login, so this only
     // lets a viewer manage their own keys — never escalation. All other guards
     // (auth, session-epoch, MFA above) still applied.
-    if is_mutating(&method) && !is_api_keys_path(&path) {
+    // The HTTP UI transport carries both reads and writes in a UiMessage
+    // envelope. Its handler applies the same per-message security class,
+    // ACL, approval, and operation-ownership checks as the WebSocket path.
+    // Do not reject the whole batch merely because the tunnel itself is POST;
+    // current_user above still authenticates every request.
+    if is_mutating(&method) && !is_api_keys_path(&path) && !is_ui_transport_path(&path) {
         if auth::Role::parse(&claims.role) != auth::Role::Admin {
             return forbidden("viewer role: read-only");
         }
@@ -151,7 +163,7 @@ pub async fn middleware(
 
 #[cfg(test)]
 mod tests {
-    use super::{is_api_keys_path, is_cli_read};
+    use super::{is_api_keys_path, is_cli_read, is_ui_transport_path};
     use axum::http::Method;
 
     #[test]
@@ -161,6 +173,16 @@ mod tests {
         assert!(!is_api_keys_path("/ee/keys-extra"));
         assert!(!is_api_keys_path("/ee/keysX"));
         assert!(!is_api_keys_path("/ee/metrics/panels"));
+    }
+
+    #[test]
+    fn matches_only_exact_ui_transport_routes() {
+        assert!(is_ui_transport_path("/ui/connect"));
+        assert!(is_ui_transport_path("/ui/disconnect"));
+        assert!(is_ui_transport_path("/ui/poll"));
+        assert!(is_ui_transport_path("/ui/send"));
+        assert!(!is_ui_transport_path("/ui/send/extra"));
+        assert!(!is_ui_transport_path("/ui/send-anything"));
     }
 
     #[test]
