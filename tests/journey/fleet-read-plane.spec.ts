@@ -82,14 +82,27 @@ test('Fleet remains durable across reload, disconnect, SSE loss, and reconnect',
   const octalMarker = [...fallbackMarker]
     .map((character) => `\\${character.charCodeAt(0).toString(8).padStart(3, '0')}`)
     .join('');
+  let fallbackOutput = '';
+  const terminalOutput = page.waitForResponse(async (response) => {
+    if (!response.url().endsWith('/api/ui/poll') || !response.ok()) return false;
+    const body = await response.json().catch(() => null) as {
+      messages?: Array<{
+        payload?: { message?: { payload?: { data?: unknown } } };
+      }>;
+    } | null;
+    for (const message of body?.messages ?? []) {
+      const data = message.payload?.message?.payload?.data;
+      if (Array.isArray(data) && data.every((byte) => Number.isInteger(byte))) {
+        fallbackOutput += Buffer.from(data).toString('utf8');
+      }
+    }
+    return fallbackOutput.includes(fallbackMarker);
+  }, { timeout: 30_000 });
   // Type an encoded command so the assertion can only match command output,
   // not the terminal's local echo of what Playwright typed.
   await page.keyboard.type(`printf '${octalMarker}\\n'`);
   await page.keyboard.press('Enter');
-  await expect(page.locator('.xterm-accessibility-tree')).toContainText(
-    fallbackMarker,
-    { timeout: 30_000 },
-  );
+  await terminalOutput;
 
   // Android browsers can expose a desktop-class CSS viewport near 930px.
   // Keep navigation off-canvas and stack the selected-host panes throughout

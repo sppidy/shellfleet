@@ -12,6 +12,10 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends systemd dbus bash ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 COPY --from=builder /usr/src/app/target/release/shellfleet-agent /app/agent
+# The browser journey runs the local root broker as a separate root container
+# and shares only its Unix socket with this restricted agent container. Native
+# installs still run both binaries under their hardened systemd units.
+COPY --from=builder /usr/src/app/target/release/shellfleet-approval-gate /app/gate
 # This image is the restricted local end-to-end test target (see
 # docker-compose.yml). It explicitly selects the restricted runtime contract
 # and therefore refuses root and effective capabilities.
