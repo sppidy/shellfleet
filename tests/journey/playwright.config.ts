@@ -1,5 +1,7 @@
 import { defineConfig, devices } from '@playwright/test';
 
+const systemChromium = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH?.trim();
+
 export default defineConfig({
   testDir: '.',
   testMatch: 'fleet-read-plane.spec.ts',
@@ -15,6 +17,7 @@ export default defineConfig({
   use: {
     ...devices['Desktop Chrome'],
     baseURL: 'http://127.0.0.1:18080',
+    launchOptions: systemChromium ? { executablePath: systemChromium } : undefined,
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
     video: 'retain-on-failure',

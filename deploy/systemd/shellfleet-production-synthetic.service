@@ -1,0 +1,35 @@
+[Unit]
+Description=ShellFleet authenticated production synthetic probe
+Documentation=https://github.com/sppidy/shellfleet/blob/main/docs/production-monitoring.md
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+DynamicUser=yes
+EnvironmentFile=/etc/shellfleet/synthetic.env
+Environment=SHELLFLEET_SYNTHETIC_STATE_FILE=/var/lib/shellfleet-synthetic/status.json
+LoadCredential=jwt-secret:/etc/shellfleet/synthetic.jwt-secret
+ExecStart=/usr/bin/node /usr/local/libexec/shellfleet-production-synthetic.mjs
+StateDirectory=shellfleet-synthetic
+UMask=0077
+TimeoutStartSec=90
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+LockPersonality=yes
+MemoryMax=128M
+PrivateDevices=yes
+PrivateTmp=yes
+ProtectClock=yes
+ProtectControlGroups=yes
+ProtectHome=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectSystem=strict
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+SystemCallArchitectures=native
+TasksMax=32

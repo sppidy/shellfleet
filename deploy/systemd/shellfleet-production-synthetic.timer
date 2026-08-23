@@ -1,0 +1,12 @@
+[Unit]
+Description=Run the ShellFleet production synthetic probe every five minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+RandomizedDelaySec=30s
+Persistent=yes
+Unit=shellfleet-production-synthetic.service
+
+[Install]
+WantedBy=timers.target
