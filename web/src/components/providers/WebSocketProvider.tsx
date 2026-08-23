@@ -40,26 +40,15 @@ const CONNECT_TIMEOUT_MS = 12_000;
 const DIRECTORY_SYNC_INTERVAL_MS = 15_000;
 const DIRECTORY_STALE_AFTER_MS = 45_000;
 
-// Resolve the WS URL once on import. Order of precedence:
-//   1. NEXT_PUBLIC_WS_URL — explicit override baked at build time, used
-//      when web and server live on different hosts.
-//   2. window.location — same-origin /ui/ws, derived per request. This
-//      makes a fresh deploy "just work" wherever it's hosted, no env
-//      var or rebuild needed.
-//   3. SSR placeholder — never actually reached by the browser, but
-//      keeps TypeScript happy and avoids accidental crashes if the
-//      provider is ever evaluated outside a browser.
+// Resolve at connection time, in the browser, from the page's current
+// origin. NEXT_PUBLIC_* values are frozen into Next.js client bundles at build
+// time, so a runtime container environment variable can silently point the
+// dashboard at a stale or placeholder host. ShellFleet deliberately exposes
+// /ui/ws on the same public origin as the dashboard and API.
 function resolveWsUrl(): string {
-  if (typeof process !== 'undefined' && process.env.NEXT_PUBLIC_WS_URL) {
-    return process.env.NEXT_PUBLIC_WS_URL;
-  }
-  if (typeof window !== 'undefined') {
-    const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    return `${proto}//${window.location.host}/ui/ws`;
-  }
-  return 'wss://dashboard.example.com/ui/ws';
+  const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  return `${proto}//${window.location.host}/ui/ws`;
 }
-const WS_URL = resolveWsUrl();
 
 export function WebSocketProvider({ children }: { children: React.ReactNode }) {
   const { status } = useSession();
@@ -207,7 +196,7 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
 
       let ws: WebSocket;
       try {
-        ws = new WebSocket(WS_URL);
+        ws = new WebSocket(resolveWsUrl());
       } catch (error) {
         console.error('[shellfleet] failed to create UI WebSocket:', error);
         scheduleReconnect();
@@ -255,7 +244,12 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
         }, DIRECTORY_SYNC_INTERVAL_MS);
       };
 
-      ws.onclose = () => {
+      ws.onclose = (event) => {
+        if (!disposed && event.code !== 1000) {
+          console.warn(
+            `[shellfleet] UI WebSocket closed (code=${event.code}, reason=${event.reason || 'none'})`,
+          );
+        }
         if (!disposed) retire(ws, false);
       };
 

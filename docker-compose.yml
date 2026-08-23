@@ -141,8 +141,6 @@ services:
     ports:
       # Loopback only — reached via nginx proxy_pass to 127.0.0.1:3000.
       - "127.0.0.1:3000:3000"
-    environment:
-      - NEXT_PUBLIC_WS_URL=${NEXT_PUBLIC_WS_URL:-wss://dashboard.example.com/ui/ws}
     restart: unless-stopped
     networks:
       - shellfleet_net
