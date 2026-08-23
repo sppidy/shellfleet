@@ -1953,23 +1953,21 @@ async fn authenticate_http_ui_client(
     state: &AppState,
     jar: &CookieJar,
     request: &UiHttpClientRequest,
-) -> Result<(UiCommandTx, UiHttpRx), axum::response::Response> {
-    let claims = auth::current_user(jar, &state.db)
-        .await
-        .map_err(|(status, reason)| (status, reason).into_response())?;
+) -> Result<(UiCommandTx, UiHttpRx), (StatusCode, &'static str)> {
+    let claims = auth::current_user(jar, &state.db).await?;
     let clients = state.ui_clients.lock().await;
     let Some(client) = clients.get(&request.client_id) else {
-        return Err((StatusCode::GONE, "control session expired").into_response());
+        return Err((StatusCode::GONE, "control session expired"));
     };
     let Some(expected_token) = client.http_token.as_deref() else {
-        return Err((StatusCode::GONE, "not an HTTP control session").into_response());
+        return Err((StatusCode::GONE, "not an HTTP control session"));
     };
     let token_matches = http_control_token_matches(expected_token, &request.client_token);
     if client.login != claims.sub || !token_matches {
-        return Err((StatusCode::FORBIDDEN, "control session mismatch").into_response());
+        return Err((StatusCode::FORBIDDEN, "control session mismatch"));
     }
     let Some(receiver) = client.http_receiver.clone() else {
-        return Err((StatusCode::GONE, "control session unavailable").into_response());
+        return Err((StatusCode::GONE, "control session unavailable"));
     };
     client
         .last_seen
@@ -2030,7 +2028,7 @@ async fn ui_http_poll_handler(
 ) -> axum::response::Response {
     let (_, receiver) = match authenticate_http_ui_client(&state, &jar, &request).await {
         Ok(client) => client,
-        Err(response) => return response,
+        Err(error) => return error.into_response(),
     };
     // Only one long poll may wait on a control session at once. Returning a
     // conflict instead of queuing arbitrary concurrent requests bounds origin
@@ -2048,8 +2046,8 @@ async fn ui_http_disconnect_handler(
     State(state): State<Arc<AppState>>,
     Json(request): Json<UiHttpClientRequest>,
 ) -> axum::response::Response {
-    if let Err(response) = authenticate_http_ui_client(&state, &jar, &request).await {
-        return response;
+    if let Err(error) = authenticate_http_ui_client(&state, &jar, &request).await {
+        return error.into_response();
     }
     state.ui_clients.lock().await.remove(&request.client_id);
     no_store_json(serde_json::json!({ "ok": true }))
@@ -2076,7 +2074,7 @@ async fn ui_http_send_handler(
     };
     let (command_tx, _) = match authenticate_http_ui_client(&state, &jar, &client_request).await {
         Ok(client) => client,
-        Err(response) => return response,
+        Err(error) => return error.into_response(),
     };
     for message in request.messages {
         if command_tx.send(message).is_err() {
