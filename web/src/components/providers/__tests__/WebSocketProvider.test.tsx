@@ -175,6 +175,15 @@ describe('WebSocketProvider', () => {
     expect(MockWebSocket.instances[0].url).toBe('ws://localhost:3000/ui/ws');
   });
 
+  it('does not let a stale build-time URL override the dashboard origin', () => {
+    vi.stubEnv('NEXT_PUBLIC_WS_URL', 'wss://stale.example.com/ui/ws');
+
+    renderProvider();
+
+    expect(MockWebSocket.instances).toHaveLength(1);
+    expect(MockWebSocket.instances[0].url).toBe('ws://localhost:3000/ui/ws');
+  });
+
   it('ignores late messages from a retired socket generation', () => {
     renderProvider();
     const first = MockWebSocket.instances[0];
