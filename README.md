@@ -109,6 +109,7 @@ place instead of drifting in this file:
 - **[Quickstart & environment variables](https://shellfleet.sppidy.in/docs.html#quickstart)** — deploy, reverse-proxy routes, the `.env`, and agent pairing.
 - **[Operator CLI](https://shellfleet.sppidy.in/docs.html#cli)** — device authorization without copying browser cookies or dashboard API keys.
 - **[Metrics](https://shellfleet.sppidy.in/docs.html#metrics)** — point the dashboard at your Prometheus; YAML panel templates.
+- **[Production synthetics](docs/production-monitoring.md)** — continuously verify authenticated REST, SSE, WebSocket, and passkey paths through the public edge.
 - **[Kubernetes](https://shellfleet.sppidy.in/docs.html#kubernetes)** / **[Helm](https://shellfleet.sppidy.in/docs.html#helm)** — the k8s agent flavor and every chart value.
 - **[Webhooks](https://shellfleet.sppidy.in/docs.html#webhooks)** and **[Cloudflare](https://shellfleet.sppidy.in/docs.html#cloudflare)** — outbound events and edge setup.
 - **[Enterprise Edition](https://shellfleet.sppidy.in/ee-docs.html)** — SSO/SCIM, passkeys, ACLs, multi-tenancy, runbooks, recording, drift, multi-source metrics with custom charts, SLA, cost, AI log analysis, Vault.
