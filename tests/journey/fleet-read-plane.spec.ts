@@ -67,6 +67,30 @@ test('Fleet remains durable across reload, disconnect, SSE loss, and reconnect',
   expect(finalPayload.hosts).toHaveLength(1);
   expect(finalPayload.hosts[0].agent_id).toBe('journey-agent-id');
 
+  // A browser/network that blocks WebSocket upgrades must retain the full
+  // interactive control plane over the authenticated HTTPS tunnel.
+  await page.routeWebSocket('**/ui/ws', (webSocket) => webSocket.close());
+  const fallbackConnected = page.waitForResponse((response) =>
+    response.url().endsWith('/api/ui/connect') && response.ok(),
+  );
+  await page.goto('/?agent=journey-agent');
+  await fallbackConnected;
+  const terminal = page.locator('.xterm');
+  await expect(terminal).toBeVisible({ timeout: 30_000 });
+  await terminal.click({ position: { x: 24, y: 24 } });
+  const fallbackMarker = 'SHELLFLEET_HTTP_FALLBACK_OK';
+  const octalMarker = [...fallbackMarker]
+    .map((character) => `\\${character.charCodeAt(0).toString(8).padStart(3, '0')}`)
+    .join('');
+  // Type an encoded command so the assertion can only match command output,
+  // not the terminal's local echo of what Playwright typed.
+  await page.keyboard.type(`printf '${octalMarker}\\n'`);
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.xterm-accessibility-tree')).toContainText(
+    fallbackMarker,
+    { timeout: 30_000 },
+  );
+
   // Android browsers can expose a desktop-class CSS viewport near 930px.
   // Keep navigation off-canvas and stack the selected-host panes throughout
   // that compact range instead of squeezing two dashboards side-by-side.

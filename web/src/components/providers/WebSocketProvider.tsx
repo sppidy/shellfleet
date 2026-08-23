@@ -12,6 +12,7 @@ import {
 import { AgentMessagePayload, UiMessage } from '@/lib/types';
 import { effectiveAgentDirectory } from '@/lib/agentDirectory';
 import { reconnectDelay } from '@/lib/backoff';
+import { apiFetch } from '@/lib/api';
 import { useSession } from './SessionProvider';
 import { useCoreFleet } from './CoreFleetProvider';
 import { useUi } from './UiProvider';
@@ -39,6 +40,17 @@ const WebSocketContext = createContext<WebSocketContextValue | null>(null);
 const CONNECT_TIMEOUT_MS = 12_000;
 const DIRECTORY_SYNC_INTERVAL_MS = 15_000;
 const DIRECTORY_STALE_AFTER_MS = 45_000;
+const HTTP_SEND_BATCH_DELAY_MS = 12;
+const HTTP_SEND_MAX_BATCH = 128;
+
+type HttpControlSession = {
+  clientId: number;
+  clientToken: string;
+};
+
+type HttpControlResponse = {
+  messages: UiMessage[];
+};
 
 // Resolve at connection time, in the browser, from the page's current
 // origin. NEXT_PUBLIC_* values are frozen into Next.js client bundles at build
@@ -68,6 +80,9 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
   const connectTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const directorySyncTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const reconnectAttempt = useRef(0);
+  // Installed by the connection effect while the HTTPS control fallback is
+  // active. sendMessage stays stable for every consumer and selects WS first.
+  const httpSendRef = useRef<((message: UiMessage) => void) | null>(null);
   // Subscribers stored in a ref so message dispatch never races with React's
   // render cycle. The previous implementation kept the "last message" in
   // useState, which dropped events when several messages arrived in the
@@ -105,6 +120,23 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
     [],
   );
 
+  const handleIncomingMessage = useCallback((msg: UiMessage) => {
+    if (msg.type === 'ListAgentsResponse') {
+      setIsConnected(true);
+      setSocketAgents(msg.payload.agents);
+      setSocketCapabilities(msg.payload.capabilities ?? {});
+    } else if (msg.type === 'AgentMessage') {
+      dispatch(msg.payload.agent_id, msg.payload.message);
+    } else if (msg.type === 'PermissionDenied') {
+      const { variant_type, reason } = msg.payload;
+      if (variant_type === 'approval_pending') {
+        toastRef.current('info', reason);
+      } else {
+        toastRef.current('error', `${variant_type} denied: ${reason}`);
+      }
+    }
+  }, [dispatch]);
+
   useEffect(() => {
     // Only open the WS once the session is fully authed. Connecting
     // earlier (during /login, /mfa, /security with a pending-MFA
@@ -118,6 +150,13 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
     }
     let disposed = false;
     let lastDirectoryResponseAt = 0;
+    let httpSession: HttpControlSession | null = null;
+    let httpStarting = false;
+    let httpSending = false;
+    let httpQueue: UiMessage[] = [];
+    let httpFlushTimer: ReturnType<typeof setTimeout> | null = null;
+    let httpPollAbort: AbortController | null = null;
+    let httpDirectoryTimer: ReturnType<typeof setInterval> | null = null;
     reconnectAttempt.current = 0;
 
     const clearReconnectTimer = () => {
@@ -136,6 +175,10 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
         clearInterval(directorySyncTimer.current);
         directorySyncTimer.current = null;
       }
+      if (httpDirectoryTimer !== null) {
+        clearInterval(httpDirectoryTimer);
+        httpDirectoryTimer = null;
+      }
     };
 
     const resetSocketState = () => {
@@ -143,6 +186,175 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
       setSocketAgents([]);
       setSocketCapabilities({});
     };
+
+    const receiveUiMessage = (message: UiMessage) => {
+      if (message.type === 'ListAgentsResponse') {
+        lastDirectoryResponseAt = Date.now();
+      }
+      handleIncomingMessage(message);
+    };
+
+    const disconnectHttpSession = (session: HttpControlSession) => {
+      // `keepalive` gives browsers a chance to release the server-side slot
+      // during reload/navigation. The origin's idle reaper remains the final
+      // cleanup path if the network is already unavailable.
+      void apiFetch('/api/ui/disconnect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          client_id: session.clientId,
+          client_token: session.clientToken,
+        }),
+        keepalive: true,
+      }).catch(() => {});
+    };
+
+    const failHttpTransport = () => {
+      if (!httpSession && !httpStarting) return;
+      const failedSession = httpSession;
+      httpSession = null;
+      httpStarting = false;
+      httpSendRef.current = null;
+      httpPollAbort?.abort();
+      httpPollAbort = null;
+      if (httpFlushTimer !== null) {
+        clearTimeout(httpFlushTimer);
+        httpFlushTimer = null;
+      }
+      if (httpDirectoryTimer !== null) {
+        clearInterval(httpDirectoryTimer);
+        httpDirectoryTimer = null;
+      }
+      // A failed POST may have reached the origin even if its response did
+      // not reach us. Never replay queued control actions automatically.
+      httpQueue = [];
+      if (failedSession) disconnectHttpSession(failedSession);
+      resetSocketState();
+      scheduleReconnect();
+    };
+
+    const flushHttpQueue = async () => {
+      if (disposed || httpSending || !httpSession || httpQueue.length === 0) return;
+      httpSending = true;
+      const session = httpSession;
+      const messages = httpQueue.splice(0, HTTP_SEND_MAX_BATCH);
+      try {
+        const response = await apiFetch('/api/ui/send', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            client_id: session.clientId,
+            client_token: session.clientToken,
+            messages,
+          }),
+        });
+        if (!response.ok) throw new Error(`HTTP control send returned ${response.status}`);
+      } catch (error) {
+        if (!disposed && httpSession === session) {
+          console.warn('[shellfleet] HTTPS control send failed:', error);
+          failHttpTransport();
+        }
+      } finally {
+        httpSending = false;
+        if (!disposed && httpSession && httpQueue.length > 0 && httpFlushTimer === null) {
+          httpFlushTimer = setTimeout(() => {
+            httpFlushTimer = null;
+            void flushHttpQueue();
+          }, HTTP_SEND_BATCH_DELAY_MS);
+        }
+      }
+    };
+
+    const enqueueHttpMessage = (message: UiMessage) => {
+      if (!httpSession || disposed) return;
+      httpQueue.push(message);
+      if (httpFlushTimer === null) {
+        httpFlushTimer = setTimeout(() => {
+          httpFlushTimer = null;
+          void flushHttpQueue();
+        }, HTTP_SEND_BATCH_DELAY_MS);
+      }
+    };
+
+    const pollHttp = async (session: HttpControlSession) => {
+      while (!disposed && httpSession === session) {
+        const controller = new AbortController();
+        httpPollAbort = controller;
+        try {
+          const response = await apiFetch('/api/ui/poll', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              client_id: session.clientId,
+              client_token: session.clientToken,
+            }),
+            signal: controller.signal,
+          });
+          if (!response.ok) throw new Error(`HTTP control poll returned ${response.status}`);
+          const body = (await response.json()) as HttpControlResponse;
+          for (const message of body.messages ?? []) receiveUiMessage(message);
+        } catch (error) {
+          if (!disposed && !controller.signal.aborted && httpSession === session) {
+            console.warn('[shellfleet] HTTPS control poll failed:', error);
+            failHttpTransport();
+          }
+          return;
+        } finally {
+          if (httpPollAbort === controller) httpPollAbort = null;
+        }
+      }
+    };
+
+    async function startHttpFallback() {
+      if (disposed || httpStarting || httpSession) return;
+      httpStarting = true;
+      clearReconnectTimer();
+      const current = wsRef.current;
+      wsRef.current = null;
+      try {
+        current?.close();
+      } catch {
+        /* ignore the failed WebSocket while switching transports */
+      }
+      try {
+        const response = await apiFetch('/api/ui/connect', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: '{}',
+        });
+        if (!response.ok) throw new Error(`HTTP control connect returned ${response.status}`);
+        const body = (await response.json()) as HttpControlResponse & {
+          client_id: number;
+          client_token: string;
+        };
+        if (!Number.isSafeInteger(body.client_id) || !body.client_token) {
+          throw new Error('HTTP control connect returned an invalid session');
+        }
+        if (disposed) return;
+        const session = { clientId: body.client_id, clientToken: body.client_token };
+        httpSession = session;
+        httpSendRef.current = enqueueHttpMessage;
+        reconnectAttempt.current = 0;
+        for (const message of body.messages ?? []) receiveUiMessage(message);
+        httpDirectoryTimer = setInterval(() => {
+          if (Date.now() - lastDirectoryResponseAt >= DIRECTORY_STALE_AFTER_MS) {
+            failHttpTransport();
+            return;
+          }
+          enqueueHttpMessage({ type: 'ListAgentsRequest' });
+        }, DIRECTORY_SYNC_INTERVAL_MS);
+        console.info('[shellfleet] interactive controls using HTTPS fallback');
+        void pollHttp(session);
+      } catch (error) {
+        if (!disposed) {
+          console.warn('[shellfleet] HTTPS control fallback unavailable:', error);
+          httpStarting = false;
+          scheduleReconnect();
+        }
+      } finally {
+        httpStarting = false;
+      }
+    }
 
     const requestDirectory = (ws: WebSocket) => {
       if (ws.readyState !== WebSocket.OPEN) return false;
@@ -156,7 +368,7 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
     };
 
     const scheduleReconnect = () => {
-      if (disposed || reconnectTimer.current !== null) {
+      if (disposed || httpSession || httpStarting || reconnectTimer.current !== null) {
         return;
       }
       const delay = reconnectDelay(reconnectAttempt.current);
@@ -179,11 +391,11 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
           /* the browser can throw while a socket is still being created */
         }
       }
-      scheduleReconnect();
+      void startHttpFallback();
     };
 
     const connect = () => {
-      if (disposed) {
+      if (disposed || httpSession || httpStarting) {
         return;
       }
       const current = wsRef.current;
@@ -199,7 +411,7 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
         ws = new WebSocket(resolveWsUrl());
       } catch (error) {
         console.error('[shellfleet] failed to create UI WebSocket:', error);
-        scheduleReconnect();
+        void startHttpFallback();
         return;
       }
       wsRef.current = ws;
@@ -261,23 +473,7 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
         if (disposed || wsRef.current !== ws) return;
         try {
           const msg = JSON.parse(event.data) as UiMessage;
-          if (msg.type === 'ListAgentsResponse') {
-            lastDirectoryResponseAt = Date.now();
-            setIsConnected(true);
-            setSocketAgents(msg.payload.agents);
-            setSocketCapabilities(msg.payload.capabilities ?? {});
-          } else if (msg.type === 'AgentMessage') {
-            dispatch(msg.payload.agent_id, msg.payload.message);
-          } else if (msg.type === 'PermissionDenied') {
-            const { variant_type, reason } = msg.payload;
-            // approval_pending isn't a denial — the action is held awaiting a
-            // second admin's sign-off. Show it as info, not an error.
-            if (variant_type === 'approval_pending') {
-              toastRef.current('info', reason);
-            } else {
-              toastRef.current('error', `${variant_type} denied: ${reason}`);
-            }
-          }
+          receiveUiMessage(msg);
         } catch (e) {
           console.error('failed to parse WS message:', e);
         }
@@ -286,6 +482,10 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
 
     const recoverNow = () => {
       if (disposed) return;
+      if (httpSession) {
+        enqueueHttpMessage({ type: 'ListAgentsRequest' });
+        return;
+      }
       clearReconnectTimer();
       const ws = wsRef.current;
       if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
@@ -321,6 +521,14 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
       document.removeEventListener('visibilitychange', handleVisibility);
       clearReconnectTimer();
       clearConnectionTimers();
+      httpSendRef.current = null;
+      const activeHttpSession = httpSession;
+      httpSession = null;
+      httpStarting = false;
+      httpPollAbort?.abort();
+      if (httpFlushTimer !== null) clearTimeout(httpFlushTimer);
+      httpQueue = [];
+      if (activeHttpSession) disconnectHttpSession(activeHttpSession);
       const ws = wsRef.current;
       wsRef.current = null;
       try {
@@ -329,7 +537,7 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
         /* ignore cleanup errors */
       }
     };
-  }, [dispatch, status]);
+  }, [handleIncomingMessage, status]);
 
   const sendMessage = useCallback((msg: UiMessage) => {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
@@ -344,7 +552,9 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
           /* ignore */
         }
       }
+      return;
     }
+    httpSendRef.current?.(msg);
   }, []);
 
   const sendToAgent = useCallback(

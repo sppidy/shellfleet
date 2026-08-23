@@ -1,5 +1,5 @@
 import '@testing-library/jest-dom/vitest';
-import { act, cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { WebSocketProvider, useWebSocket } from '../WebSocketProvider';
 
@@ -64,12 +64,13 @@ class MockWebSocket {
 }
 
 function Probe() {
-  const { agents, isConnected, liveAgents } = useWebSocket();
+  const { agents, isConnected, liveAgents, sendMessage } = useWebSocket();
   return (
     <div>
       <span>{isConnected ? 'connected' : 'disconnected'}</span>
       <span>{`agents:${agents.join(',')}`}</span>
       <span>{`live:${liveAgents.join(',')}`}</span>
+      <button onClick={() => sendMessage({ type: 'ListAgentsRequest' })}>refresh agents</button>
     </div>
   );
 }
@@ -89,6 +90,7 @@ describe('WebSocketProvider', () => {
     MockWebSocket.instances = [];
     vi.useFakeTimers();
     vi.stubGlobal('WebSocket', MockWebSocket);
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('HTTP fallback unavailable')));
   });
 
   afterEach(() => {
@@ -121,7 +123,7 @@ describe('WebSocketProvider', () => {
     expect(JSON.parse(socket.sent[1])).toEqual({ type: 'ListAgentsRequest' });
   });
 
-  it('retires a half-open socket and reconnects when directory responses stop', () => {
+  it('retires a half-open socket and reconnects when directory responses stop', async () => {
     renderProvider();
     const socket = MockWebSocket.instances[0];
     act(() => {
@@ -137,23 +139,25 @@ describe('WebSocketProvider', () => {
     expect(screen.getByText('disconnected')).toBeInTheDocument();
     expect(screen.getByText('agents:')).toBeInTheDocument();
 
+    await act(async () => {});
     act(() => vi.advanceTimersByTime(1_000));
     expect(MockWebSocket.instances).toHaveLength(2);
     expect(MockWebSocket.instances[1].readyState).toBe(MockWebSocket.CONNECTING);
   });
 
-  it('does not wait forever for the opening handshake', () => {
+  it('does not wait forever for the opening handshake', async () => {
     renderProvider();
     const socket = MockWebSocket.instances[0];
 
     act(() => vi.advanceTimersByTime(12_000));
     expect(socket.readyState).toBe(MockWebSocket.CLOSED);
 
+    await act(async () => {});
     act(() => vi.advanceTimersByTime(1_000));
     expect(MockWebSocket.instances).toHaveLength(2);
   });
 
-  it('reconnects immediately when the browser reports that the network returned', () => {
+  it('reconnects immediately when the browser reports that the network returned', async () => {
     renderProvider();
     const socket = MockWebSocket.instances[0];
     act(() => {
@@ -162,6 +166,7 @@ describe('WebSocketProvider', () => {
     });
     expect(MockWebSocket.instances).toHaveLength(1);
 
+    await act(async () => {});
     act(() => window.dispatchEvent(new Event('online')));
     expect(MockWebSocket.instances).toHaveLength(2);
   });
@@ -184,14 +189,15 @@ describe('WebSocketProvider', () => {
     expect(MockWebSocket.instances[0].url).toBe('ws://localhost:3000/ui/ws');
   });
 
-  it('ignores late messages from a retired socket generation', () => {
+  it('ignores late messages from a retired socket generation', async () => {
     renderProvider();
     const first = MockWebSocket.instances[0];
     act(() => {
       first.open();
       first.serverClose();
-      window.dispatchEvent(new Event('online'));
     });
+    await act(async () => {});
+    act(() => window.dispatchEvent(new Event('online')));
     const second = MockWebSocket.instances[1];
     act(() => {
       second.open();
@@ -224,4 +230,54 @@ describe('WebSocketProvider', () => {
     act(() => vi.advanceTimersByTime(60_000));
     expect(MockWebSocket.instances).toHaveLength(1);
   });
+
+  it('keeps interactive controls live over HTTPS when WebSockets are blocked', async () => {
+    const requests: { url: string; body: unknown }[] = [];
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const body = init?.body ? JSON.parse(String(init.body)) : null;
+      requests.push({ url, body });
+      if (url === '/api/ui/connect') {
+        return Promise.resolve(new Response(JSON.stringify({
+          client_id: 7,
+          client_token: 'control-token',
+          messages: [{
+            type: 'ListAgentsResponse',
+            payload: { agents: ['fallback-id'], capabilities: { 'fallback-id': ['systemd'] } },
+          }],
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+      }
+      if (url === '/api/ui/poll') {
+        return new Promise<Response>(() => {});
+      }
+      if (url === '/api/ui/send') {
+        return Promise.resolve(new Response('{"ok":true}', { status: 200 }));
+      }
+      if (url === '/api/ui/disconnect') {
+        return Promise.resolve(new Response('{"ok":true}', { status: 200 }));
+      }
+      return Promise.reject(new Error(`unexpected URL: ${url}`));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderProvider();
+    act(() => MockWebSocket.instances[0].serverClose());
+    await act(async () => {});
+
+    expect(screen.getByText('connected')).toBeInTheDocument();
+    expect(screen.getByText('live:fallback-id')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'refresh agents' }));
+    await act(async () => {
+      vi.advanceTimersByTime(HTTP_SEND_BATCH_DELAY_MS_FOR_TEST);
+    });
+    const send = requests.find((request) => request.url === '/api/ui/send');
+    expect(send?.body).toEqual({
+      client_id: 7,
+      client_token: 'control-token',
+      messages: [{ type: 'ListAgentsRequest' }],
+    });
+  });
 });
+
+const HTTP_SEND_BATCH_DELAY_MS_FOR_TEST = 12;
